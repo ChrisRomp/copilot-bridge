@@ -34,10 +34,10 @@ export class SessionManager {
   private sessionChannels = new Map<string, string>(); // sessionId → channelId (reverse)
   private eventHandler: SessionEventHandler | null = null;
 
-  // Pending permission requests
-  private pendingPermissions = new Map<string, PendingPermission>();
-  // Pending user input requests
-  private pendingUserInput = new Map<string, PendingUserInput>();
+  // Pending permission requests (queue per channel to avoid overwrites)
+  private pendingPermissions = new Map<string, PendingPermission[]>();
+  // Pending user input requests (queue per channel to avoid overwrites)
+  private pendingUserInput = new Map<string, PendingUserInput[]>();
 
   constructor(bridge: CopilotBridge) {
     this.bridge = bridge;
@@ -142,10 +142,12 @@ export class SessionManager {
     };
   }
 
-  /** Resolve a pending permission request. */
+  /** Resolve a pending permission request (first in queue). */
   resolvePermission(channelId: string, allow: boolean, remember?: boolean): boolean {
-    const pending = this.pendingPermissions.get(channelId);
-    if (!pending) return false;
+    const queue = this.pendingPermissions.get(channelId);
+    if (!queue || queue.length === 0) return false;
+
+    const pending = queue.shift()!;
 
     if (remember && pending.commands.length > 0) {
       const action = allow ? 'allow' : 'deny';
@@ -155,28 +157,61 @@ export class SessionManager {
     }
 
     pending.resolve({ allow, remember });
-    this.pendingPermissions.delete(channelId);
+
+    if (queue.length === 0) {
+      this.pendingPermissions.delete(channelId);
+    } else {
+      // Surface the next queued permission request
+      const next = queue[0];
+      this.eventHandler?.(next.sessionId, channelId, {
+        type: 'bridge.permission_request',
+        data: {
+          toolName: next.toolName,
+          input: next.toolInput,
+          commands: next.commands,
+        },
+      });
+    }
+
     return true;
   }
 
-  /** Resolve a pending user input request. */
+  /** Resolve a pending user input request (first in queue). */
   resolveUserInput(channelId: string, answer: string): boolean {
-    const pending = this.pendingUserInput.get(channelId);
-    if (!pending) return false;
+    const queue = this.pendingUserInput.get(channelId);
+    if (!queue || queue.length === 0) return false;
 
+    const pending = queue.shift()!;
     pending.resolve({ answer, wasFreeform: true });
-    this.pendingUserInput.delete(channelId);
+
+    if (queue.length === 0) {
+      this.pendingUserInput.delete(channelId);
+    } else {
+      // Surface the next queued user input request
+      const next = queue[0];
+      this.eventHandler?.(next.sessionId, channelId, {
+        type: 'bridge.user_input_request',
+        data: {
+          question: next.question,
+          choices: next.choices,
+          allowFreeform: next.allowFreeform,
+        },
+      });
+    }
+
     return true;
   }
 
   /** Check if channel has a pending permission request. */
   hasPendingPermission(channelId: string): boolean {
-    return this.pendingPermissions.has(channelId);
+    const queue = this.pendingPermissions.get(channelId);
+    return !!queue && queue.length > 0;
   }
 
   /** Check if channel has a pending user input request. */
   hasPendingUserInput(channelId: string): boolean {
-    return this.pendingUserInput.has(channelId);
+    const queue = this.pendingUserInput.get(channelId);
+    return !!queue && queue.length > 0;
   }
 
   /** Get info about the current session for a channel. */
@@ -262,7 +297,7 @@ export class SessionManager {
 
     // No rule matched — need to ask the user via chat
     return new Promise((resolve) => {
-      this.pendingPermissions.set(channelId, {
+      const entry: PendingPermission = {
         sessionId: invocation.sessionId,
         channelId,
         toolName,
@@ -270,17 +305,26 @@ export class SessionManager {
         commands,
         resolve,
         createdAt: Date.now(),
-      });
+      };
 
-      // Emit a permission request event so the adapter can surface it
-      this.eventHandler?.(invocation.sessionId, channelId, {
-        type: 'bridge.permission_request',
-        data: {
-          toolName,
-          input: request.input,
-          commands,
-        },
-      });
+      let queue = this.pendingPermissions.get(channelId);
+      if (!queue) {
+        queue = [];
+        this.pendingPermissions.set(channelId, queue);
+      }
+      queue.push(entry);
+
+      // Only emit the event if this is the first (active) item in the queue
+      if (queue.length === 1) {
+        this.eventHandler?.(invocation.sessionId, channelId, {
+          type: 'bridge.permission_request',
+          data: {
+            toolName,
+            input: request.input,
+            commands,
+          },
+        });
+      }
     });
   }
 
@@ -290,7 +334,7 @@ export class SessionManager {
     invocation: { sessionId: string },
   ): Promise<{ answer: string; wasFreeform: boolean }> {
     return new Promise((resolve) => {
-      this.pendingUserInput.set(channelId, {
+      const entry: PendingUserInput = {
         sessionId: invocation.sessionId,
         channelId,
         question: request.question,
@@ -298,17 +342,26 @@ export class SessionManager {
         allowFreeform: request.allowFreeform,
         resolve,
         createdAt: Date.now(),
-      });
+      };
 
-      // Emit a user input event so the adapter can surface it
-      this.eventHandler?.(invocation.sessionId, channelId, {
-        type: 'bridge.user_input_request',
-        data: {
-          question: request.question,
-          choices: request.choices,
-          allowFreeform: request.allowFreeform,
-        },
-      });
+      let queue = this.pendingUserInput.get(channelId);
+      if (!queue) {
+        queue = [];
+        this.pendingUserInput.set(channelId, queue);
+      }
+      queue.push(entry);
+
+      // Only emit the event if this is the first (active) item in the queue
+      if (queue.length === 1) {
+        this.eventHandler?.(invocation.sessionId, channelId, {
+          type: 'bridge.user_input_request',
+          data: {
+            question: request.question,
+            choices: request.choices,
+            allowFreeform: request.allowFreeform,
+          },
+        });
+      }
     });
   }
 

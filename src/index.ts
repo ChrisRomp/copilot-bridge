@@ -174,6 +174,13 @@ async function handleInboundMessage(
     // Set typing indicator
     adapter.setTyping(msg.channelId).catch(() => {});
 
+    // Finalize any in-flight stream before starting a new one
+    const existingStreamKey = activeStreams.get(msg.channelId);
+    if (existingStreamKey) {
+      await streaming.finalizeStream(existingStreamKey);
+      activeStreams.delete(msg.channelId);
+    }
+
     // Start streaming response
     const threadRoot = channelConfig.threadedReplies ? (msg.threadRootId ?? msg.postId) : undefined;
     const streamKey = await streaming.startStream(msg.channelId, threadRoot);
@@ -183,8 +190,14 @@ async function handleInboundMessage(
     await sessionManager.sendMessage(msg.channelId, text);
   } catch (err) {
     console.error(`[bridge] Error sending message for channel ${msg.channelId}:`, err);
-    const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-    await adapter.sendMessage(msg.channelId, `❌ Error: ${errorMsg}`);
+    const streamKey = activeStreams.get(msg.channelId);
+    if (streamKey) {
+      await streaming.cancelStream(streamKey, err instanceof Error ? err.message : 'Unknown error');
+      activeStreams.delete(msg.channelId);
+    } else {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      await adapter.sendMessage(msg.channelId, `❌ Error: ${errorMsg}`);
+    }
   }
 }
 
@@ -252,9 +265,13 @@ function handleSessionEvent(
 
   switch (formatted.type) {
     case 'content':
-      if (streamKey && event.type === 'assistant.message_delta') {
-        streaming.appendDelta(streamKey, formatted.content);
-        // Keep typing indicator alive
+      if (streamKey) {
+        if (event.type === 'assistant.message_delta') {
+          streaming.appendDelta(streamKey, formatted.content);
+        } else if (event.type === 'assistant.message') {
+          // Full message replaces the stream content
+          streaming.replaceContent(streamKey, formatted.content);
+        }
         adapter.setTyping(channelId).catch(() => {});
       }
       break;
@@ -295,5 +312,6 @@ function handleSessionEvent(
 // Start the bridge
 main().catch((err) => {
   console.error('Fatal error:', err);
+  closeDb();
   process.exit(1);
 });
