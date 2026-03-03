@@ -312,16 +312,16 @@ async function handleSessionEvent(
         const channelCfg = getChannelConfig(channelId);
         const newKey = await streaming.startStream(channelId, channelCfg.threadedReplies ? undefined : undefined);
         activeStreams.set(channelId, newKey);
-        if (event.type === 'assistant.message_delta') {
-          streaming.appendDelta(newKey, formatted.content);
-        } else if (event.type === 'assistant.message') {
+        if (event.type === 'assistant.message') {
           streaming.replaceContent(newKey, formatted.content);
+        } else if (formatted.content) {
+          streaming.appendDelta(newKey, formatted.content);
         }
       } else {
-        if (event.type === 'assistant.message_delta') {
-          streaming.appendDelta(streamKey, formatted.content);
-        } else if (event.type === 'assistant.message') {
+        if (event.type === 'assistant.message') {
           streaming.replaceContent(streamKey, formatted.content);
+        } else if (formatted.content) {
+          streaming.appendDelta(streamKey, formatted.content);
         }
       }
       adapter.setTyping(channelId).catch(() => {});

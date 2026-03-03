@@ -12,6 +12,19 @@ export function formatEvent(event: any): FormattedEvent | null {
         verbose: false,
       };
 
+    case 'assistant.streaming_delta':
+      // streaming_delta is the token-level event; only use if it has content
+      // that message_delta doesn't provide (some SDK versions only send one)
+      {
+        const c = event.data?.deltaContent ?? event.deltaContent ?? event.data?.content ?? '';
+        if (c) console.log(`[debug] streaming_delta content: "${c.slice(0, 50)}"`);
+        return {
+          type: 'content',
+          content: c,
+          verbose: false,
+        };
+      }
+
     case 'assistant.message':
       return {
         type: 'content',
