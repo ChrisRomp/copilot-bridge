@@ -35,6 +35,7 @@ function getDb(): Database.Database {
       trigger_mode TEXT NOT NULL DEFAULT 'mention',
       threaded_replies INTEGER NOT NULL DEFAULT 1,
       permission_mode TEXT NOT NULL DEFAULT 'interactive',
+      reasoning_effort TEXT,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -50,6 +51,13 @@ function getDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_perm_scope ON permission_rules(scope);
     CREATE INDEX IF NOT EXISTS idx_perm_tool ON permission_rules(tool);
   `);
+
+  // Schema migrations for existing DBs
+  try {
+    _db.exec(`ALTER TABLE channel_prefs ADD COLUMN reasoning_effort TEXT`);
+  } catch {
+    // Column already exists
+  }
 
   return _db;
 }
@@ -83,6 +91,7 @@ export interface ChannelPrefs {
   triggerMode: string;
   threadedReplies: boolean;
   permissionMode: string;
+  reasoningEffort?: string | null;
 }
 
 export function getChannelPrefs(channelId: string): ChannelPrefs | null {
@@ -96,6 +105,7 @@ export function getChannelPrefs(channelId: string): ChannelPrefs | null {
     triggerMode: row.trigger_mode,
     threadedReplies: !!row.threaded_replies,
     permissionMode: row.permission_mode,
+    reasoningEffort: row.reasoning_effort ?? null,
   };
 }
 
@@ -113,6 +123,7 @@ export function setChannelPrefs(channelId: string, prefs: Partial<ChannelPrefs>)
     if (prefs.triggerMode !== undefined) { updates.push('trigger_mode = ?'); values.push(prefs.triggerMode); }
     if (prefs.threadedReplies !== undefined) { updates.push('threaded_replies = ?'); values.push(prefs.threadedReplies ? 1 : 0); }
     if (prefs.permissionMode !== undefined) { updates.push('permission_mode = ?'); values.push(prefs.permissionMode); }
+    if (prefs.reasoningEffort !== undefined) { updates.push('reasoning_effort = ?'); values.push(prefs.reasoningEffort); }
 
     if (updates.length > 0) {
       updates.push("updated_at = datetime('now')");
@@ -121,8 +132,8 @@ export function setChannelPrefs(channelId: string, prefs: Partial<ChannelPrefs>)
     }
   } else {
     db.prepare(
-      `INSERT INTO channel_prefs (channel_id, model, agent, verbose, trigger_mode, threaded_replies, permission_mode)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO channel_prefs (channel_id, model, agent, verbose, trigger_mode, threaded_replies, permission_mode, reasoning_effort)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       channelId,
       prefs.model ?? null,
@@ -131,6 +142,7 @@ export function setChannelPrefs(channelId: string, prefs: Partial<ChannelPrefs>)
       prefs.triggerMode ?? 'mention',
       prefs.threadedReplies !== false ? 1 : 0,
       prefs.permissionMode ?? 'interactive',
+      prefs.reasoningEffort ?? null,
     );
   }
 }

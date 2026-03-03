@@ -61,6 +61,7 @@ export class CopilotBridge {
     model?: string;
     workingDirectory?: string;
     configDir?: string;
+    reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
     onPermissionRequest: PermissionHandler;
     onUserInputRequest?: UserInputHandler;
     systemMessage?: SystemMessageConfig;
@@ -72,6 +73,7 @@ export class CopilotBridge {
       model: opts.model,
       workingDirectory: opts.workingDirectory,
       configDir: opts.configDir,
+      reasoningEffort: opts.reasoningEffort,
       onPermissionRequest: opts.onPermissionRequest,
       onUserInputRequest: opts.onUserInputRequest,
       streaming: true,
@@ -91,6 +93,7 @@ export class CopilotBridge {
       customAgents?: CustomAgentConfig[];
       configDir?: string;
       workingDirectory?: string;
+      reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
     },
   ): Promise<CopilotSession> {
     await this.start();
@@ -106,6 +109,7 @@ export class CopilotBridge {
       customAgents: opts?.customAgents,
       configDir: opts?.configDir,
       workingDirectory: opts?.workingDirectory,
+      reasoningEffort: opts?.reasoningEffort,
     });
     this.sessions.set(session.sessionId, session);
     return session;

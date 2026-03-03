@@ -152,7 +152,20 @@ async function handleInboundMessage(
   // Check for slash commands
   const sessionInfo = sessionManager.getSessionInfo(msg.channelId);
   const effPrefs = sessionManager.getEffectivePrefs(msg.channelId);
-  const cmdResult = handleCommand(msg.channelId, text, sessionInfo ?? undefined, { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode }, { workingDirectory: channelConfig.workingDirectory, bot: channelConfig.bot });
+
+  // Fetch model info for commands that need it (status, reasoning)
+  const parsed = parseCommand(text);
+  let modelInfo: any = null;
+  if (parsed && (parsed.command === 'status' || parsed.command === 'reasoning') && sessionInfo) {
+    modelInfo = await sessionManager.getModelInfo(sessionInfo.model);
+  }
+
+  const cmdResult = handleCommand(
+    msg.channelId, text, sessionInfo ?? undefined,
+    { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort },
+    { workingDirectory: channelConfig.workingDirectory, bot: channelConfig.bot },
+    modelInfo,
+  );
 
   if (cmdResult.handled) {
     const threadRoot = channelConfig.threadedReplies ? (msg.threadRootId ?? msg.postId) : undefined;

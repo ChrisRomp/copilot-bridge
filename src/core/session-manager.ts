@@ -199,7 +199,18 @@ export class SessionManager {
       triggerMode: storedPrefs?.triggerMode ?? configChannel.triggerMode,
       threadedReplies: storedPrefs?.threadedReplies ?? configChannel.threadedReplies,
       permissionMode: storedPrefs?.permissionMode ?? configChannel.permissionMode,
+      reasoningEffort: storedPrefs?.reasoningEffort ?? (configChannel as any).reasoningEffort ?? null,
     };
+  }
+
+  /** Get model info (for checking capabilities like reasoning effort). */
+  async getModelInfo(modelId: string): Promise<any | null> {
+    try {
+      const models = await this.bridge.listModels();
+      return models.find(m => m.id === modelId) ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /** Resolve a pending permission request (first in queue). */
@@ -292,10 +303,13 @@ export class SessionManager {
 
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
 
+    const reasoningEffort = prefs.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | undefined;
+
     const session = await this.bridge.createSession({
       model: prefs.model,
       workingDirectory: config.workingDirectory,
       configDir: defaultConfigDir,
+      reasoningEffort: reasoningEffort ?? undefined,
       onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
       onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
     });
@@ -313,13 +327,16 @@ export class SessionManager {
 
   private async attachSession(channelId: string, sessionId: string): Promise<void> {
     const config = getChannelConfig(channelId);
+    const prefs = this.getEffectivePrefs(channelId);
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
+    const reasoningEffort = prefs.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | undefined;
 
     const session = await this.bridge.resumeSession(sessionId, {
       onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
       onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
       configDir: defaultConfigDir,
       workingDirectory: config.workingDirectory,
+      reasoningEffort: reasoningEffort ?? undefined,
     });
 
     this.channelSessions.set(channelId, sessionId);

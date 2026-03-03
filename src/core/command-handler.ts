@@ -1,10 +1,12 @@
 import { setChannelPrefs, getChannelPrefs } from '../state/store.js';
 
+const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
+
 export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'remember';
+           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'set_reasoning';
   payload?: any;
 }
 
@@ -19,7 +21,7 @@ export function parseCommand(text: string): { command: string; args: string } | 
   };
 }
 
-export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string }, channelMeta?: { workingDirectory?: string; bot?: string }): CommandResult {
+export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, modelInfo?: { supportedReasoningEfforts?: string[]; defaultReasoningEffort?: string } | null): CommandResult {
   const parsed = parseCommand(text);
   if (!parsed) return { handled: false };
 
@@ -55,6 +57,27 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       };
     }
 
+    case 'reasoning': {
+      const level = parsed.args.toLowerCase();
+      if (!level) {
+        const current = effectivePrefs?.reasoningEffort ?? 'default';
+        return { handled: true, response: `🧠 Current reasoning effort: **${current}**\nUsage: \`/reasoning <low|medium|high|xhigh>\`` };
+      }
+      if (!VALID_REASONING_EFFORTS.has(level)) {
+        return { handled: true, response: `⚠️ Invalid reasoning effort. Valid values: \`low\`, \`medium\`, \`high\`, \`xhigh\`` };
+      }
+      if (modelInfo && modelInfo.supportedReasoningEfforts && !modelInfo.supportedReasoningEfforts.includes(level)) {
+        return { handled: true, response: `⚠️ Model **${sessionInfo?.model ?? 'unknown'}** does not support reasoning effort.\nSupported models include Opus and other reasoning-capable models.` };
+      }
+      setChannelPrefs(channelId, { reasoningEffort: level });
+      return {
+        handled: true,
+        action: 'set_reasoning',
+        payload: level,
+        response: `🧠 Reasoning effort set to **${level}**. Takes effect on next session (\`/new\`).`,
+      };
+    }
+
     case 'status': {
       if (!sessionInfo) {
         return { handled: true, response: '📊 No active session for this channel.' };
@@ -70,6 +93,11 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         `• Verbose: ${(effectivePrefs?.verbose ?? prefs?.verbose) ? '🔊 On' : '🔇 Off'}`,
         `• Permission mode: ${(effectivePrefs?.permissionMode ?? prefs?.permissionMode) === 'autopilot' ? '🤖 Autopilot' : '🛡️ Interactive'}`,
       ];
+      // Only show reasoning effort for models that support it
+      if (modelInfo?.supportedReasoningEfforts && modelInfo.supportedReasoningEfforts.length > 0) {
+        const current = effectivePrefs?.reasoningEffort ?? modelInfo.defaultReasoningEffort ?? 'default';
+        lines.push(`• Reasoning effort: 🧠 **${current}** (supports: ${modelInfo.supportedReasoningEfforts.join(', ')})`);
+      }
       return { handled: true, response: lines.join('\n') };
     }
 
@@ -104,6 +132,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/new` — Start a new session',
           '`/model <name>` — Switch AI model',
           '`/agent <name>` — Switch custom agent (empty to deselect)',
+          '`/reasoning <level>` — Set reasoning effort (low/medium/high/xhigh)',
           '`/verbose` — Toggle tool call visibility',
           '`/status` — Show session info',
           '`/approve` — Approve pending permission',
