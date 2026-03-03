@@ -106,17 +106,31 @@ export class SessionManager {
       const messageId = await session.send({ prompt: text });
       return messageId;
     } catch (err: any) {
-      const status = err?.status ?? err?.statusCode ?? err?.code;
-      console.error(`[session-manager] send failed (${status}):`, err?.message ?? err);
-      // If session is stale/broken, create a new one and retry
-      if (status === 500 || status === 404 || String(err?.message).includes('500')) {
-        console.log(`[session-manager] Stale session ${sessionId}, creating new...`);
-        const newSessionId = await this.newSession(channelId);
-        const newSession = this.bridge.getSession(newSessionId);
-        if (!newSession) throw new Error(`New session ${newSessionId} not found`);
-        return newSession.send({ prompt: text });
+      const msg = String(err?.message ?? err);
+      console.error(`[session-manager] send failed for session ${sessionId}:`, msg);
+
+      // Try to reconnect to the same session (CLI subprocess may have restarted)
+      try {
+        console.log(`[session-manager] Attempting to re-attach session ${sessionId}...`);
+        this.bridge.releaseSession(sessionId);
+        const unsub = this.sessionUnsubscribes.get(sessionId);
+        if (unsub) { unsub(); this.sessionUnsubscribes.delete(sessionId); }
+        await this.attachSession(channelId, sessionId);
+        const reconnected = this.bridge.getSession(sessionId);
+        if (reconnected) {
+          console.log(`[session-manager] Re-attached session ${sessionId} successfully`);
+          return reconnected.send({ prompt: text });
+        }
+      } catch (retryErr: any) {
+        console.warn(`[session-manager] Re-attach failed:`, retryErr?.message ?? retryErr);
       }
-      throw err;
+
+      // Last resort: create a new session
+      console.log(`[session-manager] Creating new session for channel ${channelId}...`);
+      const newSessionId = await this.newSession(channelId);
+      const newSession = this.bridge.getSession(newSessionId);
+      if (!newSession) throw new Error(`New session ${newSessionId} not found`);
+      return newSession.send({ prompt: text });
     }
   }
 
