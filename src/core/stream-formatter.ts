@@ -73,22 +73,41 @@ export function formatPermissionRequest(toolName: string, input: unknown, comman
   const lines = ['🔐 **Permission Required**', ''];
   lines.push(`Tool: **${toolName}**`);
 
-  if (commands.length > 0) {
-    lines.push(`Commands: ${commands.map(c => `\`${c}\``).join(', ')}`);
-  }
-
-  // Show details based on the request content
   if (input && typeof input === 'object') {
     const obj = input as Record<string, unknown>;
+
+    // Show intention if available
+    if (obj.intention && typeof obj.intention === 'string') {
+      lines.push(`Intent: ${obj.intention}`);
+    }
+
+    // Show the full command for shell tools
     if (obj.command && typeof obj.command === 'string') {
-      const cmd = obj.command.length > 300 ? obj.command.slice(0, 300) + '...' : obj.command;
+      const cmd = obj.command.length > 500 ? obj.command.slice(0, 500) + '...' : obj.command;
       lines.push(`\`\`\`\n${cmd}\n\`\`\``);
-    } else if (obj.path && typeof obj.path === 'string') {
+    }
+
+    // Show path for read/write tools
+    if (obj.path && typeof obj.path === 'string') {
       lines.push(`Path: \`${obj.path}\``);
     }
-    // Show any other descriptive fields
+
+    // Show URL for url tools
+    if (obj.url && typeof obj.url === 'string') {
+      lines.push(`URL: ${obj.url}`);
+    }
+
+    // Show description if available
     if (obj.description && typeof obj.description === 'string') {
       lines.push(`Description: ${obj.description}`);
+    }
+
+    // Show MCP server name if applicable
+    if (obj.serverName && typeof obj.serverName === 'string') {
+      lines.push(`MCP Server: **${obj.serverName}**`);
+    }
+    if (obj.toolName && typeof obj.toolName === 'string' && obj.toolName !== toolName) {
+      lines.push(`MCP Tool: **${obj.toolName}**`);
     }
   }
 
