@@ -141,7 +141,7 @@ async function handleInboundMessage(
   // Check for slash commands
   const sessionInfo = sessionManager.getSessionInfo(msg.channelId);
   const effPrefs = sessionManager.getEffectivePrefs(msg.channelId);
-  const cmdResult = handleCommand(msg.channelId, text, sessionInfo ?? undefined, { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode });
+  const cmdResult = handleCommand(msg.channelId, text, sessionInfo ?? undefined, { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode }, { workingDirectory: channelConfig.workingDirectory, bot: channelConfig.bot });
 
   if (cmdResult.handled) {
     const threadRoot = channelConfig.threadedReplies ? (msg.threadRootId ?? msg.postId) : undefined;

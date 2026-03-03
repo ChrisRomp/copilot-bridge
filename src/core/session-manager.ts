@@ -282,8 +282,12 @@ export class SessionManager {
     }
 
     // Check stored permission rules
-    const toolName = request.toolName ?? 'unknown';
-    const commands = extractCommandPatterns(request.input);
+    console.log(`[session] Permission request:`, JSON.stringify(request).slice(0, 500));
+    const kind = (request as any).kind ?? 'unknown';
+    // Build a descriptive tool name from kind + available fields
+    const toolName = (request as any).toolName ?? (request as any).tool_name ?? (request as any).name ?? kind;
+    const toolInput = request.input ?? (request as any).arguments ?? (request as any).parameters ?? request;
+    const commands = extractCommandPatterns(toolInput);
 
     if (commands.length > 0) {
       const results = commands.map(cmd => checkPermission(channelId, toolName, cmd));
@@ -312,7 +316,7 @@ export class SessionManager {
         sessionId: invocation.sessionId,
         channelId,
         toolName,
-        toolInput: request.input,
+        toolInput: toolInput,
         commands,
         resolve,
         createdAt: Date.now(),
@@ -331,7 +335,7 @@ export class SessionManager {
           type: 'bridge.permission_request',
           data: {
             toolName,
-            input: request.input,
+            input: toolInput,
             commands,
           },
         });

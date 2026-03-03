@@ -77,12 +77,18 @@ export function formatPermissionRequest(toolName: string, input: unknown, comman
     lines.push(`Commands: ${commands.map(c => `\`${c}\``).join(', ')}`);
   }
 
-  // Show the full command if it's a bash tool
+  // Show details based on the request content
   if (input && typeof input === 'object') {
     const obj = input as Record<string, unknown>;
     if (obj.command && typeof obj.command === 'string') {
-      const cmd = obj.command.length > 200 ? obj.command.slice(0, 200) + '...' : obj.command;
+      const cmd = obj.command.length > 300 ? obj.command.slice(0, 300) + '...' : obj.command;
       lines.push(`\`\`\`\n${cmd}\n\`\`\``);
+    } else if (obj.path && typeof obj.path === 'string') {
+      lines.push(`Path: \`${obj.path}\``);
+    }
+    // Show any other descriptive fields
+    if (obj.description && typeof obj.description === 'string') {
+      lines.push(`Description: ${obj.description}`);
     }
   }
 

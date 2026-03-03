@@ -19,7 +19,7 @@ export function parseCommand(text: string): { command: string; args: string } | 
   };
 }
 
-export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string }): CommandResult {
+export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string }, channelMeta?: { workingDirectory?: string; bot?: string }): CommandResult {
   const parsed = parseCommand(text);
   if (!parsed) return { handled: false };
 
@@ -65,6 +65,8 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         `• Session: \`${sessionInfo.sessionId.slice(0, 8)}...\``,
         `• Model: **${sessionInfo.model}**`,
         `• Agent: ${sessionInfo.agent ? `**${sessionInfo.agent}**` : 'Default (Copilot)'}`,
+        `• Workspace: \`${channelMeta?.workingDirectory ?? 'unknown'}\``,
+        `• Bot: ${channelMeta?.bot ? `@${channelMeta.bot}` : 'default'}`,
         `• Verbose: ${(effectivePrefs?.verbose ?? prefs?.verbose) ? '🔊 On' : '🔇 Off'}`,
         `• Permission mode: ${(effectivePrefs?.permissionMode ?? prefs?.permissionMode) === 'autopilot' ? '🤖 Autopilot' : '🛡️ Interactive'}`,
       ];
