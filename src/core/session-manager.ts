@@ -21,7 +21,7 @@ const SHELL_WRAPPERS = new Set(['bash', 'sh', 'zsh', 'dash', 'fish', 'env', 'sud
 export function extractCommandPatterns(input: unknown): string[] {
   if (!input || typeof input !== 'object') return [];
   const obj = input as Record<string, unknown>;
-  const cmd = obj.command || obj.description || obj.path;
+  const cmd = obj.fullCommandText || obj.command || obj.description || obj.path;
   if (typeof cmd !== 'string') return [];
   const segments = cmd.split(/\s*(?:&&|\|\||[|;])\s*/);
   const names = segments

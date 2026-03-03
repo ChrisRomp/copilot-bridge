@@ -82,8 +82,9 @@ export function formatPermissionRequest(toolName: string, input: unknown, comman
     }
 
     // Show the full command for shell tools
-    if (obj.command && typeof obj.command === 'string') {
-      const cmd = obj.command.length > 500 ? obj.command.slice(0, 500) + '...' : obj.command;
+    const cmdText = (obj.fullCommandText ?? obj.command) as string | undefined;
+    if (cmdText && typeof cmdText === 'string') {
+      const cmd = cmdText.length > 500 ? cmdText.slice(0, 500) + '...' : cmdText;
       lines.push(`\`\`\`\n${cmd}\n\`\`\``);
     }
 

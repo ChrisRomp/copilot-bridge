@@ -195,7 +195,8 @@ export function evaluateConfigPermissions(
   if (!perms) return null;
 
   const kind = request.kind; // "shell", "read", "write", "mcp", "url", "custom-tool"
-  const command = typeof request.command === 'string' ? request.command : undefined;
+  const command = typeof request.fullCommandText === 'string' ? request.fullCommandText
+    : typeof request.command === 'string' ? request.command : undefined;
   const requestPath = typeof request.path === 'string' ? request.path : undefined;
   const serverName = typeof request.serverName === 'string' ? request.serverName : undefined;
   const toolName = typeof request.toolName === 'string' ? request.toolName : undefined;
