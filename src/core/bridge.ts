@@ -63,6 +63,7 @@ export class CopilotBridge {
     configDir?: string;
     reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
     mcpServers?: Record<string, MCPServerConfig>;
+    skillDirectories?: string[];
     onPermissionRequest: PermissionHandler;
     onUserInputRequest?: UserInputHandler;
     systemMessage?: SystemMessageConfig;
@@ -76,6 +77,7 @@ export class CopilotBridge {
       configDir: opts.configDir,
       reasoningEffort: opts.reasoningEffort,
       mcpServers: opts.mcpServers,
+      skillDirectories: opts.skillDirectories,
       onPermissionRequest: opts.onPermissionRequest,
       onUserInputRequest: opts.onUserInputRequest,
       streaming: true,
@@ -97,6 +99,7 @@ export class CopilotBridge {
       workingDirectory?: string;
       reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
       mcpServers?: Record<string, MCPServerConfig>;
+      skillDirectories?: string[];
     },
   ): Promise<CopilotSession> {
     await this.start();
@@ -114,6 +117,7 @@ export class CopilotBridge {
       workingDirectory: opts?.workingDirectory,
       reasoningEffort: opts?.reasoningEffort,
       mcpServers: opts?.mcpServers,
+      skillDirectories: opts?.skillDirectories,
     });
     this.sessions.set(session.sessionId, session);
     return session;

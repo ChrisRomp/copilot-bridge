@@ -109,6 +109,41 @@ export function extractCommandPatterns(input: unknown): string[] {
   return [...new Set(names)];
 }
 
+/**
+ * Discover skill directories following Copilot CLI conventions:
+ * - ~/.copilot/skills/ (user-level)
+ * - <workspace>/.github/skills/ (project-level)
+ * - <workspace>/.agents/skills/ (project-level, legacy)
+ */
+function discoverSkillDirectories(workingDirectory: string): string[] {
+  const home = process.env.HOME;
+  const roots: string[] = [];
+
+  // User-level skills
+  if (home) roots.push(path.join(home, '.copilot', 'skills'));
+  // Project-level skills (standard)
+  roots.push(path.join(workingDirectory, '.github', 'skills'));
+  // Project-level skills (legacy)
+  roots.push(path.join(workingDirectory, '.agents', 'skills'));
+
+  const dirs: string[] = [];
+  for (const skillsRoot of roots) {
+    if (!fs.existsSync(skillsRoot)) continue;
+    try {
+      for (const entry of fs.readdirSync(skillsRoot, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          dirs.push(path.join(skillsRoot, entry.name));
+        }
+      }
+    } catch { /* permission errors etc */ }
+  }
+
+  if (dirs.length > 0) {
+    log.info(`Discovered ${dirs.length} skill(s): ${dirs.map(d => path.basename(d)).join(', ')}`);
+  }
+  return dirs;
+}
+
 export class SessionManager {
   private bridge: CopilotBridge;
   private channelSessions = new Map<string, string>(); // channelId → sessionId
@@ -396,6 +431,7 @@ export class SessionManager {
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
 
     const reasoningEffort = prefs.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | undefined;
+    const skillDirectories = discoverSkillDirectories(config.workingDirectory);
 
     const session = await this.bridge.createSession({
       model: prefs.model,
@@ -403,6 +439,7 @@ export class SessionManager {
       configDir: defaultConfigDir,
       reasoningEffort: reasoningEffort ?? undefined,
       mcpServers: this.mcpServers,
+      skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
       onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
       onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
     });
@@ -423,6 +460,7 @@ export class SessionManager {
     const prefs = this.getEffectivePrefs(channelId);
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
     const reasoningEffort = prefs.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | undefined;
+    const skillDirectories = discoverSkillDirectories(config.workingDirectory);
 
     const session = await this.bridge.resumeSession(sessionId, {
       onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
@@ -431,6 +469,7 @@ export class SessionManager {
       workingDirectory: config.workingDirectory,
       reasoningEffort: reasoningEffort ?? undefined,
       mcpServers: this.mcpServers,
+      skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
     });
 
     this.channelSessions.set(channelId, sessionId);
