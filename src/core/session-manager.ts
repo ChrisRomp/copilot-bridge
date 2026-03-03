@@ -6,9 +6,12 @@ import {
   type ChannelPrefs,
 } from '../state/store.js';
 import { getChannelConfig, evaluateConfigPermissions } from '../config.js';
+import { createLogger } from '../logger.js';
 import type {
   ChannelAdapter, InboundMessage, PendingPermission, PendingUserInput,
 } from '../types.js';
+
+const log = createLogger('session');
 
 type SessionEventHandler = (sessionId: string, channelId: string, event: any) => void;
 
@@ -66,7 +69,7 @@ export class SessionManager {
         await this.attachSession(channelId, storedSessionId);
         return { sessionId: storedSessionId, isNew: false };
       } catch (err) {
-        console.warn(`[session-manager] Failed to resume session ${storedSessionId} for channel ${channelId}, creating new:`, err);
+      log.warn(`Failed to resume session ${storedSessionId} for channel ${channelId}, creating new:`, err);
         clearChannelSession(channelId);
       }
     }
@@ -107,26 +110,26 @@ export class SessionManager {
       return messageId;
     } catch (err: any) {
       const msg = String(err?.message ?? err);
-      console.error(`[session-manager] send failed for session ${sessionId}:`, msg);
+      log.error(`Send failed for session ${sessionId}:`, msg);
 
       // Try to reconnect to the same session (CLI subprocess may have restarted)
       try {
-        console.log(`[session-manager] Attempting to re-attach session ${sessionId}...`);
+        log.info(`Attempting to re-attach session ${sessionId}...`);
         this.bridge.releaseSession(sessionId);
         const unsub = this.sessionUnsubscribes.get(sessionId);
         if (unsub) { unsub(); this.sessionUnsubscribes.delete(sessionId); }
         await this.attachSession(channelId, sessionId);
         const reconnected = this.bridge.getSession(sessionId);
         if (reconnected) {
-          console.log(`[session-manager] Re-attached session ${sessionId} successfully`);
+          log.info(`Re-attached session ${sessionId} successfully`);
           return reconnected.send({ prompt: text });
         }
       } catch (retryErr: any) {
-        console.warn(`[session-manager] Re-attach failed:`, retryErr?.message ?? retryErr);
+        log.warn(`Re-attach failed:`, retryErr?.message ?? retryErr);
       }
 
       // Last resort: create a new session
-      console.log(`[session-manager] Creating new session for channel ${channelId}...`);
+      log.info(`Creating new session for channel ${channelId}...`);
       const newSessionId = await this.newSession(channelId);
       const newSession = this.bridge.getSession(newSessionId);
       if (!newSession) throw new Error(`New session ${newSessionId} not found`);
@@ -138,16 +141,16 @@ export class SessionManager {
   private clearPendingPermissions(channelId: string): void {
     const queue = this.pendingPermissions.get(channelId);
     if (queue && queue.length > 0) {
-      console.log(`[session-manager] Auto-denying ${queue.length} pending permission(s) for channel ${channelId}`);
+      log.info(`Auto-denying ${queue.length} pending permission(s) for channel ${channelId}`);
       for (const entry of queue) {
-        entry.resolve({ allow: false });
+        entry.resolve({ kind: 'denied-interactively-by-user' });
       }
       this.pendingPermissions.delete(channelId);
     }
 
     const inputQueue = this.pendingUserInput.get(channelId);
     if (inputQueue && inputQueue.length > 0) {
-      console.log(`[session-manager] Cancelling ${inputQueue.length} pending input request(s) for channel ${channelId}`);
+      log.info(`Cancelling ${inputQueue.length} pending input request(s) for channel ${channelId}`);
       for (const entry of inputQueue) {
         entry.resolve({ answer: '', wasFreeform: true });
       }
@@ -162,7 +165,7 @@ export class SessionManager {
       try {
         await this.bridge.switchSessionModel(sessionId, model);
       } catch (err) {
-        console.warn(`[session-manager] RPC model switch failed:`, err);
+        log.warn(`RPC model switch failed:`, err);
       }
     }
     setChannelPrefs(channelId, { model });
@@ -179,7 +182,7 @@ export class SessionManager {
           await this.bridge.deselectAgent(sessionId);
         }
       } catch (err) {
-        console.warn(`[session-manager] RPC agent switch failed:`, err);
+        log.warn(`RPC agent switch failed:`, err);
       }
     }
     setChannelPrefs(channelId, { agent });
@@ -213,7 +216,9 @@ export class SessionManager {
       }
     }
 
-    pending.resolve({ allow, remember });
+    pending.resolve(allow
+      ? { kind: 'approved' }
+      : { kind: 'denied-interactively-by-user' });
 
     if (queue.length === 0) {
       this.pendingPermissions.delete(channelId);
@@ -302,7 +307,7 @@ export class SessionManager {
 
     this.attachSessionEvents(session, channelId);
 
-    console.log(`[session-manager] Created session ${sessionId} for channel ${channelId}`);
+    log.info(`Created session ${sessionId} for channel ${channelId}`);
     return sessionId;
   }
 
@@ -338,21 +343,21 @@ export class SessionManager {
 
     // Autopilot mode: allow everything
     if (prefs.permissionMode === 'autopilot') {
-      return Promise.resolve({ allow: true });
+      return Promise.resolve({ kind: 'approved' });
     }
 
     // Check config-level permission rules first (CLI-compatible syntax)
     const config = getChannelConfig(channelId);
     const configResult = evaluateConfigPermissions(request as any, config.workingDirectory);
     if (configResult === 'allow') {
-      return Promise.resolve({ allow: true });
+      return Promise.resolve({ kind: 'approved' });
     }
     if (configResult === 'deny') {
-      return Promise.resolve({ allow: false });
+      return Promise.resolve({ kind: 'denied-by-rules' });
     }
 
     // Check stored permission rules (SQLite, from /remember)
-    console.log(`[session] Permission request:`, JSON.stringify(request).slice(0, 500));
+    log.debug(`Permission request:`, JSON.stringify(request).slice(0, 500));
     const kind = (request as any).kind ?? 'unknown';
     // Build a descriptive tool name from kind + available fields
     const toolName = (request as any).toolName ?? (request as any).tool_name ?? (request as any).name ?? kind;
@@ -361,23 +366,19 @@ export class SessionManager {
 
     if (commands.length > 0) {
       const results = commands.map(cmd => checkPermission(channelId, toolName, cmd));
-      // If all commands have rules and all are allowed
       if (results.every(r => r === 'allow')) {
-        // Don't auto-approve known shell wrappers — always ask
         const hasWrapper = commands.some(cmd => SHELL_WRAPPERS.has(cmd));
         if (!hasWrapper) {
-          return Promise.resolve({ allow: true });
+          return Promise.resolve({ kind: 'approved' });
         }
-        // Fall through to interactive approval
       }
-      // If any is explicitly denied
       if (results.some(r => r === 'deny')) {
-        return Promise.resolve({ allow: false });
+        return Promise.resolve({ kind: 'denied-by-rules' });
       }
     } else {
-      // Non-command tool: check wildcard rule
       const result = checkPermission(channelId, toolName, '*');
-      if (result) return Promise.resolve({ allow: result === 'allow' });
+      if (result === 'allow') return Promise.resolve({ kind: 'approved' });
+      if (result === 'deny') return Promise.resolve({ kind: 'denied-by-rules' });
     }
 
     // No rule matched — need to ask the user via chat
@@ -454,7 +455,7 @@ export class SessionManager {
     // Resolve all pending permissions (deny them on shutdown)
     for (const [, queue] of this.pendingPermissions) {
       for (const pending of queue) {
-        pending.resolve({ allow: false });
+        pending.resolve({ kind: 'denied-interactively-by-user' });
       }
     }
     this.pendingPermissions.clear();

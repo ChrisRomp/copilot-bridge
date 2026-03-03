@@ -6,13 +6,19 @@ import { formatEvent, formatPermissionRequest, formatUserInputRequest } from './
 import { MattermostAdapter } from './channels/mattermost/adapter.js';
 import { StreamingHandler } from './channels/mattermost/streaming.js';
 import { getChannelPrefs, closeDb } from './state/store.js';
+import { createLogger } from './logger.js';
 import type { ChannelAdapter, InboundMessage, InboundReaction } from './types.js';
+
+const log = createLogger('bridge');
 
 // Active streaming responses, keyed by channelId
 const activeStreams = new Map<string, string>(); // channelId → streamKey
 
 // Per-channel promise chain to serialize message handling
 const channelLocks = new Map<string, Promise<void>>();
+
+// Per-channel promise chain to serialize SESSION EVENT handling (prevents race on auto-start)
+const eventLocks = new Map<string, Promise<void>>();
 
 // Bot adapters keyed by "platform:botName" for channel→adapter lookup
 const botAdapters = new Map<string, ChannelAdapter>();
@@ -29,16 +35,16 @@ function getAdapterForChannel(channelId: string): { adapter: ChannelAdapter; str
 }
 
 async function main(): Promise<void> {
-  console.log('🌉 copilot-bridge starting...');
+  log.info('copilot-bridge starting...');
 
   // Load configuration
   const config = loadConfig();
-  console.log(`  Loaded ${config.channels.length} channel mapping(s)`);
+  log.info(`Loaded ${config.channels.length} channel mapping(s)`);
 
   // Initialize Copilot SDK bridge
   const bridge = new CopilotBridge();
   await bridge.start();
-  console.log('  ✅ Copilot SDK connected');
+  log.info('Copilot SDK connected');
 
   // Initialize session manager
   const sessionManager = new SessionManager(bridge);
@@ -52,14 +58,19 @@ async function main(): Promise<void> {
         const adapter = new MattermostAdapter(platformName, platformConfig.url, botInfo.token);
         botAdapters.set(key, adapter);
         botStreamers.set(key, new StreamingHandler(adapter));
-        console.log(`  Registered bot "${botName}" for ${platformName}`);
+        log.info(`Registered bot "${botName}" for ${platformName}`);
       }
     }
   }
 
-  // Wire up session events → streaming output
+  // Wire up session events → streaming output (serialized per channel)
   sessionManager.onSessionEvent((sessionId, channelId, event) => {
-    handleSessionEvent(channelId, event);
+    const prev = eventLocks.get(channelId) ?? Promise.resolve();
+    const next = prev.then(() =>
+      handleSessionEvent(channelId, event)
+        .catch(err => log.error(`Unhandled error in event handler:`, err))
+    );
+    eventLocks.set(channelId, next);
   });
 
   // Connect all bot adapters and wire up handlers
@@ -70,21 +81,21 @@ async function main(): Promise<void> {
       const prev = channelLocks.get(msg.channelId) ?? Promise.resolve();
       const next = prev.then(() =>
         handleInboundMessage(msg, sessionManager)
-          .catch(err => console.error(`[bridge] Unhandled error in message handler:`, err))
+          .catch(err => log.error(`Unhandled error in message handler:`, err))
       );
       channelLocks.set(msg.channelId, next);
     });
     adapter.onReaction((reaction) => handleReaction(reaction, sessionManager));
 
     await adapter.connect();
-    console.log(`  ✅ ${key} connected`);
+    log.info(`${key} connected`);
   }
 
-  console.log('🌉 copilot-bridge ready!\n');
+  log.info('copilot-bridge ready!');
 
   // Graceful shutdown
   const shutdown = async () => {
-    console.log('\n🌉 Shutting down...');
+    log.info('Shutting down...');
     await sessionManager.shutdown();
     for (const [, adapter] of botAdapters) {
       await adapter.disconnect();
@@ -94,7 +105,7 @@ async function main(): Promise<void> {
     }
     await bridge.stop();
     closeDb();
-    console.log('🌉 Goodbye.');
+    log.info('Goodbye.');
     process.exit(0);
   };
 
@@ -110,13 +121,13 @@ async function handleInboundMessage(
 ): Promise<void> {
   // Only handle configured channels
   if (!isConfiguredChannel(msg.channelId)) {
-    console.log(`[bridge] Ignoring unconfigured channel ${msg.channelId}`);
+    log.debug(`Ignoring unconfigured channel ${msg.channelId}`);
     return;
   }
 
   const resolved = getAdapterForChannel(msg.channelId);
   if (!resolved) {
-    console.log(`[bridge] No adapter for channel ${msg.channelId}`);
+    log.warn(`No adapter for channel ${msg.channelId}`);
     return;
   }
   const { adapter, streaming } = resolved;
@@ -206,6 +217,7 @@ async function handleInboundMessage(
   // Regular message — forward to Copilot session
   try {
     console.log(`[bridge] Forwarding to Copilot: "${text}"`);
+    log.info(`Forwarding to Copilot: "${text.slice(0, 100)}"`);
     adapter.setTyping(msg.channelId).catch(() => {});
 
     const existingStreamKey = activeStreams.get(msg.channelId);
@@ -220,7 +232,7 @@ async function handleInboundMessage(
 
     await sessionManager.sendMessage(msg.channelId, text);
   } catch (err) {
-    console.error(`[bridge] Error sending message for channel ${msg.channelId}:`, err);
+    log.error(`Error sending message for channel ${msg.channelId}:`, err);
     const streamKey = activeStreams.get(msg.channelId);
     if (streamKey) {
       await streaming.cancelStream(streamKey, err instanceof Error ? err.message : 'Unknown error');
@@ -263,9 +275,20 @@ async function handleSessionEvent(
   event: any,
 ): Promise<void> {
   if (event.type === 'session.error' || event.type?.includes('error')) {
-    console.error(`[bridge] Error event:`, JSON.stringify(event).slice(0, 1000));
+    log.error(`SDK error event: ${JSON.stringify(event).slice(0, 1000)}`);
   }
-  console.log(`[bridge] Session event: ${event.type} for channel ${channelId}`);
+
+  // Verbose SDK event logging
+  if (event.type === 'assistant.message_delta' || event.type === 'assistant.streaming_delta') {
+    log.debug(`SDK ${event.type}: ${JSON.stringify(event.data).slice(0, 200)}`);
+  } else if (event.type === 'assistant.message') {
+    log.debug(`SDK ${event.type}: ${JSON.stringify(event.data).slice(0, 400)}`);
+  } else if (event.type?.startsWith('tool.')) {
+    log.info(`SDK ${event.type}: ${JSON.stringify(event.data).slice(0, 400)}`);
+  } else {
+    log.debug(`SDK event: ${event.type}`);
+  }
+
   const resolved = getAdapterForChannel(channelId);
   if (!resolved) return;
   const { adapter, streaming } = resolved;
@@ -276,27 +299,26 @@ async function handleSessionEvent(
 
   // Handle custom bridge events (permissions, user input)
   if (event.type === 'bridge.permission_request') {
-    // Flush the current stream so the user sees the model's message before the permission prompt
     const streamKey = activeStreams.get(channelId);
     if (streamKey) {
-      streaming.finalizeStream(streamKey).catch(console.error);
+      await streaming.finalizeStream(streamKey);
       activeStreams.delete(channelId);
     }
     const { toolName, input, commands } = event.data;
     const formatted = formatPermissionRequest(toolName, input, commands);
-    adapter.sendMessage(channelId, formatted).catch(console.error);
+    await adapter.sendMessage(channelId, formatted);
     return;
   }
 
   if (event.type === 'bridge.user_input_request') {
     const streamKey = activeStreams.get(channelId);
     if (streamKey) {
-      streaming.finalizeStream(streamKey).catch(console.error);
+      await streaming.finalizeStream(streamKey);
       activeStreams.delete(channelId);
     }
     const { question, choices } = event.data;
     const formatted = formatUserInputRequest(question, choices);
-    adapter.sendMessage(channelId, formatted).catch(console.error);
+    await adapter.sendMessage(channelId, formatted);
     return;
   }
 
@@ -309,11 +331,11 @@ async function handleSessionEvent(
   const streamKey = activeStreams.get(channelId);
 
   switch (formatted.type) {
-    case 'content':
+    case 'content': {
       if (!streamKey) {
-        // Auto-start a new stream (e.g., after permission resolution)
-        const channelCfg = getChannelConfig(channelId);
-        const newKey = await streaming.startStream(channelId, channelCfg.threadedReplies ? undefined : undefined);
+        // Auto-start a new stream (e.g., after permission resolution or bridge restart)
+        log.info(`Auto-starting stream for channel ${channelId.slice(0, 8)}...`);
+        const newKey = await streaming.startStream(channelId);
         activeStreams.set(channelId, newKey);
         if (event.type === 'assistant.message') {
           streaming.replaceContent(newKey, formatted.content);
@@ -329,31 +351,30 @@ async function handleSessionEvent(
       }
       adapter.setTyping(channelId).catch(() => {});
       break;
-
+    }
     case 'tool_start':
       if (verbose && formatted.content) {
-        // Send tool calls as separate messages, not in the stream
-        adapter.sendMessage(channelId, formatted.content).catch(console.error);
+        await adapter.sendMessage(channelId, formatted.content);
       }
       break;
 
     case 'tool_complete':
-      // Tool complete is low-value noise — skip it even in verbose
       break;
 
     case 'error':
       if (streamKey) {
-        streaming.cancelStream(streamKey, formatted.content).catch(console.error);
+        await streaming.cancelStream(streamKey, formatted.content);
         activeStreams.delete(channelId);
       } else {
-        adapter.sendMessage(channelId, formatted.content).catch(console.error);
+        await adapter.sendMessage(channelId, formatted.content);
       }
       break;
 
     case 'status':
       if (event.type === 'assistant.turn_end' || event.type === 'session.idle') {
         if (streamKey) {
-          streaming.finalizeStream(streamKey).catch(console.error);
+          log.info(`Turn ended, finalizing stream for ${channelId.slice(0, 8)}...`);
+          await streaming.finalizeStream(streamKey);
           activeStreams.delete(channelId);
         }
       }
@@ -363,7 +384,7 @@ async function handleSessionEvent(
 
 // Start the bridge
 main().catch((err) => {
-  console.error('Fatal error:', err);
+  log.error('Fatal error:', err);
   closeDb();
   process.exit(1);
 });

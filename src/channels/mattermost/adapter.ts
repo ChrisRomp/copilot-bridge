@@ -1,6 +1,9 @@
 import { Client4, WebSocketClient } from '@mattermost/client';
-import * as WebSocket from 'ws';
+import WebSocket from 'ws';
+import { createLogger } from '../../logger.js';
 import type { ChannelAdapter, InboundMessage, InboundReaction, SendOpts } from '../../types.js';
+
+const log = createLogger('mattermost');
 
 // Node.js polyfills for @mattermost/client (expects browser globals)
 if (!globalThis.WebSocket) {
@@ -48,15 +51,14 @@ export class MattermostAdapter implements ChannelAdapter {
     const host = this.url.replace(/^https?:\/\//, '');
     const wsUrl = `${wsScheme}://${host}/api/v4/websocket`;
 
-    // Register a missed-message listener so the client resets its sequence
-    // counter on reconnect (without this, act_seq/exp_seq mismatch loops)
     this.wsClient.addMissedMessageListener(() => {
-      console.log(`[mattermost] WebSocket reconnected — missed events, resetting state`);
+      log.warn(`WebSocket reconnected — missed events, resetting state`);
     });
 
     await this.wsClient.initialize(wsUrl, this.token);
 
     this.wsClient.addMessageListener((msg: any) => {
+      log.debug(`WS event: ${msg.event}`);
       if (msg.event === 'posted') {
         this.handlePosted(msg);
       } else if (msg.event === 'reaction_added' || msg.event === 'reaction_removed') {
@@ -64,7 +66,7 @@ export class MattermostAdapter implements ChannelAdapter {
       }
     });
 
-    console.log(`[mattermost] Connected as @${this.botUsername} (${this.botId})`);
+    log.info(`Connected as @${this.botUsername} (${this.botId})`);
   }
 
   async disconnect(): Promise<void> {
@@ -140,20 +142,20 @@ export class MattermostAdapter implements ChannelAdapter {
         isDM,
       };
 
-      console.log(`[mattermost] Received: "${inbound.text}" from ${inbound.username} in ${inbound.channelId} (isDM=${isDM}, mentionsBot=${mentionsBot})`);
+      log.info(`Received: "${inbound.text.slice(0, 80)}" from ${inbound.username} in ${inbound.channelId} (isDM=${isDM})`);
 
       for (const handler of this.messageHandlers) {
         try {
           const result: any = handler(inbound);
           if (result && typeof result.catch === 'function') {
-            result.catch((err: unknown) => console.error('[mattermost] Handler error:', err));
+            result.catch((err: unknown) => log.error('Handler error:', err));
           }
         } catch (err) {
-          console.error('[mattermost] Handler error:', err);
+          log.error('Handler error:', err);
         }
       }
     } catch (err) {
-      console.error('[mattermost] Failed to parse posted event:', err);
+      log.error('Failed to parse posted event:', err);
     }
   }
 
@@ -174,14 +176,14 @@ export class MattermostAdapter implements ChannelAdapter {
         try {
           const result: any = handler(inbound);
           if (result && typeof result.catch === 'function') {
-            result.catch((err: unknown) => console.error('[mattermost] Handler error:', err));
+            result.catch((err: unknown) => log.error('Reaction handler error:', err));
           }
         } catch (err) {
-          console.error('[mattermost] Handler error:', err);
+          log.error('Reaction handler error:', err);
         }
       }
     } catch (err) {
-      console.error('[mattermost] Failed to parse reaction event:', err);
+      log.error('Failed to parse reaction event:', err);
     }
   }
 }

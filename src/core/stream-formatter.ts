@@ -54,7 +54,7 @@ export function formatEvent(event: any): FormattedEvent | null {
       return {
         type: 'status',
         content: '',
-        verbose: true,
+        verbose: false,
       };
 
     case 'assistant.turn_end':
@@ -62,7 +62,7 @@ export function formatEvent(event: any): FormattedEvent | null {
       return {
         type: 'status',
         content: '',
-        verbose: true,
+        verbose: false, // must always process — triggers stream finalization
       };
 
     default:

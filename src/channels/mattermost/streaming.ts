@@ -1,4 +1,7 @@
+import { createLogger } from '../../logger.js';
 import type { ChannelAdapter } from '../../types.js';
+
+const log = createLogger('streaming');
 
 export class StreamingHandler {
   private adapter: ChannelAdapter;
@@ -39,12 +42,16 @@ export class StreamingHandler {
   /** Append delta content to a stream. Updates are throttled. */
   appendDelta(streamKey: string, delta: string): void {
     const stream = this.activeStreams.get(streamKey);
-    if (!stream) return;
+    if (!stream || !delta) {
+      if (!stream) log.warn(`appendDelta: stream not found for key ${streamKey}`);
+      return;
+    }
 
     stream.content += delta;
     stream.pendingUpdate = stream.content;
 
     if (!stream.updateTimer) {
+      log.debug(`Scheduled flush for ${streamKey.split(':')[1]?.slice(0, 8)}... (${stream.content.length} chars)`);
       stream.updateTimer = setTimeout(() => {
         this.flushUpdate(streamKey);
       }, this.throttleMs);
@@ -69,7 +76,10 @@ export class StreamingHandler {
   /** Finalize the stream with the complete content. */
   async finalizeStream(streamKey: string, finalContent?: string): Promise<void> {
     const stream = this.activeStreams.get(streamKey);
-    if (!stream) return;
+    if (!stream) {
+      log.warn(`finalizeStream: stream not found for key ${streamKey}`);
+      return;
+    }
 
     // Remove from map FIRST to prevent flushUpdate from racing
     this.activeStreams.delete(streamKey);
@@ -80,11 +90,12 @@ export class StreamingHandler {
     }
 
     const content = finalContent ?? stream.content;
+    log.info(`Finalizing ${stream.messageId.slice(0, 8)}...: ${content.length} chars`);
     if (content) {
       try {
         await this.adapter.updateMessage(stream.channelId, stream.messageId, content);
       } catch (err) {
-        console.error(`[streaming] Failed to finalize message:`, err);
+        log.error(`Failed to finalize message:`, err);
       }
     }
   }
@@ -122,9 +133,10 @@ export class StreamingHandler {
     stream.updateTimer = null;
 
     try {
+      log.debug(`Flushing ${content.length} chars to ${stream.messageId.slice(0, 8)}...`);
       await this.adapter.updateMessage(stream.channelId, stream.messageId, content);
     } catch (err) {
-      console.error(`[streaming] Failed to update message:`, err);
+      log.error(`Failed to update message ${stream.messageId}:`, err);
     }
   }
 
