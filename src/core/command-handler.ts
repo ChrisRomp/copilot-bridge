@@ -19,7 +19,7 @@ export function parseCommand(text: string): { command: string; args: string } | 
   };
 }
 
-export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }): CommandResult {
+export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string }): CommandResult {
   const parsed = parseCommand(text);
   if (!parsed) return { handled: false };
 
@@ -46,7 +46,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
 
     case 'verbose': {
       const prefs = getChannelPrefs(channelId);
-      const newVerbose = !(prefs?.verbose ?? false);
+      const newVerbose = !(effectivePrefs?.verbose ?? prefs?.verbose ?? false);
       setChannelPrefs(channelId, { verbose: newVerbose });
       return {
         handled: true,
@@ -65,8 +65,8 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         `• Session: \`${sessionInfo.sessionId.slice(0, 8)}...\``,
         `• Model: **${sessionInfo.model}**`,
         `• Agent: ${sessionInfo.agent ? `**${sessionInfo.agent}**` : 'Default (Copilot)'}`,
-        `• Verbose: ${prefs?.verbose ? '🔊 On' : '🔇 Off'}`,
-        `• Permission mode: ${prefs?.permissionMode === 'autopilot' ? '🤖 Autopilot' : '🛡️ Interactive'}`,
+        `• Verbose: ${(effectivePrefs?.verbose ?? prefs?.verbose) ? '🔊 On' : '🔇 Off'}`,
+        `• Permission mode: ${(effectivePrefs?.permissionMode ?? prefs?.permissionMode) === 'autopilot' ? '🤖 Autopilot' : '🛡️ Interactive'}`,
       ];
       return { handled: true, response: lines.join('\n') };
     }
@@ -79,7 +79,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
 
     case 'autopilot': {
       const prefs = getChannelPrefs(channelId);
-      const current = prefs?.permissionMode ?? 'interactive';
+      const current = effectivePrefs?.permissionMode ?? prefs?.permissionMode ?? 'interactive';
       const newMode = current === 'autopilot' ? 'interactive' : 'autopilot';
       setChannelPrefs(channelId, { permissionMode: newMode });
       return {

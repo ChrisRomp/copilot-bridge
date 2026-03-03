@@ -128,7 +128,14 @@ export class MattermostAdapter implements ChannelAdapter {
       };
 
       for (const handler of this.messageHandlers) {
-        handler(inbound);
+        try {
+          const result: any = handler(inbound);
+          if (result && typeof result.catch === 'function') {
+            result.catch((err: unknown) => console.error('[mattermost] Handler error:', err));
+          }
+        } catch (err) {
+          console.error('[mattermost] Handler error:', err);
+        }
       }
     } catch (err) {
       console.error('[mattermost] Failed to parse posted event:', err);
@@ -149,7 +156,14 @@ export class MattermostAdapter implements ChannelAdapter {
       };
 
       for (const handler of this.reactionHandlers) {
-        handler(inbound);
+        try {
+          const result: any = handler(inbound);
+          if (result && typeof result.catch === 'function') {
+            result.catch((err: unknown) => console.error('[mattermost] Handler error:', err));
+          }
+        } catch (err) {
+          console.error('[mattermost] Handler error:', err);
+        }
       }
     } catch (err) {
       console.error('[mattermost] Failed to parse reaction event:', err);

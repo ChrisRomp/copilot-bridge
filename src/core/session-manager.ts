@@ -16,6 +16,8 @@ type SessionEventHandler = (sessionId: string, channelId: string, event: any) =>
  * Extract individual command names from a shell command string.
  * Handles chained commands: "ls -la && grep -r foo . | head" → ["ls", "grep", "head"]
  */
+const SHELL_WRAPPERS = new Set(['bash', 'sh', 'zsh', 'dash', 'fish', 'env', 'sudo', 'nohup', 'xargs', 'exec', 'eval']);
+
 export function extractCommandPatterns(input: unknown): string[] {
   if (!input || typeof input !== 'object') return [];
   const obj = input as Record<string, unknown>;
@@ -32,6 +34,7 @@ export class SessionManager {
   private bridge: CopilotBridge;
   private channelSessions = new Map<string, string>(); // channelId → sessionId
   private sessionChannels = new Map<string, string>(); // sessionId → channelId (reverse)
+  private sessionUnsubscribes = new Map<string, () => void>(); // sessionId → unsubscribe fn
   private eventHandler: SessionEventHandler | null = null;
 
   // Pending permission requests (queue per channel to avoid overwrites)
@@ -78,8 +81,10 @@ export class SessionManager {
     // Clean up existing session
     const existingId = this.channelSessions.get(channelId);
     if (existingId) {
+      const unsub = this.sessionUnsubscribes.get(existingId);
+      if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
       try {
-        this.bridge.releaseSession(existingId);
+        this.bridge.destroySession(existingId);
       } catch { /* best-effort */ }
       this.channelSessions.delete(channelId);
       this.sessionChannels.delete(existingId);
@@ -258,9 +263,10 @@ export class SessionManager {
   }
 
   private attachSessionEvents(session: CopilotSession, channelId: string): void {
-    session.on((event: any) => {
+    const unsub = session.on((event: any) => {
       this.eventHandler?.(session.sessionId, channelId, event);
     });
+    this.sessionUnsubscribes.set(session.sessionId, unsub);
   }
 
   private handlePermissionRequest(
@@ -283,7 +289,12 @@ export class SessionManager {
       const results = commands.map(cmd => checkPermission(channelId, toolName, cmd));
       // If all commands have rules and all are allowed
       if (results.every(r => r === 'allow')) {
-        return Promise.resolve({ allow: true });
+        // Don't auto-approve known shell wrappers — always ask
+        const hasWrapper = commands.some(cmd => SHELL_WRAPPERS.has(cmd));
+        if (!hasWrapper) {
+          return Promise.resolve({ allow: true });
+        }
+        // Fall through to interactive approval
       }
       // If any is explicitly denied
       if (results.some(r => r === 'deny')) {
@@ -366,13 +377,33 @@ export class SessionManager {
   }
 
   async shutdown(): Promise<void> {
+    // Resolve all pending permissions (deny them on shutdown)
+    for (const [, queue] of this.pendingPermissions) {
+      for (const pending of queue) {
+        pending.resolve({ allow: false });
+      }
+    }
+    this.pendingPermissions.clear();
+
+    // Resolve all pending user inputs (empty answer on shutdown)
+    for (const [, queue] of this.pendingUserInput) {
+      for (const pending of queue) {
+        pending.resolve({ answer: '', wasFreeform: false });
+      }
+    }
+    this.pendingUserInput.clear();
+
+    // Unsubscribe all session event listeners
+    for (const [, unsub] of this.sessionUnsubscribes) {
+      unsub();
+    }
+    this.sessionUnsubscribes.clear();
+
     // Release all sessions (don't destroy — they persist in CLI)
     for (const [channelId, sessionId] of this.channelSessions) {
       this.bridge.releaseSession(sessionId);
     }
     this.channelSessions.clear();
     this.sessionChannels.clear();
-    this.pendingPermissions.clear();
-    this.pendingUserInput.clear();
   }
 }

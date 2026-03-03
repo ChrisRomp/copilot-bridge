@@ -71,6 +71,9 @@ export class StreamingHandler {
     const stream = this.activeStreams.get(streamKey);
     if (!stream) return;
 
+    // Remove from map FIRST to prevent flushUpdate from racing
+    this.activeStreams.delete(streamKey);
+
     if (stream.updateTimer) {
       clearTimeout(stream.updateTimer);
       stream.updateTimer = null;
@@ -84,14 +87,15 @@ export class StreamingHandler {
         console.error(`[streaming] Failed to finalize message:`, err);
       }
     }
-
-    this.activeStreams.delete(streamKey);
   }
 
   /** Cancel and clean up a stream. */
   async cancelStream(streamKey: string, errorMessage?: string): Promise<void> {
     const stream = this.activeStreams.get(streamKey);
     if (!stream) return;
+
+    // Remove from map FIRST to prevent flushUpdate from racing
+    this.activeStreams.delete(streamKey);
 
     if (stream.updateTimer) {
       clearTimeout(stream.updateTimer);
@@ -102,8 +106,6 @@ export class StreamingHandler {
         await this.adapter.updateMessage(stream.channelId, stream.messageId, `❌ ${errorMessage}`);
       } catch { /* best-effort */ }
     }
-
-    this.activeStreams.delete(streamKey);
   }
 
   /** Get the message ID for a stream (useful for threading). */

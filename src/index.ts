@@ -11,6 +11,9 @@ import type { ChannelAdapter, InboundMessage, InboundReaction } from './types.js
 // Active streaming responses, keyed by channelId
 const activeStreams = new Map<string, string>(); // channelId → streamKey
 
+// Per-channel promise chain to serialize message handling
+const channelLocks = new Map<string, Promise<void>>();
+
 async function main(): Promise<void> {
   console.log('🌉 copilot-bridge starting...');
 
@@ -48,7 +51,14 @@ async function main(): Promise<void> {
 
   // Connect adapters and wire up message handlers
   for (const [platformName, adapter] of adapters) {
-    adapter.onMessage((msg) => handleInboundMessage(msg, sessionManager, adapter, streamingHandlers.get(platformName)!));
+    adapter.onMessage((msg) => {
+      const prev = channelLocks.get(msg.channelId) ?? Promise.resolve();
+      const next = prev.then(() =>
+        handleInboundMessage(msg, sessionManager, adapter, streamingHandlers.get(platformName)!)
+          .catch(err => console.error(`[bridge] Unhandled error in message handler:`, err))
+      );
+      channelLocks.set(msg.channelId, next);
+    });
     adapter.onReaction((reaction) => handleReaction(reaction, sessionManager, adapter));
 
     await adapter.connect();
@@ -109,7 +119,8 @@ async function handleInboundMessage(
 
   // Check for slash commands
   const sessionInfo = sessionManager.getSessionInfo(msg.channelId);
-  const cmdResult = handleCommand(msg.channelId, text, sessionInfo ?? undefined);
+  const effPrefs = sessionManager.getEffectivePrefs(msg.channelId);
+  const cmdResult = handleCommand(msg.channelId, text, sessionInfo ?? undefined, { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode });
 
   if (cmdResult.handled) {
     // Determine thread root for reply
@@ -123,6 +134,12 @@ async function handleInboundMessage(
     // Execute command actions
     switch (cmdResult.action) {
       case 'new_session':
+        // Clean up any active stream first
+        const oldStreamKey = activeStreams.get(msg.channelId);
+        if (oldStreamKey) {
+          await streaming.cancelStream(oldStreamKey);
+          activeStreams.delete(msg.channelId);
+        }
         await sessionManager.newSession(msg.channelId);
         await adapter.sendMessage(msg.channelId, '✅ New session created.', { threadRootId: threadRoot });
         break;
