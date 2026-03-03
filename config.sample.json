@@ -61,6 +61,19 @@
       "shell(git reset)"
     ],
     "allowPaths": [],
-    "allowUrls": []
+    "allowUrls": [
+      "docs.github.com",
+      "learn.microsoft.com",
+      "npmjs.com",
+      "pypi.org",
+      "crates.io",
+      "pkg.go.dev",
+      "nuget.org",
+      "rubygems.org",
+      "packagist.org",
+      "maven.apache.org",
+      "stackoverflow.com",
+      "developer.mozilla.org"
+    ]
   }
 }
