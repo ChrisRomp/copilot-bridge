@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AppConfig, ChannelConfig, BotConfig } from './types.js';
+import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig } from './types.js';
 
 let _config: AppConfig | null = null;
 
@@ -64,6 +64,7 @@ export function loadConfig(configPath?: string): AppConfig {
     platforms: raw.platforms,
     channels: raw.channels,
     defaults,
+    permissions: raw.permissions,
   };
   
   return _config;
@@ -165,4 +166,128 @@ export function getChannelBotName(channelId: string): string {
   const platform = config.platforms[channel.platform];
   if (platform.bots) return Object.keys(platform.bots)[0] ?? 'default';
   return 'default';
+}
+
+/**
+ * Parse a CLI-compatible permission spec.
+ * Examples: "shell(ls)", "shell(git status)", "shell", "write", "read",
+ *           "workiq(calendar_list)", "workiq", "url(github.com)"
+ * Returns { kind, tool? } where tool is the parenthesized part.
+ */
+function parsePermissionSpec(spec: string): { kind: string; tool?: string } {
+  const match = spec.match(/^([^(]+?)(?:\((.+)\))?$/);
+  if (!match) return { kind: spec };
+  return { kind: match[1].trim(), tool: match[2]?.trim() };
+}
+
+/**
+ * Evaluate config-level permission rules against a permission request.
+ * Uses CLI-compatible syntax: shell(cmd), write, read, MCP_SERVER(tool), etc.
+ * 
+ * @returns 'allow' | 'deny' | null (null = no rule matched, ask user)
+ */
+export function evaluateConfigPermissions(
+  request: { kind: string; [key: string]: unknown },
+  channelWorkingDirectory: string,
+): 'allow' | 'deny' | null {
+  const config = getConfig();
+  const perms = config.permissions;
+  if (!perms) return null;
+
+  const kind = request.kind; // "shell", "read", "write", "mcp", "url", "custom-tool"
+  const command = typeof request.command === 'string' ? request.command : undefined;
+  const requestPath = typeof request.path === 'string' ? request.path : undefined;
+  const serverName = typeof request.serverName === 'string' ? request.serverName : undefined;
+  const toolName = typeof request.toolName === 'string' ? request.toolName : undefined;
+  const url = typeof request.url === 'string' ? request.url : undefined;
+
+  // Extract the first command word from shell commands (e.g., "ls -la /tmp" → "ls")
+  const shellCmd = command ? command.trim().split(/\s+/)[0] : undefined;
+  // For git/gh, include subcommand: "git push origin main" → "git push"
+  const shellCmdFull = command ? (() => {
+    const parts = command.trim().split(/\s+/);
+    if ((parts[0] === 'git' || parts[0] === 'gh') && parts.length > 1) {
+      return `${parts[0]} ${parts[1]}`;
+    }
+    return parts[0];
+  })() : undefined;
+
+  // Check deny rules first (deny takes precedence, matching CLI behavior)
+  if (perms.deny) {
+    for (const spec of perms.deny) {
+      const parsed = parsePermissionSpec(spec);
+      if (matchesRule(parsed, kind, shellCmd, shellCmdFull, serverName, toolName)) {
+        return 'deny';
+      }
+    }
+  }
+
+  // Check allow rules
+  if (perms.allow) {
+    for (const spec of perms.allow) {
+      const parsed = parsePermissionSpec(spec);
+      if (matchesRule(parsed, kind, shellCmd, shellCmdFull, serverName, toolName)) {
+        return 'allow';
+      }
+    }
+  }
+
+  // Auto-allow reads within the channel's workspace directory
+  if (kind === 'read' && requestPath) {
+    const resolved = path.resolve(requestPath);
+    const workspace = path.resolve(channelWorkingDirectory);
+    if (resolved.startsWith(workspace + path.sep) || resolved === workspace) {
+      return 'allow';
+    }
+    // Check extra allowPaths
+    if (perms.allowPaths) {
+      for (const p of perms.allowPaths) {
+        const allowed = path.resolve(p);
+        if (resolved.startsWith(allowed + path.sep) || resolved === allowed) {
+          return 'allow';
+        }
+      }
+    }
+  }
+
+  // Check URL permissions
+  if (kind === 'url' && url && perms.allowUrls) {
+    try {
+      const hostname = new URL(url).hostname;
+      if (perms.allowUrls.some(d => hostname === d || hostname.endsWith('.' + d))) {
+        return 'allow';
+      }
+    } catch { /* invalid URL, don't auto-allow */ }
+  }
+
+  return null;
+}
+
+function matchesRule(
+  parsed: { kind: string; tool?: string },
+  requestKind: string,
+  shellCmd: string | undefined,
+  shellCmdFull: string | undefined,
+  serverName: string | undefined,
+  toolName: string | undefined,
+): boolean {
+  // Direct kind match: "shell", "read", "write"
+  if (parsed.kind === requestKind) {
+    if (!parsed.tool) return true; // bare kind matches all of that kind
+    // For shell: match command
+    if (requestKind === 'shell') {
+      return parsed.tool === shellCmd || parsed.tool === shellCmdFull;
+    }
+    return false;
+  }
+
+  // MCP server match: spec like "workiq" or "workiq(calendar_list)"
+  if (requestKind === 'mcp' && serverName) {
+    if (parsed.kind === serverName) {
+      if (!parsed.tool) return true; // bare server name matches all tools
+      return parsed.tool === toolName;
+    }
+  }
+
+  return false;
 }

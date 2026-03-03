@@ -25,6 +25,15 @@ export interface ChannelConfig {
   verbose: boolean;
 }
 
+// Permission rules config (CLI-compatible syntax)
+// e.g., "shell(ls)", "shell(git status)", "shell", "write", "read", "MCP_SERVER(tool)", "MCP_SERVER"
+export interface PermissionsConfig {
+  allow?: string[];   // e.g., ["read", "shell(ls)", "shell(cat)", "shell(head)", "shell(find)", "shell(grep)"]
+  deny?: string[];    // e.g., ["shell(rm)", "shell(git push)"]
+  allowPaths?: string[];  // extra allowed paths beyond workingDirectory
+  allowUrls?: string[];   // pre-approved URL domains
+}
+
 // Full app config
 export interface AppConfig {
   platforms: Record<string, PlatformConfig>;
@@ -37,6 +46,7 @@ export interface AppConfig {
     verbose: boolean;
     permissionMode: 'interactive' | 'autopilot';
   };
+  permissions?: PermissionsConfig;
 }
 
 // Inbound message from any platform

@@ -90,6 +90,7 @@ export class CopilotBridge {
       systemMessage?: SystemMessageConfig;
       customAgents?: CustomAgentConfig[];
       configDir?: string;
+      workingDirectory?: string;
     },
   ): Promise<CopilotSession> {
     await this.start();
@@ -104,6 +105,7 @@ export class CopilotBridge {
       systemMessage: opts?.systemMessage,
       customAgents: opts?.customAgents,
       configDir: opts?.configDir,
+      workingDirectory: opts?.workingDirectory,
     });
     this.sessions.set(session.sessionId, session);
     return session;

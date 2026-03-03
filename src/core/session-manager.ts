@@ -5,7 +5,7 @@ import {
   getChannelPrefs, setChannelPrefs, checkPermission, addPermissionRule,
   type ChannelPrefs,
 } from '../state/store.js';
-import { getChannelConfig } from '../config.js';
+import { getChannelConfig, evaluateConfigPermissions } from '../config.js';
 import type {
   ChannelAdapter, InboundMessage, PendingPermission, PendingUserInput,
 } from '../types.js';
@@ -255,9 +255,14 @@ export class SessionManager {
   }
 
   private async attachSession(channelId: string, sessionId: string): Promise<void> {
+    const config = getChannelConfig(channelId);
+    const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
+
     const session = await this.bridge.resumeSession(sessionId, {
       onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
       onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
+      configDir: defaultConfigDir,
+      workingDirectory: config.workingDirectory,
     });
 
     this.channelSessions.set(channelId, sessionId);
@@ -284,7 +289,17 @@ export class SessionManager {
       return Promise.resolve({ allow: true });
     }
 
-    // Check stored permission rules
+    // Check config-level permission rules first (CLI-compatible syntax)
+    const config = getChannelConfig(channelId);
+    const configResult = evaluateConfigPermissions(request as any, config.workingDirectory);
+    if (configResult === 'allow') {
+      return Promise.resolve({ allow: true });
+    }
+    if (configResult === 'deny') {
+      return Promise.resolve({ allow: false });
+    }
+
+    // Check stored permission rules (SQLite, from /remember)
     console.log(`[session] Permission request:`, JSON.stringify(request).slice(0, 500));
     const kind = (request as any).kind ?? 'unknown';
     // Build a descriptive tool name from kind + available fields

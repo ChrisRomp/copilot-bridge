@@ -42,5 +42,25 @@
     "threadedReplies": true,
     "verbose": false,
     "permissionMode": "interactive"
+  },
+  "permissions": {
+    "_comment": "CLI-compatible permission syntax: shell(cmd), write, read, MCP_SERVER(tool)",
+    "allow": [
+      "read",
+      "shell(ls)",
+      "shell(cat)",
+      "shell(head)",
+      "shell(tail)",
+      "shell(find)",
+      "shell(grep)",
+      "shell(wc)"
+    ],
+    "deny": [
+      "shell(rm)",
+      "shell(git push)",
+      "shell(git reset)"
+    ],
+    "allowPaths": [],
+    "allowUrls": []
   }
 }
