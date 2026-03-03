@@ -19,24 +19,23 @@ export interface CommandResult {
 
 /**
  * Fuzzy-match user input to a model from the available list.
- * Matches against id and name (case-insensitive). Returns:
- * - exact match on id or name
- * - single substring/fuzzy match
- * - null if ambiguous or no match (with candidates list)
+ * Always tries to pick the best match. Returns:
+ * - { model, alternatives } on success (alternatives may be empty)
+ * - { error } only when truly no match is found
  */
-export function resolveModel(input: string, models: ModelInfo[]): { model: ModelInfo } | { error: string } {
+export function resolveModel(input: string, models: ModelInfo[]): { model: ModelInfo; alternatives: ModelInfo[] } | { error: string } {
   const lower = input.toLowerCase().trim();
   if (!lower) return { error: '⚠️ Please specify a model name.' };
 
   // Exact match on id or name
   const exact = models.find(m => m.id.toLowerCase() === lower || m.name.toLowerCase() === lower);
-  if (exact) return { model: exact };
+  if (exact) return { model: exact, alternatives: [] };
 
   // Substring match: input appears in id or name
   const substringMatches = models.filter(m =>
     m.id.toLowerCase().includes(lower) || m.name.toLowerCase().includes(lower)
   );
-  if (substringMatches.length === 1) return { model: substringMatches[0] };
+  if (substringMatches.length === 1) return { model: substringMatches[0], alternatives: [] };
 
   // Token match: all words in input appear in id or name
   const tokens = lower.split(/[\s\-_.]+/).filter(Boolean);
@@ -44,16 +43,33 @@ export function resolveModel(input: string, models: ModelInfo[]): { model: Model
     const haystack = `${m.id} ${m.name}`.toLowerCase();
     return tokens.every(t => haystack.includes(t));
   });
-  if (tokenMatches.length === 1) return { model: tokenMatches[0] };
+  if (tokenMatches.length === 1) return { model: tokenMatches[0], alternatives: [] };
 
-  // Ambiguous or no match
-  const candidates = (substringMatches.length > 0 ? substringMatches : tokenMatches).slice(0, 5);
+  // Multiple matches — pick the best one
+  const candidates = (substringMatches.length > 0 ? substringMatches : tokenMatches).slice(0, 8);
   if (candidates.length > 1) {
-    const list = candidates.map(m => `\`${m.id}\` (${m.name})`).join('\n• ');
-    return { error: `⚠️ Ambiguous model "${input}". Did you mean:\n• ${list}` };
+    const best = pickBestMatch(lower, candidates);
+    const alternatives = candidates.filter(m => m.id !== best.id);
+    return { model: best, alternatives };
   }
 
   return { error: `⚠️ Unknown model "${input}". Use \`/models\` to see available models.` };
+}
+
+/** Pick the best model from ambiguous candidates. Prefers shorter IDs and closer matches. */
+function pickBestMatch(input: string, candidates: ModelInfo[]): ModelInfo {
+  return candidates.sort((a, b) => {
+    // Prefer exact id prefix match (e.g., "opus" matching "claude-opus-4.6" not "claude-opus-4.6-1m")
+    const aStartsId = a.id.toLowerCase().endsWith(input) ? 1 : 0;
+    const bStartsId = b.id.toLowerCase().endsWith(input) ? 1 : 0;
+    if (aStartsId !== bStartsId) return bStartsId - aStartsId;
+
+    // Prefer shorter ID (base model vs specialized variant)
+    if (a.id.length !== b.id.length) return a.id.length - b.id.length;
+
+    // Prefer shorter name
+    return a.name.length - b.name.length;
+  })[0];
 }
 
 export function parseCommand(text: string): { command: string; args: string } | null {
@@ -92,7 +108,12 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       if ('error' in result) {
         return { handled: true, response: result.error };
       }
-      return { handled: true, action: 'switch_model', payload: result.model.id, response: `🔄 Switching model to **${result.model.name}** (\`${result.model.id}\`)...` };
+      let response = `🔄 Switching to **${result.model.name}** (\`${result.model.id}\`)`;
+      if (result.alternatives.length > 0) {
+        const altList = result.alternatives.map(m => `\`${m.id}\` (${m.name})`).join(', ');
+        response += `\n↳ Also matched: ${altList}`;
+      }
+      return { handled: true, action: 'switch_model', payload: result.model.id, response };
     }
 
     case 'models': {
