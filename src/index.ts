@@ -174,7 +174,9 @@ async function handleInboundMessage(
   if (cmdResult.handled) {
     const threadRoot = channelConfig.threadedReplies ? (msg.threadRootId ?? msg.postId) : undefined;
 
-    if (cmdResult.response) {
+    // Send response before action, except for actions that send their own ack after completing
+    const deferResponse = cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent';
+    if (cmdResult.response && !deferResponse) {
       await adapter.sendMessage(msg.channelId, cmdResult.response, { threadRootId: threadRoot });
     }
 
@@ -189,12 +191,18 @@ async function handleInboundMessage(
         await adapter.sendMessage(msg.channelId, '✅ New session created.', { threadRootId: threadRoot });
         break;
       }
-      case 'switch_model':
+      case 'switch_model': {
+        const ackId = await adapter.sendMessage(msg.channelId, '⏳ Switching model...', { threadRootId: threadRoot });
         await sessionManager.switchModel(msg.channelId, cmdResult.payload);
+        await adapter.updateMessage(msg.channelId, ackId, cmdResult.response ?? '✅ Model switched.');
         break;
-      case 'switch_agent':
+      }
+      case 'switch_agent': {
+        const ackId = await adapter.sendMessage(msg.channelId, '⏳ Switching agent...', { threadRootId: threadRoot });
         await sessionManager.switchAgent(msg.channelId, cmdResult.payload);
+        await adapter.updateMessage(msg.channelId, ackId, cmdResult.response ?? '✅ Agent switched.');
         break;
+      }
       case 'approve':
         if (!sessionManager.resolvePermission(msg.channelId, true)) {
           await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });

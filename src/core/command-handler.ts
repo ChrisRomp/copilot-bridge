@@ -108,7 +108,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       if ('error' in result) {
         return { handled: true, response: result.error };
       }
-      let response = `🔄 Switching to **${result.model.name}** (\`${result.model.id}\`)`;
+      let response = `✅ Switched to **${result.model.name}** (\`${result.model.id}\`)`;
       if (result.alternatives.length > 0) {
         const altList = result.alternatives.map(m => `\`${m.id}\` (${m.name})`).join(', ');
         response += `\n↳ Also matched: ${altList}`;
@@ -135,7 +135,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         handled: true,
         action: 'switch_agent',
         payload: agent,
-        response: agent ? `🤖 Switching to agent **${agent}**...` : '🤖 Deselecting agent (using default Copilot)...',
+        response: agent ? `✅ Switched to agent **${agent}**` : '✅ Agent deselected (using default Copilot)',
       };
     }
 
