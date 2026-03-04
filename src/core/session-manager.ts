@@ -212,6 +212,25 @@ export class SessionManager {
     return this.createNewSession(channelId);
   }
 
+  /** Reload the current session — detach and re-attach to pick up AGENTS.md / config changes. */
+  async reloadSession(channelId: string): Promise<string> {
+    const existingId = this.channelSessions.get(channelId) ?? getChannelSession(channelId) ?? undefined;
+    if (!existingId) {
+      // No session to reload — just create one
+      return this.createNewSession(channelId);
+    }
+
+    // Detach event listeners and release the bridge handle
+    const unsub = this.sessionUnsubscribes.get(existingId);
+    if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
+    this.bridge.releaseSession(existingId);
+
+    // Re-attach the same session (re-reads workspace config, AGENTS.md, MCP, etc.)
+    await this.attachSession(channelId, existingId);
+    log.info(`Reloaded session ${existingId} for channel ${channelId}`);
+    return existingId;
+  }
+
   /** Send a message to a channel's session. Returns immediately; responses come via events. */
   async sendMessage(channelId: string, text: string): Promise<string> {
     // Auto-deny any pending permissions so the session unblocks

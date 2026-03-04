@@ -22,7 +22,7 @@ export interface ModelInfo {
 export interface CommandResult {
   handled: boolean;
   response?: string;
-  action?: 'new_session' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
+  action?: 'new_session' | 'reload_session' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
            'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'set_reasoning';
   payload?: any;
 }
@@ -105,6 +105,9 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
   switch (parsed.command) {
     case 'new':
       return { handled: true, action: 'new_session', response: '🔄 Creating new session...' };
+
+    case 'reload':
+      return { handled: true, action: 'reload_session', response: '🔄 Reloading session...' };
 
     case 'model': {
       if (!parsed.args) {
@@ -234,6 +237,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         response: [
           '**Available Commands**',
           '`/new` — Start a new session',
+          '`/reload` — Reload current session (re-reads AGENTS.md, config)',
           '`/model <name>` — Switch AI model (fuzzy match supported)',
           '`/models` — List available models',
           '`/agent <name>` — Switch custom agent (empty to deselect)',

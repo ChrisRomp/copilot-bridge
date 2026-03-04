@@ -283,6 +283,18 @@ async function handleInboundMessage(
         await adapter.sendMessage(msg.channelId, '✅ New session created.', { threadRootId: threadRoot });
         break;
       }
+      case 'reload_session': {
+        const oldReloadStream = activeStreams.get(msg.channelId);
+        if (oldReloadStream) {
+          await streaming.cancelStream(oldReloadStream);
+          activeStreams.delete(msg.channelId);
+        }
+        await finalizeActivityFeed(msg.channelId, adapter);
+        const ackId = await adapter.sendMessage(msg.channelId, '⏳ Reloading session...', { threadRootId: threadRoot });
+        const sessionId = await sessionManager.reloadSession(msg.channelId);
+        await adapter.updateMessage(msg.channelId, ackId, `✅ Session reloaded (\`${sessionId.slice(0, 8)}…\`). Config and AGENTS.md re-read.`);
+        break;
+      }
       case 'switch_model': {
         const ackId = await adapter.sendMessage(msg.channelId, '⏳ Switching model...', { threadRootId: threadRoot });
         await sessionManager.switchModel(msg.channelId, cmdResult.payload);
