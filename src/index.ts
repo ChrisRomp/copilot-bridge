@@ -302,9 +302,14 @@ async function handleInboundMessage(
           activeStreams.delete(msg.channelId);
         }
         await finalizeActivityFeed(msg.channelId, adapter);
+        const prevSessionId = sessionManager.getSessionId(msg.channelId);
         const ackId = await adapter.sendMessage(msg.channelId, '⏳ Reloading session...', { threadRootId: threadRoot });
         const sessionId = await sessionManager.reloadSession(msg.channelId);
-        await adapter.updateMessage(msg.channelId, ackId, `✅ Session reloaded (\`${sessionId.slice(0, 8)}…\`). Config and AGENTS.md re-read.`);
+        const wasNew = !prevSessionId || sessionId !== prevSessionId;
+        const reloadMsg = wasNew
+          ? `⚠️ Previous session not found — created new session (\`${sessionId.slice(0, 8)}…\`).`
+          : `✅ Session reloaded (\`${sessionId.slice(0, 8)}…\`). Config and AGENTS.md re-read.`;
+        await adapter.updateMessage(msg.channelId, ackId, reloadMsg);
         break;
       }
       case 'resume_session': {

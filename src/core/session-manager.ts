@@ -295,9 +295,18 @@ export class SessionManager {
     this.bridge.releaseSession(existingId);
 
     // Re-attach the same session (re-reads workspace config, AGENTS.md, MCP, etc.)
-    await this.attachSession(channelId, existingId);
-    log.info(`Reloaded session ${existingId} for channel ${channelId}`);
-    return existingId;
+    try {
+      await this.attachSession(channelId, existingId);
+      log.info(`Reloaded session ${existingId} for channel ${channelId}`);
+      return existingId;
+    } catch (err: any) {
+      // Session no longer exists server-side (e.g., workspace was deleted and re-created)
+      log.warn(`Stale session ${existingId} for channel ${channelId}: ${err?.message ?? err}. Creating new session.`);
+      this.channelSessions.delete(channelId);
+      this.sessionChannels.delete(existingId);
+      clearChannelSession(channelId);
+      return this.createNewSession(channelId);
+    }
   }
 
   /** Resume a specific past session by ID. */
@@ -329,7 +338,12 @@ export class SessionManager {
     }
 
     // Attach to the target session
-    await this.attachSession(channelId, targetSessionId);
+    try {
+      await this.attachSession(channelId, targetSessionId);
+    } catch (err: any) {
+      log.warn(`Session ${targetSessionId} not found: ${err?.message ?? err}. Creating new session.`);
+      return this.createNewSession(channelId);
+    }
     setChannelSession(channelId, targetSessionId);
     log.info(`Resumed session ${targetSessionId} for channel ${channelId}`);
     return targetSessionId;
@@ -532,6 +546,11 @@ export class SessionManager {
   hasPendingPermission(channelId: string): boolean {
     const queue = this.pendingPermissions.get(channelId);
     return !!queue && queue.length > 0;
+  }
+
+  /** Get the current session ID for a channel (if any). */
+  getSessionId(channelId: string): string | undefined {
+    return this.channelSessions.get(channelId) ?? getChannelSession(channelId) ?? undefined;
   }
 
   /** Check if channel has a pending user input request. */
