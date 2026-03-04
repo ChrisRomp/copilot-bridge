@@ -1,12 +1,16 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { createLogger } from '../logger.js';
 import {
   getWorkspaceOverride,
   listWorkspaceOverrides,
 } from '../state/store.js';
 import { isBotAdminAny } from '../config.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
 const log = createLogger('workspace');
 
@@ -195,37 +199,30 @@ export function generateAgentsTemplate(
   allowPaths: string[],
   isAdmin = false,
 ): string {
-  const adminSection = isAdmin
-    ? `
-## Admin Capabilities
-You are an **admin agent** with workspace management powers:
-- **Create workspaces**: \`mkdir ${WORKSPACES_DIR}/<name>\` — the bridge auto-detects new directories and initializes them
-- **Write AGENTS.md**: After creating a workspace, write an \`AGENTS.md\` file to give the new agent context and instructions
-- **List workspaces**: \`ls ${WORKSPACES_DIR}\` to see all agent workspaces
-- **Config edits**: You may need to edit \`config.json\` to add bot tokens or channel mappings
-  - **ALWAYS** create a backup first: \`cp config.json config.json.bak.$(date +%s)\`
-  - The bridge must be restarted for token changes to take effect
-`
-    : '';
+  const templateFile = isAdmin ? 'AGENTS.admin.md' : 'AGENTS.md';
+  const templatePath = path.join(TEMPLATES_DIR, templateFile);
 
-  return `# Agent Workspace
+  if (!fs.existsSync(templatePath)) {
+    log.warn(`Template not found: ${templatePath}, using inline fallback`);
+    return `# Agent Workspace\n\nWorking directory: \`${workspacePath}\`\n`;
+  }
 
-You are operating through **copilot-bridge**, a messaging bridge to GitHub Copilot CLI.
+  let content = fs.readFileSync(templatePath, 'utf-8');
 
-## How You Communicate
-- You receive messages from a chat platform (Mattermost/Slack)
-- Your responses are streamed back to the same channel
-- Slash commands (e.g., /new, /model) are intercepted by the bridge — you won't see them
-- The user may be on mobile; keep responses concise when possible
+  // Interpolate variables
+  content = content.replaceAll('{{workspacePath}}', workspacePath);
+  content = content.replaceAll('{{workspacesDir}}', WORKSPACES_DIR);
+  content = content.replaceAll('{{botName}}', botName);
 
-## Your Workspace
-- Working directory: \`${workspacePath}\`
-- You can read/write files within this workspace without permission prompts
-- Access outside this workspace requires explicit permission or configuration
-${allowPaths.length > 0 ? `\n## Additional Folders\n${allowPaths.map(p => `- \`${p}\``).join('\n')}\n` : ''}${adminSection}
-## Constraints
-- File system access is sandboxed to this workspace${allowPaths.length > 0 ? ' + additional folders listed above' : ''}
-- Shell commands are subject to permission rules
-- MCP servers are shared across all agents in this bridge instance
-${isAdmin ? '- If you need to edit config.json, ALWAYS create a backup first: `cp config.json config.json.bak.$(date +%s)`\n' : ''}`;
+  // Conditional sections: {{#allowPaths}}...{{/allowPaths}}
+  if (allowPaths.length > 0) {
+    const pathsList = allowPaths.map(p => `- \`${p}\``).join('\n');
+    content = content.replaceAll('{{allowPaths}}', pathsList);
+    content = content.replace(/\{\{#allowPaths\}\}/g, '');
+    content = content.replace(/\{\{\/allowPaths\}\}/g, '');
+  } else {
+    content = content.replace(/\{\{#allowPaths\}\}[\s\S]*?\{\{\/allowPaths\}\}/g, '');
+  }
+
+  return content;
 }
