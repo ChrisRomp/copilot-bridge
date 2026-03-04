@@ -590,6 +590,7 @@ async function handleSessionEvent(
       break;
 
     case 'error':
+      nudgePending.delete(channelId);
       if (streamKey) {
         await streaming.cancelStream(streamKey, formatted.content);
         activeStreams.delete(channelId);
@@ -611,6 +612,7 @@ async function handleSessionEvent(
       // turn_end fires between tool cycles — DON'T finalize there or we get
       // duplicate "Working..." messages from auto-starting new streams.
       if (event.type === 'session.idle') {
+        nudgePending.delete(channelId);
         await finalizeActivityFeed(channelId, adapter);
         initialStreamPosted.delete(channelId);
         if (streamKey) {

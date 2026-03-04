@@ -57,12 +57,19 @@ function parseEnvFile(filePath: string): Record<string, string> {
 async function withWorkspaceEnv<T>(workingDirectory: string, fn: () => Promise<T>): Promise<T> {
   const envPath = path.join(workingDirectory, '.env');
   const vars = parseEnvFile(envPath);
-  if (Object.keys(vars).length === 0) return fn();
 
-  // Serialize access to process.env
+  // Even with no .env vars, wait for the lock so we don't run while
+  // another workspace's secrets are injected into process.env.
   const prev = envLock;
   let release: () => void;
   envLock = new Promise(resolve => { release = resolve; });
+
+  await prev;
+
+  if (Object.keys(vars).length === 0) {
+    release!();
+    return fn();
+  }
 
   await prev;
 
@@ -337,13 +344,9 @@ export class SessionManager {
       clearChannelSession(otherChannel);
     }
 
-    // Attach to the target session
-    try {
-      await this.attachSession(channelId, targetSessionId);
-    } catch (err: any) {
-      log.warn(`Session ${targetSessionId} not found: ${err?.message ?? err}. Creating new session.`);
-      return this.createNewSession(channelId);
-    }
+    // Attach to the target session — fail hard if it doesn't exist
+    // (user explicitly asked for this session, don't silently replace it)
+    await this.attachSession(channelId, targetSessionId);
     setChannelSession(channelId, targetSessionId);
     log.info(`Resumed session ${targetSessionId} for channel ${channelId}`);
     return targetSessionId;
