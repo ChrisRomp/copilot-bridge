@@ -51,6 +51,10 @@ Both inbound messages and session events are serialized per-channel via separate
 - Streams finalize only on `session.idle` (not `turn_end`, which fires between every tool cycle)
 - In verbose mode, tool calls accumulate in a separate "activity feed" message that updates in place
 
+## Bot Identity & Pronouns
+
+All bots default to **it/its** pronouns. Bots are software, not people. When writing templates, documentation, or referring to a bot in third person, use "it" — e.g., "the bot and its workspace," not "she and her workspace." Users may override this in per-agent AGENTS.md if they prefer.
+
 ## Key Conventions
 
 ### Channel Adapter Pattern
