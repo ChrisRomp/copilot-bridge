@@ -14,6 +14,9 @@ const log = createLogger('bridge');
 // Active streaming responses, keyed by channelId
 const activeStreams = new Map<string, string>(); // channelId → streamKey
 
+// Track channels where the initial "Working..." has been posted (reset on new user message)
+const initialStreamPosted = new Set<string>();
+
 // Activity feed: a single edit-in-place message accumulating tool call lines per channel
 const activityFeeds = new Map<string, {
   messageId: string;
@@ -261,6 +264,7 @@ async function handleInboundMessage(
     }
 
     const threadRoot = channelConfig.threadedReplies ? (msg.threadRootId ?? msg.postId) : undefined;
+    initialStreamPosted.add(msg.channelId);
     const streamKey = await streaming.startStream(msg.channelId, threadRoot);
     activeStreams.set(msg.channelId, streamKey);
 
@@ -390,7 +394,8 @@ async function handleSessionEvent(
         }
       }
       if (!streamKey) {
-        // Auto-start stream with actual content (no extra "Working..." message)
+        // Auto-start stream — use actual content, never a "Working..." placeholder.
+        // This happens on subsequent turns after turn_end finalized the previous stream.
         log.info(`Auto-starting stream for channel ${channelId.slice(0, 8)}...`);
         const initialContent = event.type === 'assistant.message'
           ? formatted.content
@@ -435,12 +440,14 @@ async function handleSessionEvent(
         }
         await adapter.sendMessage(channelId, formatted.content);
       }
-      // Finalize stream on turn end
-      if (event.type === 'assistant.turn_end' || event.type === 'session.idle') {
-        // Finalize the activity feed (close it out for this turn)
+      // Finalize stream when the session goes idle (all turns complete).
+      // turn_end fires between tool cycles — DON'T finalize there or we get
+      // duplicate "Working..." messages from auto-starting new streams.
+      if (event.type === 'session.idle') {
         await finalizeActivityFeed(channelId, adapter);
+        initialStreamPosted.delete(channelId);
         if (streamKey) {
-          log.info(`Turn ended, finalizing stream for ${channelId.slice(0, 8)}...`);
+          log.info(`Session idle, finalizing stream for ${channelId.slice(0, 8)}...`);
           await streaming.finalizeStream(streamKey);
           activeStreams.delete(channelId);
         }
