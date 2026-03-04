@@ -217,6 +217,7 @@ export function generateAgentsTemplate(
   allowPaths: string[],
   isAdmin = false,
   agentPurpose = '',
+  adminBotName: string | null = null,
 ): string {
   const templateFile = isAdmin ? 'AGENTS.admin.md' : 'AGENTS.md';
   const templatePath = path.join(TEMPLATES_DIR, templateFile);
@@ -232,6 +233,7 @@ export function generateAgentsTemplate(
   content = content.replaceAll('{{workspacePath}}', workspacePath);
   content = content.replaceAll('{{workspacesDir}}', WORKSPACES_DIR);
   content = content.replaceAll('{{botName}}', botName);
+  content = content.replaceAll('{{adminBotName}}', adminBotName ?? 'the admin bot');
 
   // Conditional sections
   const conditionals: Record<string, string> = {

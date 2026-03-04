@@ -44,3 +44,15 @@ Read `MEMORY.md` at the start of each session if it exists. Update it when you l
 - File system access is sandboxed to this workspace{{#allowPaths}} + additional folders listed above{{/allowPaths}}
 - Shell commands are subject to permission rules
 - MCP servers are shared across all agents in this bridge instance
+
+## Out of Scope — Defer to Admin
+
+The following are **not your responsibility**. If a user asks about these, tell them to message the admin bot ({{adminBotName}}) instead:
+
+- Managing copilot-bridge configuration, tokens, or bot accounts
+- Creating, removing, or modifying other agents
+- Restarting the bridge service
+- Changing permissions, channel mappings, or platform settings
+- Anything involving `~/.copilot-bridge/config.json` or `~/.copilot-bridge/state.db`
+
+Do not attempt to read, edit, or reason about bridge internals. Focus on your role and workspace.
