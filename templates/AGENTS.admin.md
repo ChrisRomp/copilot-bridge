@@ -123,6 +123,16 @@ Mattermost Channel → copilot-bridge → @github/copilot-sdk → Copilot CLI
 | `/autopilot` | Toggle auto-approve mode |
 | `/help` | Show all commands |
 
+## Memory
+
+Maintain a `MEMORY.md` file in your workspace to persist important details across sessions:
+- User preferences, communication style, and working patterns
+- Key decisions made and their rationale
+- Bridge configuration history and lessons learned
+- Agent roster and their purposes
+
+Read `MEMORY.md` at the start of each session if it exists. Update it when you learn something worth remembering. Keep it concise and organized — this is your long-term memory.
+
 ## Constraints
 
 - File system access is sandboxed to this workspace + the workspaces directory

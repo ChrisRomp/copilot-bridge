@@ -198,13 +198,14 @@ export function generateAgentsTemplate(
   workspacePath: string,
   allowPaths: string[],
   isAdmin = false,
+  agentPurpose = '',
 ): string {
   const templateFile = isAdmin ? 'AGENTS.admin.md' : 'AGENTS.md';
   const templatePath = path.join(TEMPLATES_DIR, templateFile);
 
   if (!fs.existsSync(templatePath)) {
     log.warn(`Template not found: ${templatePath}, using inline fallback`);
-    return `# Agent Workspace\n\nWorking directory: \`${workspacePath}\`\n`;
+    return `# ${botName} — Agent Workspace\n\nWorking directory: \`${workspacePath}\`\n`;
   }
 
   let content = fs.readFileSync(templatePath, 'utf-8');
@@ -214,14 +215,21 @@ export function generateAgentsTemplate(
   content = content.replaceAll('{{workspacesDir}}', WORKSPACES_DIR);
   content = content.replaceAll('{{botName}}', botName);
 
-  // Conditional sections: {{#allowPaths}}...{{/allowPaths}}
-  if (allowPaths.length > 0) {
-    const pathsList = allowPaths.map(p => `- \`${p}\``).join('\n');
-    content = content.replaceAll('{{allowPaths}}', pathsList);
-    content = content.replace(/\{\{#allowPaths\}\}/g, '');
-    content = content.replace(/\{\{\/allowPaths\}\}/g, '');
-  } else {
-    content = content.replace(/\{\{#allowPaths\}\}[\s\S]*?\{\{\/allowPaths\}\}/g, '');
+  // Conditional sections
+  const conditionals: Record<string, string> = {
+    allowPaths: allowPaths.length > 0 ? allowPaths.map(p => `- \`${p}\``).join('\n') : '',
+    agentPurpose,
+  };
+
+  for (const [key, value] of Object.entries(conditionals)) {
+    const sectionRe = new RegExp(`\\{\\{#${key}\\}\\}[\\s\\S]*?\\{\\{/${key}\\}\\}`, 'g');
+    if (value) {
+      content = content.replaceAll(`{{${key}}}`, value);
+      content = content.replace(new RegExp(`\\{\\{#${key}\\}\\}`, 'g'), '');
+      content = content.replace(new RegExp(`\\{\\{/${key}\\}\\}`, 'g'), '');
+    } else {
+      content = content.replace(sectionRe, '');
+    }
   }
 
   return content;
