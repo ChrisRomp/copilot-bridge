@@ -261,8 +261,14 @@ async function handleInboundMessage(
     }
 
     const threadRoot = channelConfig.threadedReplies ? (msg.threadRootId ?? msg.postId) : undefined;
-    const streamKey = await streaming.startStream(msg.channelId, threadRoot);
-    activeStreams.set(msg.channelId, streamKey);
+
+    // In verbose mode, don't start "Working..." stream upfront — tool calls will
+    // appear in the activity feed first, then the response posts after.
+    const effPrefsForStream = sessionManager.getEffectivePrefs(msg.channelId);
+    if (!effPrefsForStream.verbose) {
+      const streamKey = await streaming.startStream(msg.channelId, threadRoot);
+      activeStreams.set(msg.channelId, streamKey);
+    }
 
     await sessionManager.sendMessage(msg.channelId, text);
   } catch (err) {

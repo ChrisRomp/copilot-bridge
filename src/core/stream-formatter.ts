@@ -179,42 +179,40 @@ export function formatUserInputRequest(question: string, choices?: string[]): st
 
 /**
  * Produce a compact one-line summary of a tool call for the activity feed.
+ * Prioritizes the `description` field (agent intent) when available.
  */
 function formatToolSummary(toolName: string, args: Record<string, unknown>): string {
-  // Shell / bash commands
+  const desc = (args.description ?? args.intention) as string | undefined;
+
+  // If there's a description, use it as the primary text (like the CLI does)
+  if (desc && typeof desc === 'string') {
+    const short = desc.length > 80 ? desc.slice(0, 77) + '...' : desc;
+    return `🔧 **${toolName}**: ${short}`;
+  }
+
+  // Fallback: derive summary from arguments
   const cmd = (args.fullCommandText ?? args.command) as string | undefined;
   if (cmd && typeof cmd === 'string') {
     const short = cmd.length > 80 ? cmd.slice(0, 77) + '...' : cmd;
     return `🔧 **${toolName}** \`${short}\``;
   }
 
-  // File reads / views
   if (args.path && typeof args.path === 'string') {
     const p = shortenPath(args.path as string);
     const range = args.view_range ? ` (L${(args.view_range as number[])[0]}-${(args.view_range as number[])[1]})` : '';
     return `🔧 **${toolName}** \`${p}${range}\``;
   }
 
-  // Grep / search
   if (args.pattern && typeof args.pattern === 'string') {
     const pat = (args.pattern as string).length > 40 ? (args.pattern as string).slice(0, 37) + '...' : args.pattern;
     const scope = args.glob ? ` in ${args.glob}` : '';
     return `🔧 **${toolName}** \`${pat}\`${scope}`;
   }
 
-  // URL fetch
   if (args.url && typeof args.url === 'string') {
     return `🔧 **${toolName}** ${args.url}`;
   }
 
-  // Generic with description
-  const desc = (args.description ?? args.intention) as string | undefined;
-  if (desc && typeof desc === 'string') {
-    const short = desc.length > 60 ? desc.slice(0, 57) + '...' : desc;
-    return `🔧 **${toolName}** ${short}`;
-  }
-
-  // MCP tool calls — show query/arguments summary
   if (args.query && typeof args.query === 'string') {
     const q = (args.query as string).length > 60 ? (args.query as string).slice(0, 57) + '...' : args.query;
     return `🔧 **${toolName}** \`${q}\``;
