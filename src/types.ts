@@ -94,6 +94,7 @@ export interface ChannelAdapter {
   onReaction(handler: (reaction: InboundReaction) => void): void;
   sendMessage(channelId: string, content: string, opts?: SendOpts): Promise<string>;
   updateMessage(channelId: string, messageId: string, content: string): Promise<void>;
+  deleteMessage(channelId: string, messageId: string): Promise<void>;
   setTyping(channelId: string): Promise<void>;
   replyInThread(channelId: string, rootId: string, content: string): Promise<string>;
   getBotUserId(): string;

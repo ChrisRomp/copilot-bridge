@@ -125,6 +125,28 @@ export class StreamingHandler {
     return this.activeStreams.get(streamKey)?.messageId;
   }
 
+  /** Get current content of a stream (undefined if not found). */
+  getStreamContent(streamKey: string): string | undefined {
+    return this.activeStreams.get(streamKey)?.content;
+  }
+
+  /** Delete a stream's message and clean up without posting anything. */
+  async deleteStream(streamKey: string): Promise<void> {
+    const stream = this.activeStreams.get(streamKey);
+    if (!stream) return;
+
+    this.activeStreams.delete(streamKey);
+    if (stream.updateTimer) {
+      clearTimeout(stream.updateTimer);
+    }
+
+    try {
+      await this.adapter.deleteMessage(stream.channelId, stream.messageId);
+    } catch (err) {
+      log.warn(`Failed to delete stream message:`, err);
+    }
+  }
+
   private async flushUpdate(streamKey: string): Promise<void> {
     const stream = this.activeStreams.get(streamKey);
     if (!stream || !stream.pendingUpdate) return;

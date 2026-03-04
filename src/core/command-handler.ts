@@ -1,6 +1,16 @@
 import { setChannelPrefs, getChannelPrefs } from '../state/store.js';
 
 const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
+const TRUTHY = new Set(['on', 'true', 'yes', '1', 'enable', 'enabled']);
+const FALSY = new Set(['off', 'false', 'no', '0', 'disable', 'disabled']);
+
+/** Parse a loose boolean string. Returns fallback if unrecognized. */
+function parseBool(input: string, fallback: boolean): boolean {
+  const v = input.toLowerCase().trim();
+  if (TRUTHY.has(v)) return true;
+  if (FALSY.has(v)) return false;
+  return fallback;
+}
 
 export interface ModelInfo {
   id: string;
@@ -141,7 +151,8 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
 
     case 'verbose': {
       const prefs = getChannelPrefs(channelId);
-      const newVerbose = !(effectivePrefs?.verbose ?? prefs?.verbose ?? false);
+      const current = effectivePrefs?.verbose ?? prefs?.verbose ?? false;
+      const newVerbose = parsed.args ? parseBool(parsed.args, !current) : !current;
       setChannelPrefs(channelId, { verbose: newVerbose });
       return {
         handled: true,

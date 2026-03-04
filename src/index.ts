@@ -261,14 +261,8 @@ async function handleInboundMessage(
     }
 
     const threadRoot = channelConfig.threadedReplies ? (msg.threadRootId ?? msg.postId) : undefined;
-
-    // In verbose mode, don't start "Working..." stream upfront — tool calls will
-    // appear in the activity feed first, then the response posts after.
-    const effPrefsForStream = sessionManager.getEffectivePrefs(msg.channelId);
-    if (!effPrefsForStream.verbose) {
-      const streamKey = await streaming.startStream(msg.channelId, threadRoot);
-      activeStreams.set(msg.channelId, streamKey);
-    }
+    const streamKey = await streaming.startStream(msg.channelId, threadRoot);
+    activeStreams.set(msg.channelId, streamKey);
 
     await sessionManager.sendMessage(msg.channelId, text);
   } catch (err) {
@@ -377,6 +371,23 @@ async function handleSessionEvent(
       // When response content starts, finalize the activity feed
       if (activityFeeds.has(channelId)) {
         await finalizeActivityFeed(channelId, adapter);
+      }
+      // In verbose mode with an active "Working..." stream that hasn't received
+      // content yet, delete it and start a new stream so the response posts
+      // below the activity feed (no scroll-back).
+      if (verbose && streamKey) {
+        const streamContent = streaming.getStreamContent(streamKey);
+        if (streamContent !== undefined && streamContent === '') {
+          await streaming.deleteStream(streamKey);
+          activeStreams.delete(channelId);
+          const initialContent = event.type === 'assistant.message'
+            ? formatted.content
+            : (formatted.content || undefined);
+          const newKey = await streaming.startStream(channelId, undefined, initialContent);
+          activeStreams.set(channelId, newKey);
+          adapter.setTyping(channelId).catch(() => {});
+          break;
+        }
       }
       if (!streamKey) {
         // Auto-start stream with actual content (no extra "Working..." message)

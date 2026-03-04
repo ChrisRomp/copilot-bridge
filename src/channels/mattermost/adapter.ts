@@ -94,6 +94,10 @@ export class MattermostAdapter implements ChannelAdapter {
     await this.client.patchPost({ id: messageId, message: content } as any);
   }
 
+  async deleteMessage(_channelId: string, messageId: string): Promise<void> {
+    await this.client.deletePost(messageId);
+  }
+
   async setTyping(channelId: string): Promise<void> {
     try {
       const baseUrl = this.client.getBaseRoute();
