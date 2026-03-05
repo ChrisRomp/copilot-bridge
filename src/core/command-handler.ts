@@ -64,7 +64,7 @@ export function resolveModel(input: string, models: ModelInfo[]): { model: Model
     return { model: best, alternatives };
   }
 
-  return { error: `⚠️ Unknown model "${input}". Use \`/models\` to see available models.` };
+  return { error: `⚠️ Unknown model "${input}". Use \`/model\` to see available models.` };
 }
 
 /** Pick the best model from ambiguous candidates. Prefers shorter IDs and closer matches. */
@@ -91,6 +91,9 @@ function formatTokens(n: number): string {
 
 /** Format context usage as a one-line summary. */
 function formatContextUsage(usage: { currentTokens: number; tokenLimit: number }): string {
+  if (usage.tokenLimit <= 0) {
+    return `${formatTokens(usage.currentTokens)}/? tokens`;
+  }
   const pct = Math.round((usage.currentTokens / usage.tokenLimit) * 100);
   return `${formatTokens(usage.currentTokens)}/${formatTokens(usage.tokenLimit)} tokens (${pct}%)`;
 }
