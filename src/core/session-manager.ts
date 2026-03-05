@@ -391,12 +391,11 @@ export class SessionManager {
       } catch { /* best-effort */ }
       this.channelSessions.delete(channelId);
       this.sessionChannels.delete(existingId);
+      this.contextUsage.delete(channelId);
     }
     clearChannelSession(channelId);
     return this.createNewSession(channelId);
   }
-
-  /** Reload the current session — detach and re-attach to pick up AGENTS.md / config changes. */
   async reloadSession(channelId: string): Promise<string> {
     const existingId = this.channelSessions.get(channelId) ?? getChannelSession(channelId) ?? undefined;
     if (!existingId) {
@@ -419,6 +418,7 @@ export class SessionManager {
       log.warn(`Stale session ${existingId} for channel ${channelId}: ${err?.message ?? err}. Creating new session.`);
       this.channelSessions.delete(channelId);
       this.sessionChannels.delete(existingId);
+      this.contextUsage.delete(channelId);
       clearChannelSession(channelId);
       return this.createNewSession(channelId);
     }
@@ -439,6 +439,7 @@ export class SessionManager {
       this.bridge.releaseSession(existingId);
       this.channelSessions.delete(channelId);
       this.sessionChannels.delete(existingId);
+      this.contextUsage.delete(channelId);
     }
 
     // If target session is active on another channel, release it first
@@ -449,6 +450,7 @@ export class SessionManager {
       this.bridge.releaseSession(targetSessionId);
       this.channelSessions.delete(otherChannel);
       this.sessionChannels.delete(targetSessionId);
+      this.contextUsage.delete(otherChannel);
       clearChannelSession(otherChannel);
     }
 
