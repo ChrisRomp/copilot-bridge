@@ -83,16 +83,17 @@ export function initWorkspace(botName: string): string {
     fs.mkdirSync(workspacePath, { recursive: true });
   }
 
+  const admin = isBotAdminAny(botName);
+
   const agentsFile = path.join(workspacePath, 'AGENTS.md');
   if (!fs.existsSync(agentsFile)) {
     const allowPaths = getWorkspaceAllowPaths(botName);
-    const admin = isBotAdminAny(botName);
     fs.writeFileSync(agentsFile, generateAgentsTemplate(botName, workspacePath, allowPaths, admin), 'utf-8');
   }
 
   const memoryFile = path.join(workspacePath, 'MEMORY.md');
   if (!fs.existsSync(memoryFile)) {
-    const memoryTemplate = path.join(TEMPLATES_DIR, 'agents', 'MEMORY.md');
+    const memoryTemplate = path.join(TEMPLATES_DIR, admin ? 'admin' : 'agents', 'MEMORY.md');
     if (fs.existsSync(memoryTemplate)) {
       fs.copyFileSync(memoryTemplate, memoryFile);
     }

@@ -76,14 +76,11 @@ async function main(): Promise<void> {
   // Initialize session manager
   const sessionManager = new SessionManager(bridge);
 
-  // Initialize default workspaces for bots that don't have explicit channel mappings
-  const botsWithChannels = new Set(config.channels.map(ch => ch.bot).filter(Boolean));
+  // Initialize workspaces for all configured bots (idempotent)
   for (const [platformName] of Object.entries(config.platforms)) {
     const bots = getPlatformBots(platformName);
     for (const [botName] of bots) {
-      if (!botsWithChannels.has(botName)) {
-        initWorkspace(botName);
-      }
+      initWorkspace(botName);
     }
   }
 

@@ -58,8 +58,8 @@ async function withWorkspaceEnv<T>(workingDirectory: string, fn: () => Promise<T
   const envPath = path.join(workingDirectory, '.env');
   const vars = parseEnvFile(envPath);
 
-  // Even with no .env vars, wait for the lock so we don't run while
-  // another workspace's secrets are injected into process.env.
+  // Always hold the lock for the full duration of fn() so we never run
+  // while another workspace's secrets are injected into process.env.
   const prev = envLock;
   let release: () => void;
   envLock = new Promise(resolve => { release = resolve; });
@@ -67,11 +67,12 @@ async function withWorkspaceEnv<T>(workingDirectory: string, fn: () => Promise<T
   await prev;
 
   if (Object.keys(vars).length === 0) {
-    release!();
-    return fn();
+    try {
+      return await fn();
+    } finally {
+      release!();
+    }
   }
-
-  await prev;
 
   // Save originals, inject workspace vars
   const saved: Record<string, string | undefined> = {};

@@ -320,10 +320,11 @@ export function evaluateConfigPermissions(
     }
   }
 
-  // Active deny: if a read/write has a path that wasn't auto-allowed above,
-  // it's outside the workspace boundaries — deny it rather than prompting.
+  // If a read/write has a path that wasn't auto-allowed above, it's outside
+  // the workspace boundaries — defer to the interactive approval flow so the
+  // user can still approve one-off access via the messaging channel.
   if ((kind === 'read' || kind === 'write') && requestPath) {
-    return 'deny';
+    return null;
   }
 
   // Check URL permissions
