@@ -19,9 +19,11 @@ npx vitest run src/path/to/file.test.ts       # single test file
 
 Restart the running service after changes:
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.copilot-bridge.plist
-launchctl load ~/Library/LaunchAgents/com.copilot-bridge.plist
+scripts/restart-gateway.sh
+# Or: launchctl kickstart -k gui/$(id -u)/com.copilot-bridge
 ```
+
+> **⚠️ NEVER use `launchctl unload && launchctl load`** — `unload` kills the bridge process (including your session), so the `load` half never executes and the service stays down.
 
 ## Internal Architecture
 

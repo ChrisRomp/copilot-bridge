@@ -94,7 +94,8 @@ launchctl load ~/Library/LaunchAgents/com.copilot-bridge.plist
 # Or manually:
 launchctl kickstart -k gui/$(id -u)/com.copilot-bridge
 
-# Stop and unload
+# Stop and unload (⚠️ if the admin bot runs this, the gateway won't restart —
+# the bot's own session dies with it. Only run manually from a terminal.)
 launchctl unload ~/Library/LaunchAgents/com.copilot-bridge.plist
 ```
 

@@ -551,14 +551,14 @@ export class SessionManager {
   }
 
   /** Get effective preferences for a channel (config merged with runtime overrides). */
-  getEffectivePrefs(channelId: string): ChannelPrefs & { model: string } {
+  getEffectivePrefs(channelId: string): ChannelPrefs & { model: string; verbose: boolean; threadedReplies: boolean; permissionMode: string; triggerMode: 'mention' | 'all' } {
     const configChannel = getChannelConfig(channelId);
     const storedPrefs = getChannelPrefs(channelId);
     return {
       model: storedPrefs?.model ?? configChannel.model ?? 'claude-sonnet-4.6',
       agent: storedPrefs?.agent !== undefined ? storedPrefs.agent : configChannel.agent,
       verbose: storedPrefs?.verbose ?? configChannel.verbose,
-      triggerMode: storedPrefs?.triggerMode ?? configChannel.triggerMode,
+      triggerMode: configChannel.triggerMode,
       threadedReplies: storedPrefs?.threadedReplies ?? configChannel.threadedReplies,
       permissionMode: storedPrefs?.permissionMode ?? configChannel.permissionMode,
       reasoningEffort: storedPrefs?.reasoningEffort ?? (configChannel as any).reasoningEffort ?? null,

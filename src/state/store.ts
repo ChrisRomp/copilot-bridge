@@ -31,10 +31,10 @@ function getDb(): Database.Database {
       channel_id TEXT PRIMARY KEY,
       model TEXT,
       agent TEXT,
-      verbose INTEGER NOT NULL DEFAULT 0,
-      trigger_mode TEXT NOT NULL DEFAULT 'mention',
-      threaded_replies INTEGER NOT NULL DEFAULT 1,
-      permission_mode TEXT NOT NULL DEFAULT 'interactive',
+      verbose INTEGER,
+      trigger_mode TEXT,
+      threaded_replies INTEGER,
+      permission_mode TEXT,
       reasoning_effort TEXT,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -100,10 +100,10 @@ export function getAllChannelSessions(): Array<{ channelId: string; sessionId: s
 export interface ChannelPrefs {
   model?: string;
   agent?: string | null;
-  verbose: boolean;
-  triggerMode: string;
-  threadedReplies: boolean;
-  permissionMode: string;
+  verbose?: boolean;
+
+  threadedReplies?: boolean;
+  permissionMode?: string;
   reasoningEffort?: string | null;
 }
 
@@ -112,12 +112,12 @@ export function getChannelPrefs(channelId: string): ChannelPrefs | null {
   const row = db.prepare('SELECT * FROM channel_prefs WHERE channel_id = ?').get(channelId) as any;
   if (!row) return null;
   return {
-    model: row.model,
+    model: row.model ?? undefined,
     agent: row.agent,
-    verbose: !!row.verbose,
-    triggerMode: row.trigger_mode,
-    threadedReplies: !!row.threaded_replies,
-    permissionMode: row.permission_mode,
+    verbose: row.verbose != null ? !!row.verbose : undefined,
+
+    threadedReplies: row.threaded_replies != null ? !!row.threaded_replies : undefined,
+    permissionMode: row.permission_mode ?? undefined,
     reasoningEffort: row.reasoning_effort ?? null,
   };
 }
@@ -133,7 +133,7 @@ export function setChannelPrefs(channelId: string, prefs: Partial<ChannelPrefs>)
     if (prefs.model !== undefined) { updates.push('model = ?'); values.push(prefs.model); }
     if (prefs.agent !== undefined) { updates.push('agent = ?'); values.push(prefs.agent); }
     if (prefs.verbose !== undefined) { updates.push('verbose = ?'); values.push(prefs.verbose ? 1 : 0); }
-    if (prefs.triggerMode !== undefined) { updates.push('trigger_mode = ?'); values.push(prefs.triggerMode); }
+
     if (prefs.threadedReplies !== undefined) { updates.push('threaded_replies = ?'); values.push(prefs.threadedReplies ? 1 : 0); }
     if (prefs.permissionMode !== undefined) { updates.push('permission_mode = ?'); values.push(prefs.permissionMode); }
     if (prefs.reasoningEffort !== undefined) { updates.push('reasoning_effort = ?'); values.push(prefs.reasoningEffort); }
@@ -145,16 +145,15 @@ export function setChannelPrefs(channelId: string, prefs: Partial<ChannelPrefs>)
     }
   } else {
     db.prepare(
-      `INSERT INTO channel_prefs (channel_id, model, agent, verbose, trigger_mode, threaded_replies, permission_mode, reasoning_effort)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO channel_prefs (channel_id, model, agent, verbose, threaded_replies, permission_mode, reasoning_effort)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run(
       channelId,
       prefs.model ?? null,
       prefs.agent ?? null,
-      prefs.verbose ? 1 : 0,
-      prefs.triggerMode ?? 'mention',
-      prefs.threadedReplies !== false ? 1 : 0,
-      prefs.permissionMode ?? 'interactive',
+      prefs.verbose != null ? (prefs.verbose ? 1 : 0) : null,
+      prefs.threadedReplies != null ? (prefs.threadedReplies ? 1 : 0) : null,
+      prefs.permissionMode ?? null,
       prefs.reasoningEffort ?? null,
     );
   }

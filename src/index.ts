@@ -233,10 +233,9 @@ async function handleInboundMessage(
   const { adapter, streaming } = resolved;
 
   const channelConfig = getChannelConfig(msg.channelId);
-  const prefs = getChannelPrefs(msg.channelId);
 
   // Check trigger mode
-  const triggerMode = prefs?.triggerMode ?? channelConfig.triggerMode;
+  const triggerMode = channelConfig.triggerMode;
   if (triggerMode === 'mention' && !msg.mentionsBot && !msg.isDM) return;
 
   // Strip bot mention from message text
