@@ -51,9 +51,9 @@ APP_URL=https://my-app.local
 
 ### How it works
 
-- Variables are parsed and injected into `process.env` before the Copilot CLI subprocess spawns
+- Variables are **injected into each MCP server's `env` field** so the SDK passes them through to MCP server subprocesses
+- The bridge also sets them in `process.env` during session creation (mutex-protected), but this is secondary — the CLI subprocess is long-lived and doesn't re-read `process.env` changes
 - A mutex serializes session creation so concurrent agent startups don't leak env vars across agents
-- After the subprocess spawns, the original `process.env` is restored — other agents never see another agent's vars
 
 ### Security guidance
 
@@ -82,12 +82,37 @@ The format matches the standard Copilot MCP config:
     "my-server": {
       "type": "stdio",
       "command": "node",
-      "args": ["/path/to/server.js"],
-      "env": { "API_KEY": "..." }
+      "args": ["/path/to/server.js"]
     }
   }
 }
 ```
+
+### Environment variable injection
+
+Workspace `.env` vars are automatically injected into every local MCP server's `env` field. You don't need to duplicate them in `mcp-config.json`:
+
+```
+# .env
+HOMEASSISTANT_URL=http://homeassistant.local:8123
+HOMEASSISTANT_TOKEN=eyJ0eXAi...
+```
+
+The MCP server process receives these vars without any `env` block in the config. If you need to **remap** a variable name, use `${VAR}` expansion:
+
+```json
+{
+  "mcpServers": {
+    "home-assistant": {
+      "command": "uv",
+      "args": ["run", "--project", "/path/to/ha-mcp", "ha-mcp"],
+      "env": { "HASS_URL": "${HOMEASSISTANT_URL}" }
+    }
+  }
+}
+```
+
+Priority: explicit `env` values in config override `.env` values for the same key. `${VAR}` expands from `.env` first, then `process.env`.
 
 Non-conflicting server names from all layers are merged — a bot gets its workspace servers plus all global servers. If a workspace defines a server with the same name as a global one, the workspace version wins.
 
@@ -124,3 +149,41 @@ The recommended flow is to ask the admin bot in chat. It will:
 5. Restart the bridge
 
 You can also do this manually — see the admin template (`templates/admin/AGENTS.md`) for the detailed steps.
+
+## Troubleshooting MCP servers
+
+### Where are the logs?
+
+MCP server output goes through the Copilot CLI subprocess stderr, which is written to `/tmp/copilot-bridge.log` (configured in the launchd plist):
+
+```bash
+# CLI subprocess stderr (includes MCP startup errors)
+grep 'CLI subprocess' /tmp/copilot-bridge.log | tail -20
+
+# MCP loading messages from the bridge
+grep 'MCP' /tmp/copilot-bridge.log | tail -20
+
+# General errors
+grep -i 'error\|fail' /tmp/copilot-bridge.log | tail -20
+```
+
+Bots can access this log file since it's in a readable path. Ask the bot to run these grep commands for self-diagnosis.
+
+### MCP server loads but tools aren't visible
+
+Common causes:
+
+1. **Missing env vars** — The MCP server starts but can't connect to its backend, so it reports zero tools. Check that the workspace `.env` has the required vars. After fixing, tell the bot `/reload`.
+
+2. **Server crash on startup** — Look for errors in the log: `grep 'CLI subprocess' /tmp/copilot-bridge.log | grep -i error`. Test the server manually:
+   ```bash
+   cd ~/.copilot-bridge/workspaces/<bot>/
+   source .env
+   echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}' | <mcp-command> <mcp-args>
+   ```
+
+3. **`/reload` not run** — MCP config is read at session creation time. After changing `mcp-config.json` or `.env`, the bot needs `/reload` or `/new`.
+
+### Verifying MCP server status
+
+Use `/mcp` to see which servers are loaded and their source (global vs workspace). This confirms the bridge read the config correctly.

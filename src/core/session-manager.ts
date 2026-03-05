@@ -176,7 +176,10 @@ function normalizeMcpServers(servers: Record<string, any>): void {
 
 /**
  * Load workspace-specific MCP servers from <workspacePath>/mcp-config.json.
- * Returns an empty object if no config exists.
+ * Injects workspace .env vars into each local server's env field so the CLI
+ * subprocess passes them through to MCP server processes (the CLI subprocess
+ * is long-lived and does not inherit bridge process.env changes).
+ * Also expands ${VAR} references in env values from .env or process.env.
  */
 function loadWorkspaceMcpServers(workspacePath: string): Record<string, any> {
   const configFile = path.join(workspacePath, 'mcp-config.json');
@@ -186,9 +189,31 @@ function loadWorkspaceMcpServers(workspacePath: string): Record<string, any> {
     const cfg = JSON.parse(fs.readFileSync(configFile, 'utf8'));
     if (!cfg.mcpServers || typeof cfg.mcpServers !== 'object') return {};
 
+    const workspaceEnv = parseEnvFile(path.join(workspacePath, '.env'));
+
     const servers: Record<string, any> = {};
     for (const [name, config] of Object.entries(cfg.mcpServers)) {
-      servers[name] = config;
+      const serverConfig = config as any;
+
+      // Inject workspace .env vars into local MCP servers
+      const isLocal = !serverConfig.type || serverConfig.type === 'local' || serverConfig.type === 'stdio';
+      if (isLocal && Object.keys(workspaceEnv).length > 0) {
+        // Workspace .env as base, explicit config env overrides
+        serverConfig.env = { ...workspaceEnv, ...(serverConfig.env || {}) };
+      }
+
+      // Expand ${VAR} references in env values
+      if (serverConfig.env) {
+        for (const [key, value] of Object.entries(serverConfig.env)) {
+          if (typeof value === 'string' && value.includes('${')) {
+            serverConfig.env[key] = (value as string).replace(/\$\{(\w+)\}/g, (_, varName) =>
+              workspaceEnv[varName] ?? process.env[varName] ?? '',
+            );
+          }
+        }
+      }
+
+      servers[name] = serverConfig;
       log.debug(`Loaded workspace MCP "${name}" from ${configFile}`);
     }
     normalizeMcpServers(servers);
