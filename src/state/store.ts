@@ -16,6 +16,15 @@ function migrateChannelPrefsNullable(db: Database.Database): void {
   );
   if (!needsMigration) return;
 
+  const existingCols = new Set(cols.map((c: any) => c.name));
+  const targetCols = [
+    'channel_id', 'model', 'agent', 'verbose', 'trigger_mode',
+    'threaded_replies', 'permission_mode', 'reasoning_effort',
+  ];
+  // Build SELECT expressions: use the column if it exists, NULL otherwise
+  const selectExprs = targetCols.map(col => existingCols.has(col) ? col : `NULL AS ${col}`);
+  selectExprs.push(existingCols.has('updated_at') ? "COALESCE(updated_at, datetime('now'))" : "datetime('now')");
+
   const migrate = db.transaction(() => {
     // Clean up leftover temp table from a previously interrupted migration
     db.exec(`DROP TABLE IF EXISTS channel_prefs_new`);
@@ -31,10 +40,10 @@ function migrateChannelPrefsNullable(db: Database.Database): void {
         reasoning_effort TEXT,
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+    `);
+    db.exec(`
       INSERT INTO channel_prefs_new
-        SELECT channel_id, model, agent, verbose, trigger_mode,
-               threaded_replies, permission_mode, reasoning_effort,
-               COALESCE(updated_at, datetime('now'))
+        SELECT ${selectExprs.join(', ')}
         FROM channel_prefs;
       DROP TABLE channel_prefs;
       ALTER TABLE channel_prefs_new RENAME TO channel_prefs;
