@@ -1,4 +1,4 @@
-import { loadConfig, getConfig, isConfiguredChannel, registerDynamicChannel, getChannelConfig, getPlatformBots, getChannelBotName, isBotAdmin } from './config.js';
+import { loadConfig, getConfig, isConfiguredChannel, registerDynamicChannel, markChannelAsDM, getChannelConfig, getPlatformBots, getChannelBotName, isBotAdmin } from './config.js';
 import { CopilotBridge } from './core/bridge.js';
 import { SessionManager } from './core/session-manager.js';
 import { handleCommand, parseCommand } from './core/command-handler.js';
@@ -157,9 +157,13 @@ async function main(): Promise<void> {
             triggerMode: 'all',
             threadedReplies: false,
             verbose: false,
+            isDM: true,
           });
           registered++;
           log.info(`Auto-registered DM channel ${dm.channelId.slice(0, 8)}... for bot "${botName}"`);
+        } else {
+          // Mark pre-configured DM channels so nudge logic can identify them
+          markChannelAsDM(dm.channelId);
         }
       }
       log.info(`${botName}: discovered ${dmChannels.length} DM(s), ${registered} newly registered`);
@@ -215,6 +219,7 @@ async function handleInboundMessage(
       triggerMode: 'all',
       threadedReplies: false,
       verbose: false,
+      isDM: true,
     });
     log.info(`Auto-registered DM channel ${msg.channelId.slice(0, 8)}... for bot "${botName}"`);
   }
@@ -705,12 +710,14 @@ async function nudgeAdminSessions(sessionManager: SessionManager): Promise<void>
 
     try {
       log.info(`Nudging admin session for bot "${botName}" on channel ${channelId.slice(0, 8)}...`);
-      // Post a visible notice directly — non-blocking, must not prevent nudge
-      const resolved = getAdapterForChannel(channelId);
-      if (resolved) {
-        resolved.adapter.sendMessage(channelId, '🔄 Gateway restarted.').catch(e =>
-          log.warn(`Failed to post restart notice on ${channelId.slice(0, 8)}...:`, e)
-        );
+      // Only post the visible restart notice in DM channels
+      if (channelConfig.isDM) {
+        const resolved = getAdapterForChannel(channelId);
+        if (resolved) {
+          resolved.adapter.sendMessage(channelId, '🔄 Gateway restarted.').catch(e =>
+            log.warn(`Failed to post restart notice on ${channelId.slice(0, 8)}...:`, e)
+          );
+        }
       }
       nudgePending.add(channelId);
       await sessionManager.sendMessage(channelId, NUDGE_PROMPT);

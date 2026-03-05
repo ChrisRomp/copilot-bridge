@@ -24,6 +24,7 @@ export interface ChannelConfig {
   triggerMode: 'mention' | 'all';
   threadedReplies: boolean;
   verbose: boolean;
+  isDM?: boolean;
 }
 
 // Permission rules config (CLI-compatible syntax)

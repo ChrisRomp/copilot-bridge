@@ -118,6 +118,13 @@ export function registerDynamicChannel(channel: ChannelConfig): void {
   config.channels.push(channel);
 }
 
+/** Mark an existing channel as a DM (mutates the source config object). */
+export function markChannelAsDM(channelId: string): void {
+  const config = getConfig();
+  const channel = config.channels.find(c => c.id === channelId);
+  if (channel) channel.isDM = true;
+}
+
 /**
  * Get the resolved bot token for a channel.
  * Supports both single-bot (botToken) and multi-bot (bots map) configs.
