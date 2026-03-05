@@ -5,9 +5,11 @@ import { CopilotBridge } from './bridge.js';
 import {
   getChannelSession, setChannelSession, clearChannelSession,
   getChannelPrefs, setChannelPrefs, checkPermission, addPermissionRule,
+  getWorkspaceOverride,
   type ChannelPrefs,
 } from '../state/store.js';
-import { getChannelConfig, evaluateConfigPermissions } from '../config.js';
+import { getChannelConfig, getChannelBotName, evaluateConfigPermissions, isBotAdmin } from '../config.js';
+import { getWorkspacePath, getWorkspaceAllowPaths, ensureWorkspacesDir } from './workspace-manager.js';
 import { createLogger } from '../logger.js';
 import type {
   ChannelAdapter, InboundMessage, PendingPermission, PendingUserInput,
@@ -16,6 +18,83 @@ import type {
 const log = createLogger('session');
 
 type SessionEventHandler = (sessionId: string, channelId: string, event: any) => void;
+
+/** Simple mutex for serializing env-sensitive session creation. */
+let envLock: Promise<void> = Promise.resolve();
+
+/**
+ * Parse a .env file into a key-value map.
+ * Handles KEY=VALUE, KEY="VALUE", KEY='VALUE', comments, and blank lines.
+ */
+function parseEnvFile(filePath: string): Record<string, string> {
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const vars: Record<string, string> = {};
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx === -1) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      let value = trimmed.slice(eqIdx + 1).trim();
+      // Strip matching quotes
+      if ((value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      if (key) vars[key] = value;
+    }
+    return vars;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Run an async function with workspace env vars temporarily injected into process.env.
+ * Uses a mutex to prevent concurrent sessions from seeing each other's env vars.
+ */
+async function withWorkspaceEnv<T>(workingDirectory: string, fn: () => Promise<T>): Promise<T> {
+  const envPath = path.join(workingDirectory, '.env');
+  const vars = parseEnvFile(envPath);
+
+  // Always hold the lock for the full duration of fn() so we never run
+  // while another workspace's secrets are injected into process.env.
+  const prev = envLock;
+  let release: () => void;
+  envLock = new Promise(resolve => { release = resolve; });
+
+  await prev;
+
+  if (Object.keys(vars).length === 0) {
+    try {
+      return await fn();
+    } finally {
+      release!();
+    }
+  }
+
+  // Save originals, inject workspace vars
+  const saved: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(vars)) {
+    saved[key] = process.env[key];
+    process.env[key] = value;
+  }
+
+  try {
+    return await fn();
+  } finally {
+    // Restore originals
+    for (const [key] of Object.entries(vars)) {
+      if (saved[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = saved[key];
+      }
+    }
+    release!();
+  }
+}
 
 /**
  * Load MCP server configs from ~/.copilot/mcp-config.json and installed plugins.
@@ -160,6 +239,7 @@ export class SessionManager {
   constructor(bridge: CopilotBridge) {
     this.bridge = bridge;
     this.mcpServers = loadMcpServers();
+    ensureWorkspacesDir();
   }
 
   /** Register a handler for session events (streaming, tool calls, etc.) */
@@ -207,6 +287,70 @@ export class SessionManager {
     }
     clearChannelSession(channelId);
     return this.createNewSession(channelId);
+  }
+
+  /** Reload the current session — detach and re-attach to pick up AGENTS.md / config changes. */
+  async reloadSession(channelId: string): Promise<string> {
+    const existingId = this.channelSessions.get(channelId) ?? getChannelSession(channelId) ?? undefined;
+    if (!existingId) {
+      // No session to reload — just create one
+      return this.createNewSession(channelId);
+    }
+
+    // Detach event listeners and release the bridge handle
+    const unsub = this.sessionUnsubscribes.get(existingId);
+    if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
+    this.bridge.releaseSession(existingId);
+
+    // Re-attach the same session (re-reads workspace config, AGENTS.md, MCP, etc.)
+    try {
+      await this.attachSession(channelId, existingId);
+      log.info(`Reloaded session ${existingId} for channel ${channelId}`);
+      return existingId;
+    } catch (err: any) {
+      // Session no longer exists server-side (e.g., workspace was deleted and re-created)
+      log.warn(`Stale session ${existingId} for channel ${channelId}: ${err?.message ?? err}. Creating new session.`);
+      this.channelSessions.delete(channelId);
+      this.sessionChannels.delete(existingId);
+      clearChannelSession(channelId);
+      return this.createNewSession(channelId);
+    }
+  }
+
+  /** Resume a specific past session by ID. */
+  async resumeToSession(channelId: string, targetSessionId: string): Promise<string> {
+    // If already attached to this session, just reload it
+    const existingId = this.channelSessions.get(channelId);
+    if (existingId === targetSessionId) {
+      return this.reloadSession(channelId);
+    }
+
+    // Clean up current session for this channel
+    if (existingId) {
+      const unsub = this.sessionUnsubscribes.get(existingId);
+      if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
+      this.bridge.releaseSession(existingId);
+      this.channelSessions.delete(channelId);
+      this.sessionChannels.delete(existingId);
+    }
+
+    // If target session is active on another channel, release it first
+    const otherChannel = this.sessionChannels.get(targetSessionId);
+    if (otherChannel) {
+      const unsub = this.sessionUnsubscribes.get(targetSessionId);
+      if (unsub) { unsub(); this.sessionUnsubscribes.delete(targetSessionId); }
+      this.bridge.releaseSession(targetSessionId);
+      this.channelSessions.delete(otherChannel);
+      this.sessionChannels.delete(targetSessionId);
+      clearChannelSession(otherChannel);
+    }
+
+    // Attach to the target session — fail hard if it doesn't exist
+    // (user explicitly asked for this session, don't silently replace it)
+    await this.attachSession(channelId, targetSessionId);
+    setChannelSession(channelId, targetSessionId);
+    log.info(`Resumed session ${targetSessionId} for channel ${channelId}`);
+    return targetSessionId;
   }
 
   /** Send a message to a channel's session. Returns immediately; responses come via events. */
@@ -408,6 +552,11 @@ export class SessionManager {
     return !!queue && queue.length > 0;
   }
 
+  /** Get the current session ID for a channel (if any). */
+  getSessionId(channelId: string): string | undefined {
+    return this.channelSessions.get(channelId) ?? getChannelSession(channelId) ?? undefined;
+  }
+
   /** Check if channel has a pending user input request. */
   hasPendingUserInput(channelId: string): boolean {
     const queue = this.pendingUserInput.get(channelId);
@@ -422,27 +571,55 @@ export class SessionManager {
     return { sessionId, model: prefs.model, agent: prefs.agent ?? null };
   }
 
+  /** List past sessions for this channel's working directory. */
+  async listChannelSessions(channelId: string): Promise<Array<{ sessionId: string; startTime: Date; modifiedTime: Date; summary?: string; isCurrent: boolean }>> {
+    const workingDirectory = this.resolveWorkingDirectory(channelId);
+    const sessions = await this.bridge.listSessions({ cwd: workingDirectory });
+    const currentId = this.channelSessions.get(channelId);
+    return sessions.map(s => ({
+      sessionId: s.sessionId,
+      startTime: s.startTime,
+      modifiedTime: s.modifiedTime,
+      summary: s.summary,
+      isCurrent: s.sessionId === currentId,
+    }));
+  }
+
   // --- Private helpers ---
 
-  private async createNewSession(channelId: string): Promise<string> {
+  /** Resolve working directory: SQLite workspace override → channel config → default workspace path. */
+  private resolveWorkingDirectory(channelId: string): string {
+    const botName = getChannelBotName(channelId);
+    const override = getWorkspaceOverride(botName);
+    if (override) return override.workingDirectory;
+
     const config = getChannelConfig(channelId);
+    if (config.workingDirectory) return config.workingDirectory;
+
+    return getWorkspacePath(botName);
+  }
+
+  private async createNewSession(channelId: string): Promise<string> {
     const prefs = this.getEffectivePrefs(channelId);
+    const workingDirectory = this.resolveWorkingDirectory(channelId);
 
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
 
     const reasoningEffort = prefs.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | undefined;
-    const skillDirectories = discoverSkillDirectories(config.workingDirectory);
+    const skillDirectories = discoverSkillDirectories(workingDirectory);
 
-    const session = await this.bridge.createSession({
-      model: prefs.model,
-      workingDirectory: config.workingDirectory,
-      configDir: defaultConfigDir,
-      reasoningEffort: reasoningEffort ?? undefined,
-      mcpServers: this.mcpServers,
-      skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
-      onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
-      onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
-    });
+    const session = await withWorkspaceEnv(workingDirectory, () =>
+      this.bridge.createSession({
+        model: prefs.model,
+        workingDirectory,
+        configDir: defaultConfigDir,
+        reasoningEffort: reasoningEffort ?? undefined,
+        mcpServers: this.mcpServers,
+        skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
+        onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
+        onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
+      })
+    );
 
     const sessionId = session.sessionId;
     this.channelSessions.set(channelId, sessionId);
@@ -456,21 +633,23 @@ export class SessionManager {
   }
 
   private async attachSession(channelId: string, sessionId: string): Promise<void> {
-    const config = getChannelConfig(channelId);
     const prefs = this.getEffectivePrefs(channelId);
+    const workingDirectory = this.resolveWorkingDirectory(channelId);
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
     const reasoningEffort = prefs.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | undefined;
-    const skillDirectories = discoverSkillDirectories(config.workingDirectory);
+    const skillDirectories = discoverSkillDirectories(workingDirectory);
 
-    const session = await this.bridge.resumeSession(sessionId, {
-      onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
-      onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
-      configDir: defaultConfigDir,
-      workingDirectory: config.workingDirectory,
-      reasoningEffort: reasoningEffort ?? undefined,
-      mcpServers: this.mcpServers,
-      skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
-    });
+    const session = await withWorkspaceEnv(workingDirectory, () =>
+      this.bridge.resumeSession(sessionId, {
+        onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
+        onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
+        configDir: defaultConfigDir,
+        workingDirectory,
+        reasoningEffort: reasoningEffort ?? undefined,
+        mcpServers: this.mcpServers,
+        skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
+      })
+    );
 
     this.channelSessions.set(channelId, sessionId);
     this.sessionChannels.set(sessionId, channelId);
@@ -498,7 +677,10 @@ export class SessionManager {
 
     // Check config-level permission rules first (CLI-compatible syntax)
     const config = getChannelConfig(channelId);
-    const configResult = evaluateConfigPermissions(request as any, config.workingDirectory);
+    const botName = getChannelBotName(channelId);
+    const resolvedDir = this.resolveWorkingDirectory(channelId);
+    const workspaceAllowPaths = getWorkspaceAllowPaths(botName, config.platform);
+    const configResult = evaluateConfigPermissions(request as any, resolvedDir, workspaceAllowPaths, isBotAdmin(config.platform, botName));
     if (configResult === 'allow') {
       return Promise.resolve({ kind: 'approved' });
     }

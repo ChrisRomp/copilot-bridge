@@ -5,7 +5,7 @@
       "botToken": "SINGLE_BOT_TOKEN",
       "_comment_bots": "OR use 'bots' for multiple identities:",
       "bots": {
-        "copilot": { "token": "BOT_TOKEN_1" },
+        "copilot": { "token": "BOT_TOKEN_1", "admin": true },
         "bob": { "token": "BOT_TOKEN_2", "agent": "bob-agent" }
       }
     }

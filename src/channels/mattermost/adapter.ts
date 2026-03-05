@@ -73,6 +73,35 @@ export class MattermostAdapter implements ChannelAdapter {
     this.wsClient.close();
   }
 
+  /**
+   * Discover existing DM channels for this bot via the Mattermost API.
+   * Returns channel IDs for direct message conversations the bot is already part of.
+   */
+  async discoverDMChannels(): Promise<{ channelId: string; otherUserId: string }[]> {
+    try {
+      const baseUrl = this.client.getBaseRoute();
+      const resp = await fetch(`${baseUrl}/users/${this.botId}/channels`, {
+        headers: { 'Authorization': `Bearer ${this.token}` },
+      });
+      if (!resp.ok) {
+        log.warn(`Failed to discover DM channels: ${resp.status} ${resp.statusText}`);
+        return [];
+      }
+      const channels = await resp.json() as Array<{ id: string; type: string; name: string }>;
+      return channels
+        .filter(ch => ch.type === 'D')
+        .map(ch => {
+          // DM channel names are "{userId1}__{userId2}"
+          const parts = ch.name.split('__');
+          const otherUserId = parts.find(p => p !== this.botId) ?? parts[0];
+          return { channelId: ch.id, otherUserId };
+        });
+    } catch (err) {
+      log.warn(`Error discovering DM channels:`, err);
+      return [];
+    }
+  }
+
   onMessage(handler: (msg: InboundMessage) => void): void {
     this.messageHandlers.push(handler);
   }

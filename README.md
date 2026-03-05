@@ -5,106 +5,50 @@ Bridge GitHub Copilot CLI to messaging platforms. Send messages from Mattermost 
 > [!WARNING]
 > This is all experimental.
 
-## How It Works
-
 ```
 Mattermost Channel → copilot-bridge → @github/copilot-sdk → Copilot CLI
      ↑                                                          ↓
      └──────────── streaming response (edit-in-place) ←─────────┘
 ```
 
-Each configured channel maps to a Copilot session with a specific working directory, model, and optionally a custom agent. Messages are forwarded to the session, and responses stream back in real-time via edit-in-place message updates.
-
 ## Features
 
-- **Multi-bot support** — Run multiple bot identities on the same platform (e.g., `@copilot` for code, `@bob` for notes)
+- **Multi-bot support** — Run multiple bot identities on the same platform (e.g., `@copilot` for admin, `@alice` for tasks)
+- **Workspaces** — Each bot gets an isolated workspace with its own `AGENTS.md`, `.env` secrets, and `MEMORY.md`
+- **DM auto-discovery** — Just message a bot; no channel config needed for direct messages
 - **Streaming responses** — Edit-in-place message updates with throttling
-- **MCP server integration** — Auto-loads MCP servers from `~/.copilot/mcp-config.json` and installed plugins
-- **Skills support** — Discovers skills from `~/.copilot/skills/`, `.github/skills/`, and `.agents/skills/`
+- **MCP & skills** — Auto-loads MCP servers and skill directories from Copilot config
 - **Fuzzy model matching** — `/model opus` resolves to `claude-opus-4.6` (mobile-friendly)
-- **Reasoning effort control** — `/reasoning high` for supported models
-- **Interactive permissions** — Approve/deny tool use via chat, reactions, or `/autopilot`
-- **Sub-agent visibility** — See when Copilot delegates to sub-agents
-- **Persistent preferences** — Model, agent, verbose, permissions saved per-channel in SQLite
+- **Interactive permissions** — Approve/deny tool use via chat, or `/autopilot` to auto-approve
+- **Session management** — `/reload` to refresh config, `/resume` to switch between sessions
+- **Persistent preferences** — Model, agent, verbose mode, permissions saved per-channel
 
-## Setup
+## Quick Start
 
-1. **Prerequisites**: Node.js 20+, GitHub Copilot CLI installed and authenticated (`gh copilot --version`)
-2. **Install dependencies**: `npm install`
-3. **Configure**: Copy `config.sample.json` to `config.json` and edit:
-   - Set your Mattermost server URL and bot token(s)
-   - Map channels to working directories
+1. **Prerequisites**: Node.js 20+, GitHub Copilot CLI installed and authenticated
+2. **Install**: `npm install`
+3. **Configure**: Copy `config.sample.json` to `~/.copilot-bridge/config.json` and add your Mattermost URL + bot token(s)
 4. **Run**: `npx tsx src/index.ts`
 
-### Running as a Service (macOS)
+For DMs, that's it — the bridge auto-discovers DM channels for each bot. For group channels, add a `channels` entry mapping the channel ID to a working directory. See [Configuration](docs/configuration.md) for details.
 
-A launchd plist is provided for running on login:
+### Running as a service (macOS)
 
 ```bash
 cp scripts/com.copilot-bridge.plist ~/Library/LaunchAgents/
-# Edit the plist to match your paths if needed
+# Edit paths in the plist if needed
 launchctl load ~/Library/LaunchAgents/com.copilot-bridge.plist
 ```
 
 Update and restart: `./scripts/deploy.sh`
-
-## Configuration
-
-See `config.sample.json` for the full format. Key fields:
-
-### Platforms
-
-```json
-{
-  "platforms": {
-    "mattermost": {
-      "url": "https://chat.example.com",
-      "bots": {
-        "copilot": { "token": "BOT_TOKEN_1" },
-        "bob": { "token": "BOT_TOKEN_2", "agent": "bob-agent" }
-      }
-    }
-  }
-}
-```
-
-### Channels
-
-| Field | Description |
-|-------|-------------|
-| `id` | Mattermost channel ID |
-| `platform` | Platform name (e.g., `mattermost`) |
-| `bot` | Bot identity to use for this channel |
-| `workingDirectory` | Local path for Copilot to work in |
-| `model` | AI model (e.g., `claude-sonnet-4.6`) |
-| `agent` | Custom agent name (optional) |
-| `triggerMode` | `mention` (default) or `all` |
-| `threadedReplies` | Use threaded replies (default: true) |
-
-### Permissions
-
-Config-level rules use CLI-compatible syntax:
-
-```json
-{
-  "permissions": {
-    "allow": ["read", "shell(ls)", "shell(cat)", "vault-search", "context7"],
-    "deny": ["shell(rm)", "shell(git push)"],
-    "allowUrls": ["docs.github.com", "stackoverflow.com"]
-  }
-}
-```
-
-- `"vault-search"` — allows all tools from that MCP server
-- `"vault-search(search)"` — allows only the `search` tool
-- `"shell(ls)"` — allows the `ls` command
-- `/remember` in chat persists per-channel rules in SQLite (MCP rules save at server level)
 
 ## Chat Commands
 
 | Command | Description |
 |---------|-------------|
 | `/new` | Start a fresh session |
+| `/reload` | Reload session (re-reads AGENTS.md, config, MCP servers) |
+| `/resume [id]` | List past sessions, or resume one by ID |
 | `/model <name>` | Switch AI model (fuzzy match supported) |
 | `/models` | List available models |
 | `/agent <name>` | Switch custom agent (empty to deselect) |
@@ -116,36 +60,11 @@ Config-level rules use CLI-compatible syntax:
 | `/autopilot` | Toggle auto-approve mode |
 | `/help` | Show all commands |
 
-## Architecture
+## Documentation
 
-```
-src/
-├── index.ts                    # Main orchestrator, event routing
-├── config.ts                   # Config loading and validation
-├── logger.ts                   # Structured logging (timestamp + level)
-├── types.ts                    # Shared type definitions
-├── core/
-│   ├── bridge.ts               # CopilotClient wrapper
-│   ├── session-manager.ts      # Session lifecycle, permissions, MCP/skill loading
-│   ├── command-handler.ts      # Slash command parsing with fuzzy model matching
-│   └── stream-formatter.ts     # SDK event → chat message formatting
-├── channels/
-│   └── mattermost/
-│       ├── adapter.ts          # Mattermost WebSocket + REST adapter
-│       └── streaming.ts        # Edit-in-place streaming with throttle
-└── state/
-    └── store.ts                # SQLite persistence (sessions, prefs, permissions)
-```
-
-The bridge uses a pluggable channel adapter pattern. Adding a new platform (Slack, Discord) means implementing the `ChannelAdapter` interface.
-
-## Logging
-
-Logs go to `/tmp/copilot-bridge.log` with structured format:
-
-```
-HH:mm:ss.SSS [LEVEL] [tag] message
-```
+- **[Configuration](docs/configuration.md)** — Platforms, channels, permissions, defaults
+- **[Workspaces & Agents](docs/workspaces.md)** — Workspace system, .env secrets, templates, agent onboarding
+- **[Architecture](docs/architecture.md)** — Source layout, message flow, adapter pattern, persistence
 
 ## License
 

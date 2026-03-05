@@ -1,11 +1,16 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig } from './types.js';
 
 let _config: AppConfig | null = null;
 
 export function loadConfig(configPath?: string): AppConfig {
-  const filePath = configPath ?? process.env.COPILOT_BRIDGE_CONFIG ?? path.join(process.cwd(), 'config.json');
+  const filePath = configPath
+    ?? process.env.COPILOT_BRIDGE_CONFIG
+    ?? (fs.existsSync(path.join(os.homedir(), '.copilot-bridge', 'config.json'))
+        ? path.join(os.homedir(), '.copilot-bridge', 'config.json')
+        : path.join(process.cwd(), 'config.json'));
   
   if (!fs.existsSync(filePath)) {
     throw new Error(`Config file not found: ${filePath}. Copy config.sample.json to config.json and edit it.`);
@@ -104,6 +109,16 @@ export function isConfiguredChannel(channelId: string): boolean {
 }
 
 /**
+ * Dynamically register a channel at runtime (not persisted to config.json).
+ * Used for auto-discovered DM channels with bots.
+ */
+export function registerDynamicChannel(channel: ChannelConfig): void {
+  const config = getConfig();
+  if (config.channels.some(c => c.id === channel.id)) return; // already registered
+  config.channels.push(channel);
+}
+
+/**
  * Get the resolved bot token for a channel.
  * Supports both single-bot (botToken) and multi-bot (bots map) configs.
  */
@@ -157,6 +172,34 @@ export function getPlatformBots(platformName: string): Map<string, { token: stri
   return bots;
 }
 
+/** Check if a bot is an admin. */
+export function isBotAdmin(platformName: string, botName: string): boolean {
+  const config = getConfig();
+  const platform = config.platforms[platformName];
+  if (!platform?.bots) return false;
+  return !!(platform.bots[botName] as BotConfig)?.admin;
+}
+
+/** Check if a bot name is admin on any platform. */
+export function isBotAdminAny(botName: string): boolean {
+  const config = getConfig();
+  for (const platform of Object.values(config.platforms)) {
+    if (platform.bots && (platform.bots[botName] as BotConfig)?.admin) return true;
+  }
+  return false;
+}
+
+/** Get the admin bot name for a platform, if any. */
+export function getAdminBotName(platformName: string): string | null {
+  const config = getConfig();
+  const platform = config.platforms[platformName];
+  if (!platform?.bots) return null;
+  for (const [name, bot] of Object.entries(platform.bots)) {
+    if ((bot as BotConfig).admin) return name;
+  }
+  return null;
+}
+
 /** Get the bot name a channel uses. */
 export function getChannelBotName(channelId: string): string {
   const config = getConfig();
@@ -189,6 +232,8 @@ function parsePermissionSpec(spec: string): { kind: string; tool?: string } {
 export function evaluateConfigPermissions(
   request: { kind: string; [key: string]: unknown },
   channelWorkingDirectory: string,
+  workspaceAllowPaths?: string[],
+  isAdmin?: boolean,
 ): 'allow' | 'deny' | null {
   const config = getConfig();
   const perms = config.permissions;
@@ -197,7 +242,8 @@ export function evaluateConfigPermissions(
   const kind = request.kind; // "shell", "read", "write", "mcp", "url", "custom-tool"
   const command = typeof request.fullCommandText === 'string' ? request.fullCommandText
     : typeof request.command === 'string' ? request.command : undefined;
-  const requestPath = typeof request.path === 'string' ? request.path : undefined;
+  const requestPath = typeof request.path === 'string' ? request.path
+    : typeof request.fileName === 'string' ? request.fileName : undefined;
   const serverName = typeof request.serverName === 'string' ? request.serverName : undefined;
   const toolName = typeof request.toolName === 'string' ? request.toolName : undefined;
   const url = typeof request.url === 'string' ? request.url : undefined;
@@ -223,6 +269,12 @@ export function evaluateConfigPermissions(
     }
   }
 
+  // Hard deny: 'launchctl unload' kills the bridge process before load can run.
+  // This must be before allow rules so it can't be overridden by config.
+  if (kind === 'shell' && shellCmd === 'launchctl' && command && /\bunload\b/.test(command)) {
+    return 'deny';
+  }
+
   // Check allow rules
   if (perms.allow) {
     for (const spec of perms.allow) {
@@ -233,14 +285,31 @@ export function evaluateConfigPermissions(
     }
   }
 
-  // Auto-allow reads within the channel's workspace directory
-  if (kind === 'read' && requestPath) {
+  // Admin bots get additional shell commands for workspace/config management
+  if (isAdmin && kind === 'shell' && shellCmd) {
+    const adminShellAllow = ['cp', 'mkdir', 'curl', 'launchctl', 'mv', 'touch', 'chmod'];
+    if (adminShellAllow.includes(shellCmd)) {
+      return 'allow';
+    }
+  }
+
+  // Auto-allow reads and writes within the workspace directory
+  if ((kind === 'read' || kind === 'write') && requestPath) {
     const resolved = path.resolve(requestPath);
     const workspace = path.resolve(channelWorkingDirectory);
     if (resolved.startsWith(workspace + path.sep) || resolved === workspace) {
       return 'allow';
     }
-    // Check extra allowPaths
+    // Check workspace-level allowPaths (from SQLite override)
+    if (workspaceAllowPaths) {
+      for (const p of workspaceAllowPaths) {
+        const allowed = path.resolve(p);
+        if (resolved.startsWith(allowed + path.sep) || resolved === allowed) {
+          return 'allow';
+        }
+      }
+    }
+    // Check config-level allowPaths
     if (perms.allowPaths) {
       for (const p of perms.allowPaths) {
         const allowed = path.resolve(p);
@@ -249,6 +318,13 @@ export function evaluateConfigPermissions(
         }
       }
     }
+  }
+
+  // If a read/write has a path that wasn't auto-allowed above, it's outside
+  // the workspace boundaries — defer to the interactive approval flow so the
+  // user can still approve one-off access via the messaging channel.
+  if ((kind === 'read' || kind === 'write') && requestPath) {
+    return null;
   }
 
   // Check URL permissions

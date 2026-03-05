@@ -2,6 +2,7 @@
 export interface BotConfig {
   token: string;
   agent?: string | null; // default agent for this bot identity
+  admin?: boolean;       // admin bots can manage all workspaces
 }
 
 // Platform configuration
