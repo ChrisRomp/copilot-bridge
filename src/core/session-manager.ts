@@ -155,12 +155,7 @@ function loadMcpServers(): Record<string, any> {
     }
   }
 
-  // Ensure all servers have a tools field (SDK requires it)
-  for (const [name, config] of Object.entries(servers)) {
-    if (!(config as any).tools) {
-      (config as any).tools = ['*'];
-    }
-  }
+  normalizeMcpServers(servers);
 
   const count = Object.keys(servers).length;
   if (count > 0) {
@@ -168,6 +163,40 @@ function loadMcpServers(): Record<string, any> {
   }
 
   return servers;
+}
+
+/** Ensure all MCP server entries have a tools field (SDK requires it). */
+function normalizeMcpServers(servers: Record<string, any>): void {
+  for (const config of Object.values(servers)) {
+    if (!config.tools) {
+      config.tools = ['*'];
+    }
+  }
+}
+
+/**
+ * Load workspace-specific MCP servers from <workspacePath>/mcp-config.json.
+ * Returns an empty object if no config exists.
+ */
+function loadWorkspaceMcpServers(workspacePath: string): Record<string, any> {
+  const configFile = path.join(workspacePath, 'mcp-config.json');
+  if (!fs.existsSync(configFile)) return {};
+
+  try {
+    const cfg = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    if (!cfg.mcpServers || typeof cfg.mcpServers !== 'object') return {};
+
+    const servers: Record<string, any> = {};
+    for (const [name, config] of Object.entries(cfg.mcpServers)) {
+      servers[name] = config;
+      log.debug(`Loaded workspace MCP "${name}" from ${configFile}`);
+    }
+    normalizeMcpServers(servers);
+    return servers;
+  } catch (err) {
+    log.warn(`Failed to parse workspace MCP config ${configFile}: ${err}`);
+    return {};
+  }
 }
 
 /**
@@ -229,7 +258,7 @@ export class SessionManager {
   private sessionChannels = new Map<string, string>(); // sessionId → channelId (reverse)
   private sessionUnsubscribes = new Map<string, () => void>(); // sessionId → unsubscribe fn
   private eventHandler: SessionEventHandler | null = null;
-  private mcpServers: Record<string, any>;
+  private mcpServers: Record<string, any>; // global (plugin + user) MCP servers
 
   // Pending permission requests (queue per channel to avoid overwrites)
   private pendingPermissions = new Map<string, PendingPermission[]>();
@@ -245,6 +274,16 @@ export class SessionManager {
   /** Register a handler for session events (streaming, tool calls, etc.) */
   onSessionEvent(handler: SessionEventHandler): void {
     this.eventHandler = handler;
+  }
+
+  /**
+   * Resolve MCP servers for a workspace: workspace config (highest priority)
+   * merged on top of global servers (plugin + user config).
+   */
+  private resolveMcpServers(workingDirectory: string): Record<string, any> {
+    const workspaceServers = loadWorkspaceMcpServers(workingDirectory);
+    if (Object.keys(workspaceServers).length === 0) return this.mcpServers;
+    return { ...this.mcpServers, ...workspaceServers };
   }
 
   /** Get or create a session for a channel. */
@@ -614,7 +653,7 @@ export class SessionManager {
         workingDirectory,
         configDir: defaultConfigDir,
         reasoningEffort: reasoningEffort ?? undefined,
-        mcpServers: this.mcpServers,
+        mcpServers: this.resolveMcpServers(workingDirectory),
         skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
         onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
         onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
@@ -646,7 +685,7 @@ export class SessionManager {
         configDir: defaultConfigDir,
         workingDirectory,
         reasoningEffort: reasoningEffort ?? undefined,
-        mcpServers: this.mcpServers,
+        mcpServers: this.resolveMcpServers(workingDirectory),
         skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
       })
     );

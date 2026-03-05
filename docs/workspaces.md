@@ -10,6 +10,7 @@ Workspaces are auto-created when the bridge starts and detects a bot without one
 ~/.copilot-bridge/workspaces/agent-name/
 ├── AGENTS.md        # Agent instructions (auto-generated from template, customizable)
 ├── MEMORY.md        # Persistent memory across sessions (managed by the agent)
+├── mcp-config.json  # Workspace-specific MCP servers (optional, overrides global)
 └── .env             # Environment variables loaded at session start
 ```
 
@@ -64,6 +65,36 @@ The agent template instructs bots to treat `.env` as **write-only**:
   grep -q '^APP_TOKEN=' .env 2>/dev/null || echo "APP_TOKEN=" >> .env
   ```
 - The user then fills in the actual secret value directly (not through chat)
+
+## MCP server configuration
+
+MCP (Model Context Protocol) servers are loaded in three layers, with later layers taking priority for servers with the same name:
+
+1. **Plugins** (`~/.copilot/installed-plugins/**/.mcp.json`) — lowest priority
+2. **User config** (`~/.copilot/mcp-config.json`) — overrides plugins
+3. **Workspace config** (`<workspace>/mcp-config.json`) — highest priority, per-bot
+
+The format matches the standard Copilot MCP config:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/path/to/server.js"],
+      "env": { "API_KEY": "..." }
+    }
+  }
+}
+```
+
+Non-conflicting server names from all layers are merged — a bot gets its workspace servers plus all global servers. If a workspace defines a server with the same name as a global one, the workspace version wins.
+
+Use cases:
+- Give an admin bot access to GitHub MCP while keeping coding bots sandboxed
+- Override global server settings (different args, env) per workspace
+- Add project-specific tools only where they're needed
 
 ## DM auto-discovery
 
