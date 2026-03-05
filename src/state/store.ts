@@ -101,7 +101,7 @@ export interface ChannelPrefs {
   model?: string;
   agent?: string | null;
   verbose: boolean;
-  triggerMode: string;
+
   threadedReplies: boolean;
   permissionMode: string;
   reasoningEffort?: string | null;
@@ -115,7 +115,7 @@ export function getChannelPrefs(channelId: string): ChannelPrefs | null {
     model: row.model,
     agent: row.agent,
     verbose: !!row.verbose,
-    triggerMode: row.trigger_mode,
+
     threadedReplies: !!row.threaded_replies,
     permissionMode: row.permission_mode,
     reasoningEffort: row.reasoning_effort ?? null,
@@ -133,7 +133,7 @@ export function setChannelPrefs(channelId: string, prefs: Partial<ChannelPrefs>)
     if (prefs.model !== undefined) { updates.push('model = ?'); values.push(prefs.model); }
     if (prefs.agent !== undefined) { updates.push('agent = ?'); values.push(prefs.agent); }
     if (prefs.verbose !== undefined) { updates.push('verbose = ?'); values.push(prefs.verbose ? 1 : 0); }
-    if (prefs.triggerMode !== undefined) { updates.push('trigger_mode = ?'); values.push(prefs.triggerMode); }
+
     if (prefs.threadedReplies !== undefined) { updates.push('threaded_replies = ?'); values.push(prefs.threadedReplies ? 1 : 0); }
     if (prefs.permissionMode !== undefined) { updates.push('permission_mode = ?'); values.push(prefs.permissionMode); }
     if (prefs.reasoningEffort !== undefined) { updates.push('reasoning_effort = ?'); values.push(prefs.reasoningEffort); }
@@ -145,14 +145,13 @@ export function setChannelPrefs(channelId: string, prefs: Partial<ChannelPrefs>)
     }
   } else {
     db.prepare(
-      `INSERT INTO channel_prefs (channel_id, model, agent, verbose, trigger_mode, threaded_replies, permission_mode, reasoning_effort)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO channel_prefs (channel_id, model, agent, verbose, threaded_replies, permission_mode, reasoning_effort)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run(
       channelId,
       prefs.model ?? null,
       prefs.agent ?? null,
       prefs.verbose ? 1 : 0,
-      prefs.triggerMode ?? 'mention',
       prefs.threadedReplies !== false ? 1 : 0,
       prefs.permissionMode ?? 'interactive',
       prefs.reasoningEffort ?? null,
