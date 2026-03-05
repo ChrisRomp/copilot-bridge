@@ -790,6 +790,11 @@ export class SessionManager {
 
     if (this.sendFileHandler) {
       const handler = this.sendFileHandler;
+      const config = getChannelConfig(channelId);
+      const botName = getChannelBotName(channelId);
+      const workDir = this.resolveWorkingDirectory(channelId);
+      const allowPaths = getWorkspaceAllowPaths(botName, config.platform);
+
       tools.push({
         name: 'send_file',
         description: 'Send a file or image from the workspace to the user in their chat channel. The file will appear as an inline image (for image types) or a downloadable attachment.',
@@ -803,6 +808,14 @@ export class SessionManager {
         },
         handler: async (args: { path: string; message?: string }) => {
           try {
+            // Validate the file path is within workspace or allowed paths
+            const resolved = path.resolve(args.path);
+            const allowed = [workDir, ...allowPaths];
+            const isAllowed = allowed.some(dir => resolved.startsWith(path.resolve(dir) + path.sep) || resolved === path.resolve(dir));
+            if (!isAllowed) {
+              log.warn(`send_file blocked: "${resolved}" is outside workspace for channel ${channelId.slice(0, 8)}...`);
+              return { content: 'File path is outside the allowed workspace. Only files within your workspace can be sent.' };
+            }
             await handler(channelId, args.path, args.message);
             return { content: `File sent: ${path.basename(args.path)}` };
           } catch (err: any) {

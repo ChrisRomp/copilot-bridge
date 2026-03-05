@@ -53,7 +53,12 @@ function formatAge(date: Date): string {
   return `${days}d ago`;
 }
 
-/** Download message attachments to .temp/ in the bot's workspace, returning SDK-compatible attachment objects. */
+/** Sanitize a filename to prevent path traversal — strips directory separators and .. sequences. */
+function sanitizeFilename(name: string): string {
+  return name.replace(/[/\\]/g, '_').replace(/\.\./g, '_');
+}
+
+/** Download message attachments to .temp/<channelId>/ in the bot's workspace, returning SDK-compatible attachment objects. */
 async function downloadAttachments(
   attachments: MessageAttachment[] | undefined,
   channelId: string,
@@ -63,12 +68,18 @@ async function downloadAttachments(
 
   const botName = getChannelBotName(channelId);
   const workspace = getWorkspacePath(botName);
-  const tempDir = path.join(workspace, '.temp');
+  const tempDir = path.join(workspace, '.temp', channelId);
 
   const results: Array<{ type: 'file'; path: string; displayName?: string }> = [];
   for (const att of attachments) {
     try {
-      const destPath = path.join(tempDir, `${att.id}-${att.name}`);
+      const safeName = sanitizeFilename(att.name);
+      const destPath = path.join(tempDir, `${att.id}-${safeName}`);
+      // Verify resolved path is still within tempDir
+      if (!path.resolve(destPath).startsWith(path.resolve(tempDir))) {
+        log.warn(`Attachment "${att.name}" resolved outside temp dir, skipping`);
+        continue;
+      }
       await adapter.downloadFile(att.id, destPath);
       results.push({ type: 'file', path: destPath, displayName: att.name });
       log.info(`Downloaded attachment "${att.name}" (${att.type}) for channel ${channelId.slice(0, 8)}...`);
@@ -79,11 +90,11 @@ async function downloadAttachments(
   return results;
 }
 
-/** Remove temp files for a channel's bot workspace. */
+/** Remove temp files for a specific channel's temp directory. */
 function cleanupTempFiles(channelId: string): void {
   try {
     const botName = getChannelBotName(channelId);
-    const tempDir = path.join(getWorkspacePath(botName), '.temp');
+    const tempDir = path.join(getWorkspacePath(botName), '.temp', channelId);
     if (!fs.existsSync(tempDir)) return;
 
     const files = fs.readdirSync(tempDir);
@@ -92,6 +103,8 @@ function cleanupTempFiles(channelId: string): void {
         fs.unlinkSync(path.join(tempDir, file));
       } catch { /* best effort */ }
     }
+    // Remove the now-empty channel temp directory
+    try { fs.rmdirSync(tempDir); } catch { /* best effort */ }
     if (files.length > 0) {
       log.info(`Cleaned up ${files.length} temp file(s) for ${channelId.slice(0, 8)}...`);
     }
