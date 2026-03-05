@@ -119,8 +119,8 @@ Mattermost Channel → copilot-bridge → @github/copilot-sdk → Copilot CLI
 | Command | Description |
 |---------|-------------|
 | `/new` | Start a fresh session |
-| `/model <name>` | Switch AI model (fuzzy match) |
-| `/models` | List available models |
+| `/model [name]` | List models or switch model (fuzzy match) |
+| `/context` | Show context window usage |
 | `/agent <name>` | Switch custom agent |
 | `/verbose` | Toggle tool call visibility |
 | `/status` | Show session info |

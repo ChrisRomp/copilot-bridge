@@ -266,12 +266,16 @@ async function handleInboundMessage(
   // Fetch MCP info for /mcp command
   const mcpInfo = parsed?.command === 'mcp' ? sessionManager.getMcpServerInfo(msg.channelId) : undefined;
 
+  // Get cached context usage for /context and /status
+  const contextUsage = sessionManager.getContextUsage(msg.channelId);
+
   const cmdResult = handleCommand(
     msg.channelId, text, sessionInfo ?? undefined,
     { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort },
     { workingDirectory: channelConfig.workingDirectory, bot: channelConfig.bot },
     models,
     mcpInfo,
+    contextUsage,
   );
 
   if (cmdResult.handled) {

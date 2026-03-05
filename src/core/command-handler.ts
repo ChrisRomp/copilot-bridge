@@ -15,6 +15,7 @@ function parseBool(input: string, fallback: boolean): boolean {
 export interface ModelInfo {
   id: string;
   name: string;
+  billing?: { multiplier: number };
   supportedReasoningEfforts?: string[];
   defaultReasoningEffort?: string;
 }
@@ -82,6 +83,18 @@ function pickBestMatch(input: string, candidates: ModelInfo[]): ModelInfo {
   })[0];
 }
 
+/** Format a token count as a human-readable string (e.g., 109000 → "109k"). */
+function formatTokens(n: number): string {
+  if (n >= 1000) return `${Math.round(n / 1000)}k`;
+  return String(n);
+}
+
+/** Format context usage as a one-line summary. */
+function formatContextUsage(usage: { currentTokens: number; tokenLimit: number }): string {
+  const pct = Math.round((usage.currentTokens / usage.tokenLimit) * 100);
+  return `${formatTokens(usage.currentTokens)}/${formatTokens(usage.tokenLimit)} tokens (${pct}%)`;
+}
+
 export function parseCommand(text: string): { command: string; args: string } | null {
   const trimmed = text.trim();
   if (!trimmed.startsWith('/')) return null;
@@ -98,7 +111,7 @@ export interface McpServerInfo {
   source: 'global' | 'workspace' | 'workspace (override)';
 }
 
-export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[]): CommandResult {
+export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[], contextUsage?: { currentTokens: number; tokenLimit: number } | null): CommandResult {
   const parsed = parseCommand(text);
   if (!parsed) return { handled: false };
 
@@ -122,12 +135,30 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       return { handled: true, action: 'resume_session', payload: parsed.args.trim(), response: '🔄 Resuming session...' };
     }
 
-    case 'model': {
+    case 'model':
+    case 'models': {
       if (!parsed.args) {
-        return { handled: true, response: '⚠️ Usage: `/model <model-name>`\nExample: `/model claude-sonnet-4.6`' };
+        // No args: show model table
+        if (!models || models.length === 0) {
+          return { handled: true, response: '⚠️ Model list not available.' };
+        }
+        const lines = [
+          '**Available Models**',
+          '',
+          '| Model | Billing | |',
+          '|:------|--------:|:--|',
+        ];
+        for (const m of models) {
+          const current = sessionInfo?.model === m.id ? ' ← current' : '';
+          const reasoning = m.supportedReasoningEfforts?.length ? ' 🧠' : '';
+          const billing = m.billing ? `${m.billing.multiplier}x` : '—';
+          lines.push(`| \`${m.id}\` | ${billing} |${reasoning}${current} |`);
+        }
+        lines.push('', '🧠 = supports reasoning effort · Billing = premium request multiplier');
+        lines.push('↳ Use `/model <name>` to switch');
+        return { handled: true, response: lines.join('\n') };
       }
       if (!models || models.length === 0) {
-        // No model list available — pass through raw (best effort)
         return { handled: true, action: 'switch_model', payload: parsed.args, response: `🔄 Switching model to **${parsed.args}**...` };
       }
       const result = resolveModel(parsed.args, models);
@@ -140,19 +171,6 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         response += `\n↳ Also matched: ${altList}`;
       }
       return { handled: true, action: 'switch_model', payload: result.model.id, response };
-    }
-
-    case 'models': {
-      if (!models || models.length === 0) {
-        return { handled: true, response: '⚠️ Model list not available.' };
-      }
-      const lines = ['**Available Models**', ''];
-      for (const m of models) {
-        const current = sessionInfo?.model === m.id ? ' ← current' : '';
-        const reasoning = m.supportedReasoningEfforts?.length ? ` 🧠` : '';
-        lines.push(`• \`${m.id}\` — ${m.name}${reasoning}${current}`);
-      }
-      return { handled: true, response: lines.join('\n') };
     }
 
     case 'agent': {
@@ -218,7 +236,17 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         const current = effectivePrefs?.reasoningEffort ?? currentModelInfo.defaultReasoningEffort ?? 'default';
         lines.push(`• Reasoning effort: 🧠 **${current}** (supports: ${currentModelInfo.supportedReasoningEfforts.join(', ')})`);
       }
+      if (contextUsage) {
+        lines.push(`• Context: ${formatContextUsage(contextUsage)}`);
+      }
       return { handled: true, response: lines.join('\n') };
+    }
+
+    case 'context': {
+      if (!contextUsage) {
+        return { handled: true, response: '📊 Context usage not available yet. Send a message first.' };
+      }
+      return { handled: true, response: `📊 **Context:** ${formatContextUsage(contextUsage)}` };
     }
 
     case 'approve':
@@ -279,10 +307,10 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/new` — Start a new session',
           '`/reload` — Reload current session (re-reads AGENTS.md, config)',
           '`/resume [id]` — Resume current session (or a past one by ID)',
-          '`/model <name>` — Switch AI model (fuzzy match supported)',
-          '`/models` — List available models',
+          '`/model [name]` — List models or switch model (fuzzy match)',
           '`/agent <name>` — Switch custom agent (empty to deselect)',
           '`/reasoning <level>` — Set reasoning effort (low/medium/high/xhigh)',
+          '`/context` — Show context window usage',
           '`/verbose` — Toggle tool call visibility',
           '`/status` — Show session info',
           '`/approve` — Approve pending permission',

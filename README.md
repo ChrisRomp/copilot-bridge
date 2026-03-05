@@ -53,8 +53,8 @@ Update and restart: `./scripts/deploy.sh`
 | `/new` | Start a fresh session |
 | `/reload` | Reload session (re-reads AGENTS.md, config, MCP servers) |
 | `/resume [id]` | List past sessions, or resume one by ID |
-| `/model <name>` | Switch AI model (fuzzy match supported) |
-| `/models` | List available models |
+| `/model [name]` | List models or switch model (fuzzy match) |
+| `/context` | Show context window usage |
 | `/agent <name>` | Switch custom agent (empty to deselect) |
 | `/reasoning <level>` | Set reasoning effort (`low`/`medium`/`high`/`xhigh`) |
 | `/verbose` | Toggle tool call visibility |

@@ -291,6 +291,8 @@ export class SessionManager {
   private pendingPermissions = new Map<string, PendingPermission[]>();
   // Pending user input requests (queue per channel to avoid overwrites)
   private pendingUserInput = new Map<string, PendingUserInput[]>();
+  // Cached context usage from session.usage_info events
+  private contextUsage = new Map<string, { currentTokens: number; tokenLimit: number }>();
 
   constructor(bridge: CopilotBridge) {
     this.bridge = bridge;
@@ -676,6 +678,11 @@ export class SessionManager {
     return { sessionId, model: prefs.model, agent: prefs.agent ?? null };
   }
 
+  /** Get cached context window usage for a channel. */
+  getContextUsage(channelId: string): { currentTokens: number; tokenLimit: number } | null {
+    return this.contextUsage.get(channelId) ?? null;
+  }
+
   /** List past sessions for this channel's working directory. */
   async listChannelSessions(channelId: string): Promise<Array<{ sessionId: string; startTime: Date; modifiedTime: Date; summary?: string; isCurrent: boolean }>> {
     const workingDirectory = this.resolveWorkingDirectory(channelId);
@@ -763,6 +770,12 @@ export class SessionManager {
 
   private attachSessionEvents(session: CopilotSession, channelId: string): void {
     const unsub = session.on((event: any) => {
+      if (event.type === 'session.usage_info' && event.data) {
+        this.contextUsage.set(channelId, {
+          currentTokens: event.data.currentTokens,
+          tokenLimit: event.data.tokenLimit,
+        });
+      }
       this.eventHandler?.(session.sessionId, channelId, event);
     });
     this.sessionUnsubscribes.set(session.sessionId, unsub);
