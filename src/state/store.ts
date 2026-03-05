@@ -7,6 +7,33 @@ const DB_PATH = path.join(os.homedir(), '.copilot-bridge', 'state.db');
 
 let _db: Database.Database | null = null;
 
+/** Migrate channel_prefs: drop NOT NULL on columns that should be nullable. */
+function migrateChannelPrefsNullable(db: Database.Database): void {
+  // Check if migration is needed by inspecting column info
+  const cols = db.prepare("PRAGMA table_info('channel_prefs')").all() as any[];
+  const needsMigration = cols.some(
+    (c: any) => ['verbose', 'trigger_mode', 'threaded_replies', 'permission_mode'].includes(c.name) && c.notnull === 1
+  );
+  if (!needsMigration) return;
+
+  db.exec(`
+    CREATE TABLE channel_prefs_new (
+      channel_id TEXT PRIMARY KEY,
+      model TEXT,
+      agent TEXT,
+      verbose INTEGER,
+      trigger_mode TEXT,
+      threaded_replies INTEGER,
+      permission_mode TEXT,
+      reasoning_effort TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    INSERT INTO channel_prefs_new SELECT * FROM channel_prefs;
+    DROP TABLE channel_prefs;
+    ALTER TABLE channel_prefs_new RENAME TO channel_prefs;
+  `);
+}
+
 function getDb(): Database.Database {
   if (_db) return _db;
 
@@ -58,6 +85,9 @@ function getDb(): Database.Database {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+
+  // Migration: ensure channel_prefs columns are nullable (fixes NOT NULL constraints from older schema)
+  migrateChannelPrefsNullable(_db);
 
   // Schema migrations for existing DBs
   try {
