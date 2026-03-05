@@ -286,6 +286,33 @@ export class SessionManager {
     return { ...this.mcpServers, ...workspaceServers };
   }
 
+  /** Get annotated MCP server info for a channel, showing which layer each server came from. */
+  getMcpServerInfo(channelId: string): Array<{ name: string; source: 'global' | 'workspace' | 'workspace (override)' }> {
+    const workingDirectory = this.resolveWorkingDirectory(channelId);
+    const workspaceServers = loadWorkspaceMcpServers(workingDirectory);
+    const globalNames = new Set(Object.keys(this.mcpServers));
+
+    const result: Array<{ name: string; source: 'global' | 'workspace' | 'workspace (override)' }> = [];
+
+    // Global servers (not overridden by workspace)
+    for (const name of globalNames) {
+      if (name in workspaceServers) {
+        result.push({ name, source: 'workspace (override)' });
+      } else {
+        result.push({ name, source: 'global' });
+      }
+    }
+
+    // Workspace-only servers (not in global)
+    for (const name of Object.keys(workspaceServers)) {
+      if (!globalNames.has(name)) {
+        result.push({ name, source: 'workspace' });
+      }
+    }
+
+    return result.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   /** Get or create a session for a channel. */
   async ensureSession(channelId: string): Promise<{ sessionId: string; isNew: boolean }> {
     // Check in-memory cache first

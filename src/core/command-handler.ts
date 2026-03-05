@@ -93,7 +93,12 @@ export function parseCommand(text: string): { command: string; args: string } | 
   };
 }
 
-export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[]): CommandResult {
+export interface McpServerInfo {
+  name: string;
+  source: 'global' | 'workspace' | 'workspace (override)';
+}
+
+export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[]): CommandResult {
   const parsed = parseCommand(text);
   if (!parsed) return { handled: false };
 
@@ -239,6 +244,33 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
     case 'remember':
       return { handled: true, action: 'remember', response: '💾 Permission rule saved.' };
 
+    case 'mcp': {
+      if (!mcpInfo || mcpInfo.length === 0) {
+        return { handled: true, response: '🔌 No MCP servers configured.' };
+      }
+      const globalServers = mcpInfo.filter(s => s.source === 'global');
+      const workspaceServers = mcpInfo.filter(s => s.source === 'workspace');
+      const overrideServers = mcpInfo.filter(s => s.source === 'workspace (override)');
+      const lines = ['🔌 **MCP Servers**', ''];
+      if (globalServers.length > 0) {
+        lines.push('**Global** (plugin + user config)');
+        for (const s of globalServers) lines.push(`• \`${s.name}\``);
+        lines.push('');
+      }
+      if (workspaceServers.length > 0) {
+        lines.push('**Workspace**');
+        for (const s of workspaceServers) lines.push(`• \`${s.name}\``);
+        lines.push('');
+      }
+      if (overrideServers.length > 0) {
+        lines.push('**Workspace (overriding global)**');
+        for (const s of overrideServers) lines.push(`• \`${s.name}\``);
+        lines.push('');
+      }
+      lines.push(`Total: ${mcpInfo.length} server(s)`);
+      return { handled: true, response: lines.join('\n') };
+    }
+
     case 'help':
       return {
         handled: true,
@@ -256,6 +288,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/approve` — Approve pending permission',
           '`/deny` — Deny pending permission',
           '`/autopilot` — Toggle auto-approve mode',
+          '`/mcp` — Show MCP servers and their source',
           '`/help` — Show this help',
         ].join('\n'),
       };
