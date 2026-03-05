@@ -93,6 +93,11 @@ function getDb(): Database.Database {
       allow_paths TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
 
   // Migration: ensure channel_prefs columns are nullable (fixes NOT NULL constraints from older schema)
@@ -313,6 +318,22 @@ export function listWorkspaceOverrides(): WorkspaceOverride[] {
     allowPaths: safeParseAllowPaths(row.allow_paths),
     createdAt: row.created_at,
   }));
+}
+
+// --- Global Settings ---
+
+export function getGlobalSetting(key: string): string | null {
+  const db = getDb();
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setGlobalSetting(key: string, value: string): void {
+  const db = getDb();
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run(key, value);
 }
 
 // --- Cleanup ---

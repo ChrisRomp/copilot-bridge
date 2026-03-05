@@ -1,4 +1,4 @@
-import { setChannelPrefs, getChannelPrefs } from '../state/store.js';
+import { setChannelPrefs, getChannelPrefs, getGlobalSetting, setGlobalSetting } from '../state/store.js';
 
 const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 const TRUTHY = new Set(['on', 'true', 'yes', '1', 'enable', 'enabled']);
@@ -10,6 +10,21 @@ function parseBool(input: string, fallback: boolean): boolean {
   if (TRUTHY.has(v)) return true;
   if (FALSY.has(v)) return false;
   return fallback;
+}
+
+/** Check if a model should be hidden in streamer mode. */
+function isHiddenModel(model: ModelInfo): boolean {
+  return /\(preview\)|\(internal/i.test(model.name);
+}
+
+/** Get the redacted display name for a hidden model. */
+function redactedModelLabel(index: number): string {
+  return `Hidden Model ${index}`;
+}
+
+/** Check if streamer mode is currently enabled. */
+function isStreamerMode(): boolean {
+  return getGlobalSetting('streamer_mode') === '1';
 }
 
 export interface ModelInfo {
@@ -24,7 +39,7 @@ export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'reload_session' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'set_reasoning';
+           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'set_reasoning' | 'toggle_streamer';
   payload?: any;
 }
 
@@ -145,6 +160,8 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         if (!models || models.length === 0) {
           return { handled: true, response: '⚠️ Model list not available.' };
         }
+        const streamer = isStreamerMode();
+        let hiddenIndex = 0;
         const lines = [
           '**Available Models**',
           '',
@@ -155,7 +172,9 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           const current = sessionInfo?.model === m.id ? ' ← current' : '';
           const reasoning = m.supportedReasoningEfforts?.length ? ' 🧠' : '';
           const billing = m.billing ? `${m.billing.multiplier}x` : '—';
-          lines.push(`| \`${m.id}\` | ${billing} |${reasoning}${current} |`);
+          const hidden = streamer && isHiddenModel(m);
+          const displayName = hidden ? redactedModelLabel(++hiddenIndex) : `\`${m.id}\``;
+          lines.push(`| ${displayName} | ${billing} |${reasoning}${current} |`);
         }
         lines.push('', '🧠 = supports reasoning effort · Billing = premium request multiplier');
         lines.push('↳ Use `/model <name>` to switch');
@@ -168,10 +187,16 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       if ('error' in result) {
         return { handled: true, response: result.error };
       }
-      let response = `✅ Switched to **${result.model.name}** (\`${result.model.id}\`)`;
+      const streamerSwitch = isStreamerMode();
+      const switchName = (streamerSwitch && isHiddenModel(result.model))
+        ? 'a hidden model'
+        : `**${result.model.name}** (\`${result.model.id}\`)`;
+      let response = `✅ Switched to ${switchName}`;
       if (result.alternatives.length > 0) {
-        const altList = result.alternatives.map(m => `\`${m.id}\` (${m.name})`).join(', ');
-        response += `\n↳ Also matched: ${altList}`;
+        const altList = result.alternatives
+          .filter(m => !(streamerSwitch && isHiddenModel(m)))
+          .map(m => `\`${m.id}\` (${m.name})`).join(', ');
+        if (altList) response += `\n↳ Also matched: ${altList}`;
       }
       return { handled: true, action: 'switch_model', payload: result.model.id, response };
     }
@@ -208,7 +233,10 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         return { handled: true, response: `⚠️ Invalid reasoning effort. Valid values: \`low\`, \`medium\`, \`high\`, \`xhigh\`` };
       }
       if (currentModelInfo && currentModelInfo.supportedReasoningEfforts && !currentModelInfo.supportedReasoningEfforts.includes(level)) {
-        return { handled: true, response: `⚠️ Model **${sessionInfo?.model ?? 'unknown'}** does not support reasoning effort.\nSupported models include Opus and other reasoning-capable models.` };
+        const reasoningModelName = (isStreamerMode() && isHiddenModel(currentModelInfo))
+          ? 'the current model'
+          : `**${sessionInfo?.model ?? 'unknown'}**`;
+        return { handled: true, response: `⚠️ Model ${reasoningModelName} does not support reasoning effort.\nSupported models include Opus and other reasoning-capable models.` };
       }
       setChannelPrefs(channelId, { reasoningEffort: level });
       return {
@@ -224,10 +252,14 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         return { handled: true, response: '📊 No active session for this channel.' };
       }
       const prefs = getChannelPrefs(channelId);
+      const streamerStatus = isStreamerMode();
+      const modelDisplay = (streamerStatus && currentModelInfo && isHiddenModel(currentModelInfo))
+        ? 'Hidden Model'
+        : sessionInfo.model;
       const lines = [
         '📊 **Session Status**',
         `• Session: \`${sessionInfo.sessionId.slice(0, 8)}...\``,
-        `• Model: **${sessionInfo.model}**`,
+        `• Model: **${modelDisplay}**`,
         `• Agent: ${sessionInfo.agent ? `**${sessionInfo.agent}**` : 'Default (Copilot)'}`,
         `• Workspace: \`${channelMeta?.workingDirectory ?? 'unknown'}\``,
         `• Bot: ${channelMeta?.bot ? `@${channelMeta.bot}` : 'default'}`,
@@ -302,6 +334,19 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       return { handled: true, response: lines.join('\n') };
     }
 
+    case 'streamer-mode':
+    case 'on-air': {
+      const current = isStreamerMode();
+      const newValue = parsed.args ? parseBool(parsed.args, !current) : !current;
+      setGlobalSetting('streamer_mode', newValue ? '1' : '0');
+      return {
+        handled: true,
+        response: newValue
+          ? '📺 **Streamer mode enabled** — preview and internal models are hidden.'
+          : '📺 **Streamer mode disabled** — all models visible.',
+      };
+    }
+
     case 'help':
       return {
         handled: true,
@@ -319,6 +364,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/approve` — Approve pending permission',
           '`/deny` — Deny pending permission',
           '`/autopilot` — Toggle auto-approve mode',
+          '`/streamer-mode [on|off]` — Toggle streamer mode (hides preview/internal models)',
           '`/mcp` — Show MCP servers and their source',
           '`/help` — Show this help',
         ].join('\n'),
