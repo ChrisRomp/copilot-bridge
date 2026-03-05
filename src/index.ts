@@ -357,14 +357,22 @@ async function handleInboundMessage(
       }
       case 'switch_model': {
         const ackId = await adapter.sendMessage(msg.channelId, '⏳ Switching model...', { threadRootId: threadRoot });
-        await sessionManager.switchModel(msg.channelId, cmdResult.payload);
-        await adapter.updateMessage(msg.channelId, ackId, cmdResult.response ?? '✅ Model switched.');
+        try {
+          await sessionManager.switchModel(msg.channelId, cmdResult.payload);
+          await adapter.updateMessage(msg.channelId, ackId, cmdResult.response ?? '✅ Model switched.');
+        } catch (err: any) {
+          await adapter.updateMessage(msg.channelId, ackId, `❌ Failed to switch model: ${err?.message ?? 'unknown error'}`);
+        }
         break;
       }
       case 'switch_agent': {
         const ackId = await adapter.sendMessage(msg.channelId, '⏳ Switching agent...', { threadRootId: threadRoot });
-        await sessionManager.switchAgent(msg.channelId, cmdResult.payload);
-        await adapter.updateMessage(msg.channelId, ackId, cmdResult.response ?? '✅ Agent switched.');
+        try {
+          await sessionManager.switchAgent(msg.channelId, cmdResult.payload);
+          await adapter.updateMessage(msg.channelId, ackId, cmdResult.response ?? '✅ Agent switched.');
+        } catch (err: any) {
+          await adapter.updateMessage(msg.channelId, ackId, `❌ Failed to switch agent: ${err?.message ?? 'unknown error'}`);
+        }
         break;
       }
       case 'approve':
