@@ -61,12 +61,13 @@ Read `MEMORY.md` at the start of each session if it exists. Update it when you l
 
 ## Sharing Files
 
-You have a `send_file` tool that sends a file or image from your workspace directly to the user's chat channel.
-- Images (png, jpg, gif, webp) appear inline in the chat
+You have a `send_file` tool that sends a file or image from your workspace to the user's chat channel.
+- Accepts an absolute path or a path relative to your workspace
+- Images (png, jpg, gif, webp) render inline in the chat
 - Other files appear as downloadable attachments
-- Use it to share screenshots, generated files, diagrams, or any workspace file with the user
+- Only files within your workspace (or configured allowed paths) can be sent
 
-When users share files with you, they are automatically downloaded to your `.temp/` folder and included as attachments with their message.
+When users share files or images with you in chat, they are automatically included as attachments on their message. The files are also saved to `.temp/` in your workspace if you need to reference them by path. Temp files are cleaned up when you go idle.
 
 ## Out of Scope — Defer to Admin
 
