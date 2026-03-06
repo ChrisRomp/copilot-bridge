@@ -165,6 +165,7 @@ export function getChannelBotToken(channelId: string): string {
   if (!channel) throw new Error(`No config found for channel "${channelId}"`);
 
   const platform = config.platforms[channel.platform];
+  if (!platform) throw new Error(`Channel "${channelId}" references unknown platform "${channel.platform}"`);
   if (channel.bot && platform.bots?.[channel.bot]) {
     return platform.bots[channel.bot].token;
   }
@@ -188,6 +189,7 @@ export function getChannelBotConfig(channelId: string): BotConfig | null {
 
   if (!channel) return null;
   const platform = config.platforms[channel.platform];
+  if (!platform) return null;
   if (channel.bot && platform.bots?.[channel.bot]) {
     return platform.bots[channel.bot];
   }
@@ -255,7 +257,7 @@ export function getChannelBotName(channelId: string): string {
   if (!channel) return 'default';
   if (channel.bot) return channel.bot;
   const platform = config.platforms[channel.platform];
-  if (platform.bots) return Object.keys(platform.bots)[0] ?? 'default';
+  if (platform?.bots) return Object.keys(platform.bots)[0] ?? 'default';
   return 'default';
 }
 

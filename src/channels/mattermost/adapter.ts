@@ -325,8 +325,9 @@ export class MattermostAdapter implements ChannelAdapter {
         type: channel.type,
         teamId: channel.team_id,
       };
-    } catch {
-      return null;
+    } catch (err: any) {
+      if (err?.status_code === 404) return null;
+      throw err;
     }
   }
 
