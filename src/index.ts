@@ -7,6 +7,7 @@ import { WorkspaceWatcher, initWorkspace, getWorkspacePath } from './core/worksp
 import { MattermostAdapter } from './channels/mattermost/adapter.js';
 import { StreamingHandler } from './channels/mattermost/streaming.js';
 import { getChannelPrefs, getAllChannelSessions, closeDb } from './state/store.js';
+import { extractThreadRequest, resolveThreadRoot } from './core/thread-utils.js';
 import { createLogger } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -323,6 +324,13 @@ async function handleInboundMessage(
 
   if (!text) return;
 
+  // Detect dynamic thread request (🧵 or "reply in thread") and strip from text
+  const threadExtract = extractThreadRequest(text);
+  text = threadExtract.text;
+  const threadRequested = threadExtract.threadRequested;
+
+  if (!text) return;
+
   // Check for slash commands
   const sessionInfo = sessionManager.getSessionInfo(msg.channelId);
   const effPrefs = sessionManager.getEffectivePrefs(msg.channelId);
@@ -354,7 +362,7 @@ async function handleInboundMessage(
   );
 
   if (cmdResult.handled) {
-    const threadRoot = channelConfig.threadedReplies ? (msg.threadRootId ?? msg.postId) : undefined;
+    const threadRoot = resolveThreadRoot(msg, threadRequested, channelConfig);
 
     // Send response before action, except for actions that send their own ack after completing
     const deferResponse = cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent';
@@ -500,7 +508,7 @@ async function handleInboundMessage(
       activeStreams.delete(msg.channelId);
     }
 
-    const threadRoot = channelConfig.threadedReplies ? (msg.threadRootId ?? msg.postId) : undefined;
+    const threadRoot = resolveThreadRoot(msg, threadRequested, channelConfig);
     initialStreamPosted.add(msg.channelId);
     const streamKey = await streaming.startStream(msg.channelId, threadRoot);
     activeStreams.set(msg.channelId, streamKey);
