@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig } from './types.js';
+import { getDynamicChannel } from './state/store.js';
 
 let _config: AppConfig | null = null;
 
@@ -82,7 +83,28 @@ export function getConfig(): AppConfig {
 
 export function getChannelConfig(channelId: string): ChannelConfig & { permissionMode: string } {
   const config = getConfig();
-  const channel = config.channels.find(c => c.id === channelId);
+  let channel = config.channels.find(c => c.id === channelId);
+
+  // Fall back to dynamic channels from SQLite
+  if (!channel) {
+    const dyn = getDynamicChannel(channelId);
+    if (dyn) {
+      channel = {
+        id: dyn.channelId,
+        platform: dyn.platform,
+        name: dyn.name,
+        workingDirectory: dyn.workingDirectory,
+        bot: dyn.bot,
+        agent: dyn.agent,
+        model: dyn.model,
+        triggerMode: dyn.triggerMode ?? config.defaults.triggerMode,
+        threadedReplies: dyn.threadedReplies ?? config.defaults.threadedReplies,
+        verbose: dyn.verbose ?? config.defaults.verbose,
+        isDM: dyn.isDM,
+      };
+    }
+  }
+
   if (!channel) throw new Error(`No config found for channel "${channelId}"`);
   
   // Resolve agent: channel-level overrides bot-level default
@@ -102,10 +124,11 @@ export function getChannelConfig(channelId: string): ChannelConfig & { permissio
   };
 }
 
-/** Check if a channel ID is in our configured channels list */
+/** Check if a channel ID is in our configured channels list (static or dynamic) */
 export function isConfiguredChannel(channelId: string): boolean {
   const config = getConfig();
-  return config.channels.some(c => c.id === channelId);
+  if (config.channels.some(c => c.id === channelId)) return true;
+  return getDynamicChannel(channelId) !== null;
 }
 
 /**
@@ -131,15 +154,22 @@ export function markChannelAsDM(channelId: string): void {
  */
 export function getChannelBotToken(channelId: string): string {
   const config = getConfig();
-  const channel = config.channels.find(c => c.id === channelId);
+  let channel: { platform: string; bot?: string } | undefined = config.channels.find(c => c.id === channelId);
+
+  // Fall back to dynamic channels
+  if (!channel) {
+    const dyn = getDynamicChannel(channelId);
+    if (dyn) channel = { platform: dyn.platform, bot: dyn.bot };
+  }
+
   if (!channel) throw new Error(`No config found for channel "${channelId}"`);
 
   const platform = config.platforms[channel.platform];
+  if (!platform) throw new Error(`Channel "${channelId}" references unknown platform "${channel.platform}"`);
   if (channel.bot && platform.bots?.[channel.bot]) {
     return platform.bots[channel.bot].token;
   }
   if (platform.botToken) return platform.botToken;
-  // Multi-bot without channel.bot specified: use first bot
   if (platform.bots) {
     const first = Object.values(platform.bots)[0];
     if (first) return first.token;
@@ -150,9 +180,16 @@ export function getChannelBotToken(channelId: string): string {
 /** Get the BotConfig for a channel (if multi-bot). */
 export function getChannelBotConfig(channelId: string): BotConfig | null {
   const config = getConfig();
-  const channel = config.channels.find(c => c.id === channelId);
+  let channel: { platform: string; bot?: string } | undefined = config.channels.find(c => c.id === channelId);
+
+  if (!channel) {
+    const dyn = getDynamicChannel(channelId);
+    if (dyn) channel = { platform: dyn.platform, bot: dyn.bot };
+  }
+
   if (!channel) return null;
   const platform = config.platforms[channel.platform];
+  if (!platform) return null;
   if (channel.bot && platform.bots?.[channel.bot]) {
     return platform.bots[channel.bot];
   }
@@ -210,11 +247,17 @@ export function getAdminBotName(platformName: string): string | null {
 /** Get the bot name a channel uses. */
 export function getChannelBotName(channelId: string): string {
   const config = getConfig();
-  const channel = config.channels.find(c => c.id === channelId);
+  let channel: { platform: string; bot?: string } | undefined = config.channels.find(c => c.id === channelId);
+
+  if (!channel) {
+    const dyn = getDynamicChannel(channelId);
+    if (dyn) channel = { platform: dyn.platform, bot: dyn.bot };
+  }
+
   if (!channel) return 'default';
   if (channel.bot) return channel.bot;
   const platform = config.platforms[channel.platform];
-  if (platform.bots) return Object.keys(platform.bots)[0] ?? 'default';
+  if (platform?.bots) return Object.keys(platform.bots)[0] ?? 'default';
   return 'default';
 }
 

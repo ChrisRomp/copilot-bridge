@@ -89,6 +89,28 @@ export interface SendOpts {
   threadRootId?: string;
 }
 
+// Admin operations for channel/team management (optional — not all platforms support these)
+export interface CreateChannelOpts {
+  name: string;
+  displayName: string;
+  private: boolean;
+  teamId: string;
+}
+
+export interface TeamInfo {
+  id: string;
+  name: string;
+  displayName: string;
+}
+
+export interface ChannelInfo {
+  id: string;
+  name: string;
+  displayName: string;
+  type: string;
+  teamId: string;
+}
+
 // Channel adapter interface
 export interface ChannelAdapter {
   readonly platform: string;
@@ -106,6 +128,11 @@ export interface ChannelAdapter {
   downloadFile(fileId: string, destPath: string): Promise<string>;
   /** Upload a local file and send it as a message in a channel. Returns the post ID. */
   sendFile(channelId: string, filePath: string, message?: string, opts?: SendOpts): Promise<string>;
+  // Optional admin operations — adapters that don't support these omit them
+  createChannel?(opts: CreateChannelOpts): Promise<string>;
+  addUserToChannel?(channelId: string, userId: string): Promise<void>;
+  getTeams?(): Promise<TeamInfo[]>;
+  getChannelByName?(teamId: string, name: string): Promise<ChannelInfo | null>;
 }
 
 // Session state tracked per channel

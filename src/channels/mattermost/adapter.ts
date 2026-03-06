@@ -3,7 +3,7 @@ import WebSocket from 'ws';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../../logger.js';
-import type { ChannelAdapter, InboundMessage, InboundReaction, SendOpts, MessageAttachment } from '../../types.js';
+import type { ChannelAdapter, InboundMessage, InboundReaction, SendOpts, MessageAttachment, CreateChannelOpts, TeamInfo, ChannelInfo } from '../../types.js';
 
 const log = createLogger('mattermost');
 
@@ -266,6 +266,69 @@ export class MattermostAdapter implements ChannelAdapter {
 
     log.info(`Sent file "${fileName}" to channel ${channelId.slice(0, 8)}...`);
     return post.id;
+  }
+
+  // --- Admin operations ---
+
+  async createChannel(opts: CreateChannelOpts): Promise<string> {
+    const channel = await this.client.createChannel({
+      team_id: opts.teamId,
+      name: opts.name,
+      display_name: opts.displayName,
+      type: opts.private ? 'P' : 'O',
+    } as any);
+    log.info(`Created ${opts.private ? 'private' : 'public'} channel "${opts.name}" (${channel.id})`);
+    return channel.id;
+  }
+
+  async addUserToChannel(channelId: string, userId: string): Promise<void> {
+    try {
+      await this.client.addToChannel(userId, channelId);
+    } catch (err: any) {
+      // If user isn't on the team, add them to the team first
+      if (err?.server_error_id === 'app.team.get_member.missing.app_error') {
+        const baseUrl = this.client.getBaseRoute();
+        // Get the channel's team ID
+        const chResp = await fetch(`${baseUrl}/channels/${channelId}`, {
+          headers: { 'Authorization': `Bearer ${this.token}` },
+        });
+        if (!chResp.ok) throw new Error(`Failed to get channel info: ${chResp.status}`);
+        const chData = await chResp.json() as { team_id: string };
+        // Add user to team
+        await this.client.addToTeam(chData.team_id, userId);
+        log.info(`Added user ${userId} to team ${chData.team_id}`);
+        // Retry adding to channel
+        await this.client.addToChannel(userId, channelId);
+      } else {
+        throw err;
+      }
+    }
+    log.info(`Added user ${userId} to channel ${channelId.slice(0, 8)}...`);
+  }
+
+  async getTeams(): Promise<TeamInfo[]> {
+    const teams = await this.client.getMyTeams();
+    return teams.map((t: any) => ({
+      id: t.id,
+      name: t.name,
+      displayName: t.display_name,
+    }));
+  }
+
+  async getChannelByName(teamId: string, name: string): Promise<ChannelInfo | null> {
+    try {
+      const channel = await this.client.getChannelByName(teamId, name);
+      return {
+        id: channel.id,
+        name: channel.name,
+        displayName: channel.display_name,
+        type: channel.type,
+        teamId: channel.team_id,
+      };
+    } catch (err: any) {
+      if (err?.status_code === 404) return null;
+      throw err;
+    }
   }
 
   private handleReaction(msg: any): void {

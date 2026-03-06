@@ -113,6 +113,22 @@ function getDb(): Database.Database {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS dynamic_channels (
+      channel_id TEXT PRIMARY KEY,
+      platform TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      bot TEXT,
+      working_directory TEXT NOT NULL,
+      agent TEXT,
+      model TEXT,
+      trigger_mode TEXT,
+      threaded_replies INTEGER,
+      verbose INTEGER,
+      is_dm INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   // Migration: ensure channel_prefs columns are nullable (fixes NOT NULL constraints from older schema)
@@ -349,6 +365,86 @@ export function setGlobalSetting(key: string, value: string): void {
     `INSERT INTO settings (key, value) VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`
   ).run(key, value);
+}
+
+// --- Dynamic Channels ---
+
+export interface DynamicChannel {
+  channelId: string;
+  platform: string;
+  name: string;
+  bot?: string;
+  workingDirectory: string;
+  agent?: string | null;
+  model?: string;
+  triggerMode?: 'mention' | 'all';
+  threadedReplies?: boolean;
+  verbose?: boolean;
+  isDM: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function addDynamicChannel(channel: Omit<DynamicChannel, 'createdAt' | 'updatedAt'>): void {
+  const db = getDb();
+  db.prepare(
+    `INSERT INTO dynamic_channels (channel_id, platform, name, bot, working_directory, agent, model, trigger_mode, threaded_replies, verbose, is_dm)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(channel_id) DO UPDATE SET
+       platform = excluded.platform, name = excluded.name, bot = excluded.bot,
+       working_directory = excluded.working_directory, agent = excluded.agent,
+       model = excluded.model, trigger_mode = excluded.trigger_mode,
+       threaded_replies = excluded.threaded_replies, verbose = excluded.verbose,
+       is_dm = excluded.is_dm, updated_at = datetime('now')`
+  ).run(
+    channel.channelId,
+    channel.platform,
+    channel.name ?? '',
+    channel.bot ?? null,
+    channel.workingDirectory,
+    channel.agent ?? null,
+    channel.model ?? null,
+    channel.triggerMode ?? null,
+    channel.threadedReplies != null ? (channel.threadedReplies ? 1 : 0) : null,
+    channel.verbose != null ? (channel.verbose ? 1 : 0) : null,
+    channel.isDM ? 1 : 0,
+  );
+}
+
+export function removeDynamicChannel(channelId: string): void {
+  const db = getDb();
+  db.prepare('DELETE FROM dynamic_channels WHERE channel_id = ?').run(channelId);
+}
+
+export function getDynamicChannel(channelId: string): DynamicChannel | null {
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM dynamic_channels WHERE channel_id = ?').get(channelId) as any;
+  if (!row) return null;
+  return mapDynamicChannelRow(row);
+}
+
+export function getDynamicChannels(): DynamicChannel[] {
+  const db = getDb();
+  const rows = db.prepare('SELECT * FROM dynamic_channels ORDER BY created_at').all() as any[];
+  return rows.map(mapDynamicChannelRow);
+}
+
+function mapDynamicChannelRow(row: any): DynamicChannel {
+  return {
+    channelId: row.channel_id,
+    platform: row.platform,
+    name: row.name,
+    bot: row.bot ?? undefined,
+    workingDirectory: row.working_directory,
+    agent: row.agent,
+    model: row.model ?? undefined,
+    triggerMode: row.trigger_mode as 'mention' | 'all' | undefined,
+    threadedReplies: row.threaded_replies != null ? !!row.threaded_replies : undefined,
+    verbose: row.verbose != null ? !!row.verbose : undefined,
+    isDM: !!row.is_dm,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 // --- Cleanup ---
