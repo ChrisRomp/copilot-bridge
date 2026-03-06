@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig } from './types.js';
-import { getDynamicChannel, getDynamicChannels } from './state/store.js';
+import { getDynamicChannel } from './state/store.js';
 
 let _config: AppConfig | null = null;
 
