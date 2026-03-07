@@ -277,8 +277,8 @@ const SHELL_WRAPPERS = new Set(['bash', 'sh', 'zsh', 'dash', 'fish', 'env', 'sud
 
 /** Strip shell wrappers, absolute paths, and subshell flags to find the real command. */
 function unwrapShellCommand(cmd: string): string {
-  // Handle bash/sh -c "..." — extract the quoted payload
-  const dashCMatch = cmd.match(/(?:^|\s)(?:sudo\s+)?(?:bash|sh|zsh|dash)\s+-c\s+["'](.+?)["']\s*$/);
+  // Handle bash/sh -c "..." — extract the quoted payload (with optional sudo/env prefix)
+  const dashCMatch = cmd.match(/(?:^|\s)(?:(?:sudo|env)\s+)*(?:bash|sh|zsh|dash)\s+-c\s+["'](.+?)["']\s*$/);
   if (dashCMatch) {
     return unwrapShellCommand(dashCMatch[1]);
   }
@@ -291,8 +291,20 @@ function unwrapShellCommand(cmd: string): string {
     const base = word.includes('/') ? word.split('/').pop()! : word;
     if (SHELL_WRAPPERS.has(base)) {
       parts.shift();
-      // Skip flags of the wrapper (e.g., env -i, sudo -u root)
-      while (parts.length > 0 && parts[0].startsWith('-')) parts.shift();
+      if (base === 'env') {
+        // Skip env assignments (FOO=bar) and flags
+        while (parts.length > 0 && (parts[0].startsWith('-') || /^[A-Z_]+=/.test(parts[0]))) parts.shift();
+      } else if (base === 'sudo') {
+        // Skip sudo flags and their arguments (-u root, -g group, -C fd, etc.)
+        const sudoFlagsWithArg = new Set(['-u', '-g', '-C', '-D', '-R', '-T', '--user', '--group']);
+        while (parts.length > 0 && parts[0].startsWith('-')) {
+          const flag = parts.shift()!;
+          if (sudoFlagsWithArg.has(flag) && parts.length > 0) parts.shift(); // skip arg
+        }
+      } else {
+        // Generic wrapper: skip flags
+        while (parts.length > 0 && parts[0].startsWith('-')) parts.shift();
+      }
       continue;
     }
     // Rewrite absolute path to basename for the first real command

@@ -144,6 +144,18 @@ describe('isHardDeny', () => {
     it('denies sh -c "mkfs /dev/sda"', () => {
       expect(denied('sh -c "mkfs /dev/sda"')).toBe(true);
     });
+    it('denies sudo -u root rm -rf /', () => {
+      expect(denied('sudo -u root rm -rf /')).toBe(true);
+    });
+    it('denies sudo -i rm -rf /', () => {
+      expect(denied('sudo -i rm -rf /')).toBe(true);
+    });
+    it('denies env FOO=bar rm -rf /', () => {
+      expect(denied('env FOO=bar rm -rf /')).toBe(true);
+    });
+    it('denies sudo env bash -c "rm -rf /"', () => {
+      expect(denied('sudo env bash -c "rm -rf /"')).toBe(true);
+    });
   });
 
   // --- Safe commands should not be denied ---

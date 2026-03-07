@@ -137,16 +137,22 @@ Config-level permission rules use Copilot CLI-compatible syntax:
 |---------|---------|
 | `"read"` | All file reads |
 | `"write"` | All file writes |
+| `"shell"` | All shell commands |
 | `"shell(ls)"` | The `ls` command |
-| `"shell(git *)"` | Any git command |
+| `"shell(git push)"` | `git push` (any args) |
+| `"shell(open -a Obsidian)"` | Commands starting with `open -a Obsidian` |
 | `"vault-search"` | All tools from that MCP server |
 | `"vault-search(search)"` | Only the `search` tool from that server |
 
 ### Permission resolution order
 
-1. **Config deny rules** — checked first, always wins
-2. **Config allow rules** — if matched, auto-approved
-3. **SQLite stored rules** — from `/remember` in chat (MCP rules save at server level)
-4. **Interactive prompt** — asks the user in chat with approve/deny reactions
+1. **Hardcoded safety denies** — blocks destructive commands (`rm -rf /`, `mkfs`, fork bombs, etc.) even in autopilot mode. Cannot be overridden.
+2. **Autopilot mode** — if enabled, auto-approves everything else (skip steps 3–5)
+3. **Config deny rules** — checked first among config rules, always wins
+4. **Config allow rules** — if matched, auto-approved
+5. **SQLite stored rules** — from `/remember` in chat (MCP rules save at server level)
+6. **Interactive prompt** — asks the user in chat with approve/deny reactions
 
-Use `/autopilot` in chat to auto-approve everything for a channel (useful during active development).
+Use `/autopilot` (or `/yolo`) in chat to auto-approve everything for a channel (useful during active development). Hardcoded safety denies still apply.
+
+Use `/rules` to see all permission rules (hardcoded, config, and stored).
