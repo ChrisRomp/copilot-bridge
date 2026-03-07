@@ -294,7 +294,8 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
     case 'deny':
       return { handled: true, action: 'deny', response: '❌ Denied.' };
 
-    case 'autopilot': {
+    case 'autopilot':
+    case 'yolo': {
       const prefs = getChannelPrefs(channelId);
       const current = effectivePrefs?.permissionMode ?? prefs?.permissionMode ?? 'interactive';
       const newMode = current === 'autopilot' ? 'interactive' : 'autopilot';
@@ -368,7 +369,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/status` — Show session info',
           '`/approve` — Approve pending permission',
           '`/deny` — Deny pending permission',
-          '`/autopilot` — Toggle auto-approve mode',
+          '`/autopilot` — Toggle auto-approve mode (alias: `/yolo`)',
           '`/streamer-mode [on|off]` — Toggle streamer mode (hides preview/internal models)',
           '`/mcp` — Show MCP servers and their source',
           '`/help` — Show this help',
