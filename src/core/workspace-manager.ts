@@ -77,13 +77,13 @@ export function getWorkspaceAllowPaths(botName: string, platformName?: string): 
   return paths;
 }
 
-export function initWorkspace(botName: string, overridePath?: string): string {
+export function initWorkspace(botName: string, overridePath?: string, adminOverride?: boolean): string {
   const workspacePath = overridePath ?? getWorkspacePath(botName);
   if (!fs.existsSync(workspacePath)) {
     fs.mkdirSync(workspacePath, { recursive: true });
   }
 
-  const admin = isBotAdminAny(botName);
+  const admin = adminOverride ?? isBotAdminAny(botName);
 
   const agentsFile = path.join(workspacePath, 'AGENTS.md');
   if (!fs.existsSync(agentsFile)) {

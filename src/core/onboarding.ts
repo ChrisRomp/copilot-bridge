@@ -175,7 +175,7 @@ export async function onboardProject(
 
   // initWorkspace handles AGENTS.md and MEMORY.md creation (skips if exists)
   try {
-    initWorkspace(opts.botName ?? 'copilot', workspacePath);
+    initWorkspace(opts.botName ?? 'copilot', workspacePath, false);
     steps.push(`Workspace initialized at ${workspacePath}`);
   } catch (err: any) {
     steps.push(`⚠️ Workspace init warning: ${err?.message}`);

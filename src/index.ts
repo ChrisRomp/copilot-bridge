@@ -522,7 +522,7 @@ async function handleInboundMessage(
     // Download any file attachments to .temp/ in the bot's workspace
     const sdkAttachments = await downloadAttachments(msg.attachments, msg.channelId, adapter);
 
-    await sessionManager.sendMessage(msg.channelId, text, sdkAttachments.length > 0 ? sdkAttachments : undefined);
+    await sessionManager.sendMessage(msg.channelId, text, sdkAttachments.length > 0 ? sdkAttachments : undefined, msg.userId);
   } catch (err) {
     log.error(`Error sending message for channel ${msg.channelId}:`, err);
     const streamKey = activeStreams.get(msg.channelId);

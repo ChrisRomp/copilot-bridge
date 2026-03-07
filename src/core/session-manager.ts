@@ -294,6 +294,7 @@ export class SessionManager {
   private pendingUserInput = new Map<string, PendingUserInput[]>();
   // Cached context usage from session.usage_info events
   private contextUsage = new Map<string, { currentTokens: number; tokenLimit: number }>();
+  private lastMessageUserIds = new Map<string, string>(); // channelId → userId of last message sender
   // Handler for send_file tool (set by index.ts, calls adapter.sendFile)
   private sendFileHandler: ((channelId: string, filePath: string, message?: string) => Promise<string>) | null = null;
   // Handler for onboarding tools (set by index.ts, calls adapter admin methods)
@@ -482,7 +483,9 @@ export class SessionManager {
   }
 
   /** Send a message to a channel's session. Returns immediately; responses come via events. */
-  async sendMessage(channelId: string, text: string, attachments?: Array<{ type: 'file'; path: string; displayName?: string }>): Promise<string> {
+  async sendMessage(channelId: string, text: string, attachments?: Array<{ type: 'file'; path: string; displayName?: string }>, userId?: string): Promise<string> {
+    if (userId) this.lastMessageUserIds.set(channelId, userId);
+
     // Auto-deny any pending permissions so the session unblocks
     this.clearPendingPermissions(channelId);
 
@@ -923,7 +926,7 @@ export class SessionManager {
               private: args.private,
               workspacePath: args.workspace_path,
               repoUrl: args.repo_url,
-              userId: args.user_id,
+              userId: args.user_id ?? this.lastMessageUserIds.get(channelId),
             });
 
             return {
