@@ -7,7 +7,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createLogger } from '../logger.js';
 import { initWorkspace } from './workspace-manager.js';
 import { addDynamicChannel } from '../state/store.js';
@@ -155,12 +155,17 @@ export async function onboardProject(
       } else {
         const isEmpty = fs.readdirSync(workspacePath).length === 0;
         if (isEmpty) {
-          execSync(`git clone "${opts.repoUrl}" .`, { cwd: workspacePath, stdio: 'pipe' });
+          execFileSync('git', ['clone', opts.repoUrl, '.'], { cwd: workspacePath, stdio: 'pipe' });
         } else {
-          // Non-empty, non-git dir: init and add remote
-          execSync(`git init && git remote add origin "${opts.repoUrl}" && git fetch origin && git checkout -t origin/main || git checkout -t origin/master`, {
-            cwd: workspacePath, stdio: 'pipe', shell: '/bin/sh',
-          });
+          // Non-empty, non-git dir: init, add remote, fetch, and checkout default branch
+          execFileSync('git', ['init'], { cwd: workspacePath, stdio: 'pipe' });
+          execFileSync('git', ['remote', 'add', 'origin', opts.repoUrl], { cwd: workspacePath, stdio: 'pipe' });
+          execFileSync('git', ['fetch', 'origin'], { cwd: workspacePath, stdio: 'pipe' });
+          try {
+            execFileSync('git', ['checkout', '-t', 'origin/main'], { cwd: workspacePath, stdio: 'pipe' });
+          } catch {
+            execFileSync('git', ['checkout', '-t', 'origin/master'], { cwd: workspacePath, stdio: 'pipe' });
+          }
         }
         cloned = true;
         steps.push(`Cloned ${opts.repoUrl}`);
