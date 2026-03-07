@@ -859,6 +859,97 @@ export class SessionManager {
       });
     }
 
+    // Override built-in show_file: read file and post as code block in chat
+    if (this.getAdapterForChannel) {
+      const adapterResolver = this.getAdapterForChannel;
+      const showWorkDir = this.resolveWorkingDirectory(channelId);
+      const showBotName = getChannelBotName(channelId);
+      const showConfig = getChannelConfig(channelId);
+      const showAllowPaths = getWorkspaceAllowPaths(showBotName, showConfig.platform);
+
+      tools.push({
+        name: 'show_file',
+        overridesBuiltInTool: true,
+        description: 'Show file contents to the user in their chat channel as a formatted code block. Use when the user asks to see a file, code snippet, or diff. Supports optional line range. For diffs, set diff: true to show pending git changes.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Full absolute path to the file to show.' },
+            view_range: {
+              type: 'array', items: { type: 'integer' },
+              description: 'Optional [start, end] line range. [start, -1] shows from start to end of file.',
+            },
+            diff: { type: 'boolean', description: 'When true, show pending git diff instead of file contents.' },
+          },
+          required: ['path'],
+        },
+        handler: async (args: { path: string; view_range?: number[]; diff?: boolean }) => {
+          try {
+            const resolved = path.isAbsolute(args.path) ? path.resolve(args.path) : path.resolve(showWorkDir, args.path);
+            let realPath: string;
+            try {
+              realPath = fs.realpathSync(resolved);
+            } catch {
+              return { content: 'File not found.' };
+            }
+            const allowed = [showWorkDir, ...showAllowPaths];
+            const isAllowed = allowed.some(dir => realPath.startsWith(path.resolve(dir) + path.sep) || realPath === path.resolve(dir));
+            if (!isAllowed) {
+              log.warn(`show_file blocked: "${realPath}" is outside workspace for channel ${channelId.slice(0, 8)}...`);
+              return { content: 'File path is outside the allowed workspace.' };
+            }
+
+            const adapter = adapterResolver(channelId);
+            if (!adapter) return { content: 'No adapter available for this channel.' };
+
+            const ext = path.extname(realPath).slice(1) || 'txt';
+            const fileName = path.basename(realPath);
+            let content: string;
+
+            if (args.diff) {
+              const { execSync } = await import('node:child_process');
+              const dir = path.dirname(realPath);
+              try {
+                content = execSync(`git diff -- "${realPath}"`, { cwd: dir, encoding: 'utf-8', timeout: 5000 });
+                if (!content.trim()) content = '(no pending changes)';
+              } catch {
+                content = '(not a git repository or git diff failed)';
+              }
+              await adapter.sendMessage(channelId, `**${fileName}** (diff)\n\`\`\`diff\n${content}\n\`\`\``);
+            } else {
+              const fullContent = fs.readFileSync(realPath, 'utf-8');
+              let lines = fullContent.split('\n');
+
+              if (args.view_range && args.view_range.length === 2) {
+                const [start, end] = args.view_range;
+                const startIdx = Math.max(0, start - 1);
+                const endIdx = end === -1 ? lines.length : Math.min(end, lines.length);
+                lines = lines.slice(startIdx, endIdx);
+              }
+
+              content = lines.join('\n');
+              const MAX_CHARS = 8000;
+              let truncated = false;
+              if (content.length > MAX_CHARS) {
+                content = content.slice(0, MAX_CHARS);
+                truncated = true;
+              }
+
+              const rangeLabel = args.view_range ? ` (lines ${args.view_range[0]}–${args.view_range[1] === -1 ? 'end' : args.view_range[1]})` : '';
+              let msg = `**${fileName}**${rangeLabel}\n\`\`\`${ext}\n${content}\n\`\`\``;
+              if (truncated) msg += '\n*(truncated — file too large for chat)*';
+              await adapter.sendMessage(channelId, msg);
+            }
+
+            return { content: `Showed ${fileName} to user in chat.` };
+          } catch (err: any) {
+            log.error(`show_file failed for channel ${channelId.slice(0, 8)}...:`, err);
+            return { content: `Failed to show file: ${err?.message ?? 'unknown error'}` };
+          }
+        },
+      });
+    }
+
     // Admin-only onboarding tools
     const config = getChannelConfig(channelId);
     const botName = getChannelBotName(channelId);
