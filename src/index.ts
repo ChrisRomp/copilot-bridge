@@ -513,10 +513,11 @@ async function handleInboundMessage(
         try {
           const sections: string[] = [];
 
-          // Hardcoded safety rules
+          // Hardcoded safety denies
           const hardcoded = getHardcodedRules();
-          sections.push('**🔒 Hardcoded (enforced in all modes including autopilot):**');
+          sections.push('**🔒 Hardcoded denies (enforced in all modes including autopilot):**');
           sections.push(...hardcoded.map(r => `- **${r.action}** \`${r.spec}\``));
+          sections.push('- **allow** `read/write in workspace + allowPaths`');
 
           // Config-level rules
           const configRules = getConfigRules();

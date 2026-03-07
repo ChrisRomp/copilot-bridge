@@ -34,11 +34,14 @@ describe('isHardDeny', () => {
     it('denies rm -rf ~', () => {
       expect(denied('rm -rf ~')).toBe(true);
     });
-    it('denies rm -rf ~/', () => {
-      expect(denied('rm -rf ~/')).toBe(true);
+    it('allows rm -rf ~/subpath (not home root)', () => {
+      expect(denied('rm -rf ~/Downloads')).toBe(false);
     });
     it('denies rm -rf $HOME', () => {
       expect(denied('rm -rf $HOME')).toBe(true);
+    });
+    it('allows rm -rf $HOME/.cache (subpath)', () => {
+      expect(denied('rm -rf $HOME/.cache')).toBe(false);
     });
     it('denies rm -fr /', () => {
       expect(denied('rm -fr /')).toBe(true);
@@ -143,6 +146,9 @@ describe('isHardDeny', () => {
     });
     it('denies sh -c "mkfs /dev/sda"', () => {
       expect(denied('sh -c "mkfs /dev/sda"')).toBe(true);
+    });
+    it('denies eval rm -rf /', () => {
+      expect(denied('eval rm -rf /')).toBe(true);
     });
     it('denies sudo -u root rm -rf /', () => {
       expect(denied('sudo -u root rm -rf /')).toBe(true);

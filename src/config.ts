@@ -273,7 +273,7 @@ function parsePermissionSpec(spec: string): { kind: string; tool?: string } {
   return { kind: match[1].trim(), tool: match[2]?.trim() };
 }
 
-const SHELL_WRAPPERS = new Set(['bash', 'sh', 'zsh', 'dash', 'fish', 'env', 'sudo', 'nohup', 'xargs', 'exec']);
+const SHELL_WRAPPERS = new Set(['bash', 'sh', 'zsh', 'dash', 'fish', 'env', 'sudo', 'nohup', 'xargs', 'exec', 'eval']);
 
 /** Strip shell wrappers, absolute paths, and subshell flags to find the real command. */
 function unwrapShellCommand(cmd: string): string {
@@ -339,7 +339,7 @@ export function isHardDeny(kind: string, command: string | undefined, shellCmd: 
     const hasForce = /\s-[^\s]*f|\s--force/.test(effectiveCmd);
     if (hasRecursive && hasForce) {
       if (/\s+\/(\s|$)/.test(effectiveCmd) || /\s+\/\*(\s|$)/.test(effectiveCmd)) return true;
-      if (/\s+~(\s|\/|$)/.test(effectiveCmd) || /\$HOME/.test(effectiveCmd)) return true;
+      if (/\s+~(\s|$)/.test(effectiveCmd) || /\$HOME(\s|$)/.test(effectiveCmd)) return true;
     }
   }
 
@@ -354,7 +354,7 @@ export function isHardDeny(kind: string, command: string | undefined, shellCmd: 
   if ((effectiveShellCmd === 'chmod' || effectiveShellCmd === 'chown') && /\s-[^\s]*R/.test(effectiveCmd)) {
     if (/\s+\/(\s|$)/.test(effectiveCmd) || /\s+\/etc(\s|\/|$)/.test(effectiveCmd) ||
         /\s+\/usr(\s|\/|$)/.test(effectiveCmd) || /\s+\/var(\s|\/|$)/.test(effectiveCmd) ||
-        /\s+~(\s|\/|$)/.test(effectiveCmd) || /\$HOME/.test(effectiveCmd)) return true;
+        /\s+~(\s|$)/.test(effectiveCmd) || /\$HOME(\s|$)/.test(effectiveCmd)) return true;
   }
 
   return false;
@@ -371,7 +371,6 @@ export function getHardcodedRules(): Array<{ spec: string; action: 'allow' | 'de
     { spec: 'shell(:(){ :|:& };:)', action: 'deny', source: 'hardcoded' },
     { spec: 'shell(chmod -R / /etc /usr /var ~)', action: 'deny', source: 'hardcoded' },
     { spec: 'shell(chown -R / /etc /usr /var ~)', action: 'deny', source: 'hardcoded' },
-    { spec: 'read/write in workspace', action: 'allow', source: 'hardcoded' },
   ];
 }
 
