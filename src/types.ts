@@ -133,7 +133,12 @@ export interface ChannelAdapter {
   addUserToChannel?(channelId: string, userId: string): Promise<void>;
   getTeams?(): Promise<TeamInfo[]>;
   getChannelByName?(teamId: string, name: string): Promise<ChannelInfo | null>;
+  /** Discover DM channels for this bot (optional — platform-specific). */
+  discoverDMChannels?(): Promise<{ channelId: string; otherUserId: string }[]>;
 }
+
+/** Adapter factory — each platform adapter exports one of these. */
+export type AdapterFactory = (platformName: string, url: string, token: string) => ChannelAdapter;
 
 // Session state tracked per channel
 export interface ChannelSessionState {

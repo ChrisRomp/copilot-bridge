@@ -11,7 +11,7 @@ import { extractThreadRequest, resolveThreadRoot } from './core/thread-utils.js'
 import { createLogger } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ChannelAdapter, InboundMessage, InboundReaction, MessageAttachment } from './types.js';
+import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment } from './types.js';
 
 const log = createLogger('bridge');
 
@@ -157,17 +157,25 @@ async function main(): Promise<void> {
   });
   workspaceWatcher.start();
 
+  // Adapter factories — register built-in adapters here
+  const adapterFactories: Record<string, AdapterFactory> = {
+    mattermost: (name, url, token) => new MattermostAdapter(name, url, token),
+  };
+
   // Initialize channel adapters — one per bot identity
   for (const [platformName, platformConfig] of Object.entries(config.platforms)) {
-    if (platformName === 'mattermost') {
-      const bots = getPlatformBots(platformName);
-      for (const [botName, botInfo] of bots) {
-        const key = `${platformName}:${botName}`;
-        const adapter = new MattermostAdapter(platformName, platformConfig.url, botInfo.token);
-        botAdapters.set(key, adapter);
-        botStreamers.set(key, new StreamingHandler(adapter));
-        log.info(`Registered bot "${botName}" for ${platformName}`);
-      }
+    const factory = adapterFactories[platformName];
+    if (!factory) {
+      log.warn(`No adapter for platform "${platformName}" — skipping`);
+      continue;
+    }
+    const bots = getPlatformBots(platformName);
+    for (const [botName, botInfo] of bots) {
+      const key = `${platformName}:${botName}`;
+      const adapter = factory(platformName, platformConfig.url, botInfo.token);
+      botAdapters.set(key, adapter);
+      botStreamers.set(key, new StreamingHandler(adapter));
+      log.info(`Registered bot "${botName}" for ${platformName}`);
     }
   }
 
@@ -218,7 +226,7 @@ async function main(): Promise<void> {
     log.info(`${key} connected`);
 
     // Discover existing DM channels and auto-register any that aren't configured
-    if (adapter instanceof MattermostAdapter) {
+    if (adapter.discoverDMChannels) {
       const dmChannels = await adapter.discoverDMChannels();
       let registered = 0;
       for (const dm of dmChannels) {
