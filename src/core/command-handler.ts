@@ -39,7 +39,7 @@ export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'reload_session' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'set_reasoning' | 'stop_session';
+           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session';
   payload?: any;
 }
 
@@ -309,8 +309,17 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       };
     }
 
-    case 'remember':
-      return { handled: true, action: 'remember', response: '💾 Permission rule saved.' };
+    case 'remember': {
+      const sub = parsed.args.trim().toLowerCase();
+      if (sub === 'list') {
+        return { handled: true, action: 'remember_list' };
+      }
+      if (sub === 'clear' || sub.startsWith('clear ')) {
+        const spec = parsed.args.trim().slice(5).trim(); // everything after "clear"
+        return { handled: true, action: 'remember_clear', payload: spec || undefined };
+      }
+      return { handled: true, action: 'remember' };
+    }
 
     case 'mcp': {
       if (!mcpInfo || mcpInfo.length === 0) {
@@ -369,6 +378,10 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/status` — Show session info',
           '`/approve` — Approve pending permission',
           '`/deny` — Deny pending permission',
+          '`/remember` — Approve + save permission rule (during prompt)',
+          '`/remember list` — Show stored permission rules',
+          '`/remember clear` — Clear all permission rules',
+          '`/remember clear <spec>` — Clear a specific rule (e.g., `shell(git)`)',
           '`/autopilot` — Toggle auto-approve mode (alias: `/yolo`)',
           '`/streamer-mode [on|off]` — Toggle streamer mode (hides preview/internal models)',
           '`/mcp` — Show MCP servers and their source',

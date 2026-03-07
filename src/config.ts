@@ -313,7 +313,7 @@ export function evaluateConfigPermissions(
   if (perms.deny) {
     for (const spec of perms.deny) {
       const parsed = parsePermissionSpec(spec);
-      if (matchesRule(parsed, kind, shellCmd, shellCmdFull, serverName, toolName)) {
+      if (matchesRule(parsed, kind, shellCmd, shellCmdFull, command, serverName, toolName)) {
         return 'deny';
       }
     }
@@ -329,7 +329,7 @@ export function evaluateConfigPermissions(
   if (perms.allow) {
     for (const spec of perms.allow) {
       const parsed = parsePermissionSpec(spec);
-      if (matchesRule(parsed, kind, shellCmd, shellCmdFull, serverName, toolName)) {
+      if (matchesRule(parsed, kind, shellCmd, shellCmdFull, command, serverName, toolName)) {
         return 'allow';
       }
     }
@@ -395,15 +395,22 @@ function matchesRule(
   requestKind: string,
   shellCmd: string | undefined,
   shellCmdFull: string | undefined,
+  commandText: string | undefined,
   serverName: string | undefined,
   toolName: string | undefined,
 ): boolean {
   // Direct kind match: "shell", "read", "write"
   if (parsed.kind === requestKind) {
     if (!parsed.tool) return true; // bare kind matches all of that kind
-    // For shell: match command
+    // For shell: match command name, subcommand, or command prefix
     if (requestKind === 'shell') {
-      return parsed.tool === shellCmd || parsed.tool === shellCmdFull;
+      if (parsed.tool === shellCmd || parsed.tool === shellCmdFull) return true;
+      // Prefix match: "open -a Obsidian" matches command "open -a Obsidian --vault foo"
+      if (commandText) {
+        const trimmed = commandText.trim();
+        if (trimmed === parsed.tool || trimmed.startsWith(parsed.tool + ' ')) return true;
+      }
+      return false;
     }
     return false;
   }

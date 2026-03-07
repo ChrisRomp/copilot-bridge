@@ -277,6 +277,31 @@ export function clearPermissionRules(scope: string): void {
   db.prepare('DELETE FROM permission_rules WHERE scope = ?').run(scope);
 }
 
+/** Remove a specific permission rule by scope + tool + command_pattern. */
+export function removePermissionRule(scope: string, tool: string, commandPattern: string): boolean {
+  const db = getDb();
+  const result = db.prepare(
+    'DELETE FROM permission_rules WHERE scope = ? AND tool = ? AND command_pattern = ?'
+  ).run(scope, tool, commandPattern);
+  return result.changes > 0;
+}
+
+/** List all permission rules for a scope. */
+export function listPermissionRulesForScope(scope: string): StoredPermissionRule[] {
+  const db = getDb();
+  const rows = db.prepare(
+    'SELECT * FROM permission_rules WHERE scope = ? ORDER BY tool, command_pattern'
+  ).all(scope) as any[];
+  return rows.map(r => ({
+    id: r.id,
+    scope: r.scope,
+    tool: r.tool,
+    commandPattern: r.command_pattern,
+    action: r.action,
+    createdAt: r.created_at,
+  }));
+}
+
 /**
  * Check if a tool+command is allowed by existing rules.
  * Returns 'allow', 'deny', or null (no matching rule — need to ask).

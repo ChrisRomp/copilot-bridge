@@ -6,7 +6,7 @@ import { formatEvent, formatPermissionRequest, formatUserInputRequest } from './
 import { WorkspaceWatcher, initWorkspace, getWorkspacePath } from './core/workspace-manager.js';
 import { MattermostAdapter } from './channels/mattermost/adapter.js';
 import { StreamingHandler } from './channels/mattermost/streaming.js';
-import { getChannelPrefs, getAllChannelSessions, closeDb } from './state/store.js';
+import { getChannelPrefs, getAllChannelSessions, closeDb, listPermissionRulesForScope, removePermissionRule, clearPermissionRules } from './state/store.js';
 import { extractThreadRequest, resolveThreadRoot } from './core/thread-utils.js';
 import { createLogger } from './logger.js';
 import fs from 'node:fs';
@@ -505,8 +505,51 @@ async function handleInboundMessage(
         }
         break;
       case 'remember':
-        sessionManager.resolvePermission(msg.channelId, true, true);
+        if (!sessionManager.resolvePermission(msg.channelId, true, true)) {
+          await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
+        }
         break;
+      case 'remember_list': {
+        try {
+          const rules = listPermissionRulesForScope(msg.channelId);
+          if (rules.length === 0) {
+            await adapter.sendMessage(msg.channelId, '📋 No stored permission rules for this channel.', { threadRootId: threadRoot });
+          } else {
+            const lines = rules.map(r => {
+              const spec = r.commandPattern === '*' ? r.tool : `${r.tool}(${r.commandPattern})`;
+              return `- **${r.action}** \`${spec}\``;
+            });
+            await adapter.sendMessage(msg.channelId, `📋 **Permission rules:**\n${lines.join('\n')}`, { threadRootId: threadRoot });
+          }
+        } catch (err: any) {
+          log.error('Failed to list permission rules:', err);
+          await adapter.sendMessage(msg.channelId, '❌ Failed to list permission rules.', { threadRootId: threadRoot });
+        }
+        break;
+      }
+      case 'remember_clear': {
+        try {
+          const spec = cmdResult.payload as string | undefined;
+          if (!spec) {
+            clearPermissionRules(msg.channelId);
+            await adapter.sendMessage(msg.channelId, '🗑️ All permission rules cleared for this channel.', { threadRootId: threadRoot });
+          } else {
+            const match = spec.match(/^([^(]+?)(?:\((.+)\))?$/);
+            const tool = match?.[1]?.trim() ?? spec;
+            const pattern = match?.[2]?.trim() ?? '*';
+            const removed = removePermissionRule(msg.channelId, tool, pattern);
+            if (removed) {
+              await adapter.sendMessage(msg.channelId, `🗑️ Removed rule: \`${spec}\``, { threadRootId: threadRoot });
+            } else {
+              await adapter.sendMessage(msg.channelId, `⚠️ No matching rule found for \`${spec}\``, { threadRootId: threadRoot });
+            }
+          }
+        } catch (err: any) {
+          log.error('Failed to clear permission rules:', err);
+          await adapter.sendMessage(msg.channelId, '❌ Failed to clear permission rules.', { threadRootId: threadRoot });
+        }
+        break;
+      }
     }
     return;
   }
@@ -584,6 +627,10 @@ async function handleReaction(
   } else if (reaction.emoji === 'thumbsdown' || reaction.emoji === '-1') {
     if (sessionManager.resolvePermission(reaction.channelId, false)) {
       await adapter.sendMessage(reaction.channelId, '❌ Denied via reaction.');
+    }
+  } else if (reaction.emoji === 'floppy_disk') {
+    if (sessionManager.resolvePermission(reaction.channelId, true, true)) {
+      await adapter.sendMessage(reaction.channelId, '💾 Approved + remembered via reaction.');
     }
   }
 }
