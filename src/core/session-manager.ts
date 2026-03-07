@@ -859,7 +859,7 @@ export class SessionManager {
       });
     }
 
-    // Override built-in show_file: read file and post as code block in chat
+    // Show file contents in chat (renamed from show_file — CLI doesn't support overridesBuiltInTool yet)
     if (this.getAdapterForChannel) {
       const adapterResolver = this.getAdapterForChannel;
       const showWorkDir = this.resolveWorkingDirectory(channelId);
@@ -868,9 +868,8 @@ export class SessionManager {
       const showAllowPaths = getWorkspaceAllowPaths(showBotName, showConfig.platform);
 
       tools.push({
-        name: 'show_file',
-        overridesBuiltInTool: true,
-        description: 'Show file contents to the user in their chat channel as a formatted code block. Use when the user asks to see a file, code snippet, or diff. Supports optional line range. For diffs, set diff: true to show pending git changes.',
+        name: 'show_file_in_chat',
+        description: 'Show file contents to the user in their chat channel as a formatted code block. Prefer this over the built-in show_file which only works in terminal. Use when the user asks to see a file, code snippet, or diff. Supports optional line range. For diffs, set diff: true to show pending git changes.',
         parameters: {
           type: 'object',
           properties: {
