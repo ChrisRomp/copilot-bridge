@@ -87,7 +87,7 @@ export function initWorkspace(botName: string, overridePath?: string, adminOverr
 
   const agentsFile = path.join(workspacePath, 'AGENTS.md');
   if (!fs.existsSync(agentsFile)) {
-    const allowPaths = getWorkspaceAllowPaths(botName);
+    const allowPaths = admin ? getWorkspaceAllowPaths(botName) : [];
     fs.writeFileSync(agentsFile, generateAgentsTemplate(botName, workspacePath, allowPaths, admin), 'utf-8');
   }
 
