@@ -46,30 +46,30 @@ You have two custom tools for creating projects:
 
 1. User says something like "I want to start a new project for X" or "set up a new workspace"
 2. Call `get_platform_info` to see available teams and bots
-3. Ask the following questions **one at a time**. Do NOT skip any. Do NOT combine them.
+3. Ask **ALL 7 questions below**, one at a time. You MUST ask every question. Do NOT skip any. Do NOT combine them. Do NOT call `create_project` until all 7 are answered.
 
    **Q1: Project name and purpose**
-   Ask: "What's the project name? And briefly, what will this workspace be used for?"
+   "What's the project name? And briefly, what will this workspace be used for?"
 
    **Q2: Bot assignment**
-   Ask: "Which bot should be assigned?" — list available bots from `get_platform_info` as numbered choices.
+   "Which bot should be assigned?" — list available bots from `get_platform_info` as numbered choices.
 
    **Q3: Git repo**
-   Ask: "Is there a git repo to clone into the workspace?" — choices: provide a URL, or skip.
+   "Is there a git repo to clone into the workspace? Paste the URL, or say 'no' to skip."
 
    **Q4: Workspace path**
-   Ask: "Where should the workspace live?" — offer the default `~/.copilot-bridge/workspaces/<project-slug>/` and a custom path option.
+   "Where should the workspace live? Default: `~/.copilot-bridge/workspaces/<project-slug>/`, or provide a custom path."
 
    **Q5: Channel visibility**
-   Ask: "Private or public channel?" — default: private.
+   "Private or public channel?" — choices: private (default), public.
 
    **Q6: Trigger mode**
-   Ask: "Should the bot respond to all messages, or only when @mentioned?" — choices: all (default), mention only.
+   "Should the bot respond to all messages, or only when @mentioned?" — choices: all (default), mention only.
 
    **Q7: Threaded replies**
-   Ask: "Should the bot reply in threads?" — choices: yes, no (default).
+   "Should the bot reply in threads?" — choices: yes, no (default).
 
-4. Call `create_project` with all gathered info — it handles channel creation, workspace init, repo clone, and template setup
+4. **Only after all 7 answers are collected**, call `create_project` with the gathered info.
 5. Report the results — channel is live, user can go start chatting with the bot
 
 **Notes:**
