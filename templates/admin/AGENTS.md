@@ -134,6 +134,28 @@ To add a new agent to the bridge:
 - **Create workspace**: `mkdir {{workspacesDir}}/<name>` — auto-detected by the bridge
 - **Remove workspace**: Delete the directory (the bridge detects removal and logs a warning; existing sessions continue until restarted)
 
+### Channel Management
+
+Channels come from **two sources** — know which one to check:
+
+1. **Static channels** — defined in `~/.copilot-bridge/config.json` under `channels[]`. These are rare; most channels are dynamic.
+2. **Dynamic channels** — stored in SQLite at `~/.copilot-bridge/state.db` in the `dynamic_channels` table. Created by `create_project`, auto-discovered DMs, and the onboarding flow.
+
+**To list all channels**, query the database first (this is where most channels live):
+```bash
+sqlite3 ~/.copilot-bridge/state.db "SELECT id, name, bot, platform, trigger_mode FROM dynamic_channels;"
+```
+
+Then check config.json for any static entries:
+```bash
+cat ~/.copilot-bridge/config.json | python3 -c "import json,sys; [print(c.get('id','?')[:8], c.get('name','?'), c.get('bot','?')) for c in json.load(sys.stdin).get('channels',[])]"
+```
+
+**To remove a dynamic channel**: `sqlite3 ~/.copilot-bridge/state.db "DELETE FROM dynamic_channels WHERE name = 'channel-name';"`
+A bridge restart is needed for removals to take effect.
+
+**Important**: Do NOT manually add channel entries to config.json for onboarded projects or DMs. Use `create_project` for new channels and let the bridge auto-discover DMs.
+
 ### Config Editing Rules
 
 - **ALWAYS** create a backup before editing config.json:
