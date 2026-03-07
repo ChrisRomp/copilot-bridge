@@ -77,17 +77,17 @@ export function getWorkspaceAllowPaths(botName: string, platformName?: string): 
   return paths;
 }
 
-export function initWorkspace(botName: string): string {
-  const workspacePath = getWorkspacePath(botName);
+export function initWorkspace(botName: string, overridePath?: string, adminOverride?: boolean): string {
+  const workspacePath = overridePath ?? getWorkspacePath(botName);
   if (!fs.existsSync(workspacePath)) {
     fs.mkdirSync(workspacePath, { recursive: true });
   }
 
-  const admin = isBotAdminAny(botName);
+  const admin = adminOverride ?? isBotAdminAny(botName);
 
   const agentsFile = path.join(workspacePath, 'AGENTS.md');
   if (!fs.existsSync(agentsFile)) {
-    const allowPaths = getWorkspaceAllowPaths(botName);
+    const allowPaths = admin ? getWorkspaceAllowPaths(botName) : (getWorkspaceOverride(botName)?.allowPaths ?? []);
     fs.writeFileSync(agentsFile, generateAgentsTemplate(botName, workspacePath, allowPaths, admin), 'utf-8');
   }
 

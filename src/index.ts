@@ -191,6 +191,12 @@ async function main(): Promise<void> {
     return resolved.adapter.sendFile(channelId, filePath, message, { threadRootId });
   });
 
+  // Provide adapter resolver for onboarding tools
+  sessionManager.onGetAdapter((channelId) => {
+    const resolved = getAdapterForChannel(channelId);
+    return resolved?.adapter ?? null;
+  });
+
   // Connect all bot adapters and wire up handlers
   for (const [key, adapter] of botAdapters) {
     const streaming = botStreamers.get(key)!;
@@ -516,7 +522,7 @@ async function handleInboundMessage(
     // Download any file attachments to .temp/ in the bot's workspace
     const sdkAttachments = await downloadAttachments(msg.attachments, msg.channelId, adapter);
 
-    await sessionManager.sendMessage(msg.channelId, text, sdkAttachments.length > 0 ? sdkAttachments : undefined);
+    await sessionManager.sendMessage(msg.channelId, text, sdkAttachments.length > 0 ? sdkAttachments : undefined, msg.userId);
   } catch (err) {
     log.error(`Error sending message for channel ${msg.channelId}:`, err);
     const streamKey = activeStreams.get(msg.channelId);
