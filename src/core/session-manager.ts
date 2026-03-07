@@ -982,13 +982,16 @@ export class SessionManager {
             const currentPaths = existing?.allowPaths ?? [];
             const resolvedPath = path.resolve(args.path);
 
-            // Block sensitive paths
+            // Block sensitive paths (bidirectional: parent-of or child-of blocked)
             const home = os.homedir();
             const blocked = [home, path.join(home, '.ssh'), path.join(home, '.aws'), path.join(home, '.gnupg'),
               path.join(home, '.copilot-bridge'), '/etc', '/var', '/usr', '/System', '/private'];
+            if (resolvedPath === '/') {
+              return { content: '❌ Refused: cannot grant access to filesystem root.' };
+            }
             for (const b of blocked) {
-              if (resolvedPath === b || b.startsWith(resolvedPath + path.sep)) {
-                return { content: `❌ Refused: "${resolvedPath}" would grant access to sensitive directory "${b}". Grant a more specific subdirectory instead.` };
+              if (resolvedPath === b || b.startsWith(resolvedPath + path.sep) || resolvedPath.startsWith(b + path.sep)) {
+                return { content: `❌ Refused: "${resolvedPath}" overlaps with sensitive directory "${b}". Grant a more specific, non-sensitive subdirectory instead.` };
               }
             }
 
@@ -998,7 +1001,7 @@ export class SessionManager {
             const newPaths = [...currentPaths, resolvedPath];
             setWorkspaceOverride(args.bot_name, workDir, newPaths);
             return {
-              content: `✅ Granted "${args.bot_name}" access to ${resolvedPath}.\nCurrent allowed paths: ${JSON.stringify(newPaths)}\n\nThe agent needs /new or a bridge restart to pick up the change.`,
+              content: `✅ Granted "${args.bot_name}" access to ${resolvedPath}.\nCurrent allowed paths: ${JSON.stringify(newPaths)}\n\nTo apply: delete the agent's AGENTS.md and run /new in its channel (or restart the bridge).`,
             };
           } catch (err: any) {
             return { content: `Failed: ${err?.message ?? 'unknown error'}` };
@@ -1026,7 +1029,7 @@ export class SessionManager {
             const newPaths = existing.allowPaths.filter(p => path.resolve(p) !== resolvedPath);
             setWorkspaceOverride(args.bot_name, existing.workingDirectory, newPaths);
             return {
-              content: `✅ Revoked "${args.bot_name}" access to ${resolvedPath}.\nRemaining allowed paths: ${JSON.stringify(newPaths)}\n\nThe agent needs /new or a bridge restart to pick up the change.`,
+              content: `✅ Revoked "${args.bot_name}" access to ${resolvedPath}.\nRemaining allowed paths: ${JSON.stringify(newPaths)}\n\nTo apply: delete the agent's AGENTS.md and run /new in its channel (or restart the bridge).`,
             };
           } catch (err: any) {
             return { content: `Failed: ${err?.message ?? 'unknown error'}` };
@@ -1034,7 +1037,7 @@ export class SessionManager {
         },
       });
 
-      // Tool: list_agent_access — show workspace overrides for all agents
+      // Tool: list_agent_access — show workspace info for all agents
       tools.push({
         name: 'list_agent_access',
         description: 'List all agents and their workspace paths and extra allowed folders.',
@@ -1042,10 +1045,27 @@ export class SessionManager {
         handler: async () => {
           try {
             const overrides = listWorkspaceOverrides();
-            if (overrides.length === 0) return { content: 'No workspace overrides configured.' };
-            const lines = overrides.map(o =>
-              `**${o.botName}**\n  Workspace: ${o.workingDirectory}\n  Extra paths: ${o.allowPaths.length > 0 ? o.allowPaths.join(', ') : '(none)'}`
-            );
+            const overrideMap = new Map(overrides.map(o => [o.botName, o]));
+
+            // Enumerate all configured bots across platforms
+            const config = getConfig();
+            const botNames = new Set<string>();
+            for (const platform of Object.values(config.platforms)) {
+              if (platform.bots) {
+                for (const name of Object.keys(platform.bots)) botNames.add(name);
+              }
+            }
+            // Include any bots that have overrides but aren't in config
+            for (const o of overrides) botNames.add(o.botName);
+
+            if (botNames.size === 0) return { content: 'No agents configured.' };
+
+            const lines = [...botNames].sort().map(name => {
+              const override = overrideMap.get(name);
+              const workspace = override?.workingDirectory ?? getWorkspacePath(name);
+              const extra = override?.allowPaths ?? [];
+              return `**${name}**\n  Workspace: ${workspace}\n  Extra paths: ${extra.length > 0 ? extra.join(', ') : '(none)'}`;
+            });
             return { content: lines.join('\n\n') };
           } catch (err: any) {
             return { content: `Failed: ${err?.message ?? 'unknown error'}` };

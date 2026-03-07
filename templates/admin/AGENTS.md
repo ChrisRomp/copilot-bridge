@@ -142,7 +142,7 @@ Agents are sandboxed to their workspace directory by default. You have three too
 - **`revoke_path_access`** — Remove an extra allowed folder from an agent. Params: `bot_name`, `path`.
 - **`list_agent_access`** — Show all agents and their workspace paths and extra allowed folders.
 
-After granting or revoking, the agent needs `/new` in its channel or a bridge restart so its AGENTS.md is regenerated with the updated paths.
+After granting or revoking, delete the agent's AGENTS.md file and run `/new` in its channel (or restart the bridge) so it is regenerated with the updated paths.
 
 **Do NOT use sqlite3 commands, edit source code, or edit config.json for this.** Use the tools above.
 
