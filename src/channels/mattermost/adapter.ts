@@ -37,6 +37,7 @@ export class MattermostAdapter implements ChannelAdapter {
   private activeChannels = new Map<string, number>(); // channelId → last activity timestamp
   private recentPostIds = new Set<string>();
   private isReplaying = false;
+  private pendingReplay: { sinceTimestamp: number; gapMs: number } | null = null;
   private static readonly MAX_RECENT_POSTS = 500;
   private static readonly MAX_REPLAY_WINDOW_MS = 60_000;
   private static readonly CHANNEL_STALENESS_MS = 3_600_000; // 1 hour
@@ -424,9 +425,10 @@ export class MattermostAdapter implements ChannelAdapter {
       return;
     }
 
-    // Concurrency guard: cancel any previous replay
+    // Concurrency guard: queue latest replay request if one is in progress
     if (this.isReplaying) {
-      log.warn('Replay already in progress — skipping (newer reconnect will subsume)');
+      log.info('Replay in progress — queuing latest reconnect for retry');
+      this.pendingReplay = { sinceTimestamp, gapMs };
       return;
     }
     this.isReplaying = true;
@@ -486,7 +488,7 @@ export class MattermostAdapter implements ChannelAdapter {
           if (!post || post.user_id === this.botId) continue;
           if (post.delete_at > 0) continue;
 
-          this.trackPost(postId, channelId);
+          this.trackPost(postId, channelId, post.create_at);
 
           // Resolve username (cached)
           let username = usernames.get(post.user_id) ?? '';
@@ -541,6 +543,15 @@ export class MattermostAdapter implements ChannelAdapter {
     log.info(`Replay complete: ${replayCount} message(s) replayed across ${channels.length} channel(s)`);
     } finally {
       this.isReplaying = false;
+      // Process queued replay if a newer reconnect occurred during this replay
+      const pending = this.pendingReplay;
+      if (pending) {
+        this.pendingReplay = null;
+        log.info('Processing queued replay from concurrent reconnect');
+        this.replayMissedMessages(pending.sinceTimestamp, pending.gapMs).catch(err =>
+          log.error('Failed to process queued replay:', err)
+        );
+      }
     }
   }
 }
