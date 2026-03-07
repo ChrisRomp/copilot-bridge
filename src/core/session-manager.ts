@@ -5,7 +5,7 @@ import { CopilotBridge } from './bridge.js';
 import {
   getChannelSession, setChannelSession, clearChannelSession,
   getChannelPrefs, setChannelPrefs, checkPermission, addPermissionRule,
-  getWorkspaceOverride,
+  getWorkspaceOverride, setWorkspaceOverride, listWorkspaceOverrides,
   type ChannelPrefs,
 } from '../state/store.js';
 import { getChannelConfig, getChannelBotName, evaluateConfigPermissions, isBotAdmin, getConfig } from '../config.js';
@@ -958,6 +958,85 @@ export class SessionManager {
           } catch (err: any) {
             log.error(`create_project failed:`, err);
             return { content: `Failed to create project: ${err?.message ?? 'unknown error'}` };
+          }
+        },
+      });
+
+      // Tool: grant_path_access — add an extra allowed path for an agent
+      tools.push({
+        name: 'grant_path_access',
+        description: 'Grant an agent read/write access to an additional folder beyond its workspace. Updates the workspace_overrides table in SQLite.',
+        parameters: {
+          type: 'object',
+          properties: {
+            bot_name: { type: 'string', description: 'The bot/agent name (e.g., "inbox", "bob").' },
+            path: { type: 'string', description: 'Absolute path to the folder to grant access to.' },
+          },
+          required: ['bot_name', 'path'],
+        },
+        handler: async (args: { bot_name: string; path: string }) => {
+          try {
+            const existing = getWorkspaceOverride(args.bot_name);
+            const workDir = existing?.workingDirectory ?? getWorkspacePath(args.bot_name);
+            const currentPaths = existing?.allowPaths ?? [];
+            const resolvedPath = path.resolve(args.path);
+            if (currentPaths.includes(resolvedPath)) {
+              return { content: `"${args.bot_name}" already has access to ${resolvedPath}.` };
+            }
+            const newPaths = [...currentPaths, resolvedPath];
+            setWorkspaceOverride(args.bot_name, workDir, newPaths);
+            return {
+              content: `✅ Granted "${args.bot_name}" access to ${resolvedPath}.\nCurrent allowed paths: ${JSON.stringify(newPaths)}\n\nThe agent needs /new or a bridge restart to pick up the change.`,
+            };
+          } catch (err: any) {
+            return { content: `Failed: ${err?.message ?? 'unknown error'}` };
+          }
+        },
+      });
+
+      // Tool: revoke_path_access — remove an allowed path from an agent
+      tools.push({
+        name: 'revoke_path_access',
+        description: 'Remove an extra allowed folder from an agent. Does not affect its workspace directory.',
+        parameters: {
+          type: 'object',
+          properties: {
+            bot_name: { type: 'string', description: 'The bot/agent name.' },
+            path: { type: 'string', description: 'Absolute path to revoke access from.' },
+          },
+          required: ['bot_name', 'path'],
+        },
+        handler: async (args: { bot_name: string; path: string }) => {
+          try {
+            const existing = getWorkspaceOverride(args.bot_name);
+            if (!existing) return { content: `No workspace override found for "${args.bot_name}".` };
+            const resolvedPath = path.resolve(args.path);
+            const newPaths = existing.allowPaths.filter(p => path.resolve(p) !== resolvedPath);
+            setWorkspaceOverride(args.bot_name, existing.workingDirectory, newPaths);
+            return {
+              content: `✅ Revoked "${args.bot_name}" access to ${resolvedPath}.\nRemaining allowed paths: ${JSON.stringify(newPaths)}\n\nThe agent needs /new or a bridge restart to pick up the change.`,
+            };
+          } catch (err: any) {
+            return { content: `Failed: ${err?.message ?? 'unknown error'}` };
+          }
+        },
+      });
+
+      // Tool: list_agent_access — show workspace overrides for all agents
+      tools.push({
+        name: 'list_agent_access',
+        description: 'List all agents and their workspace paths and extra allowed folders.',
+        parameters: { type: 'object', properties: {} },
+        handler: async () => {
+          try {
+            const overrides = listWorkspaceOverrides();
+            if (overrides.length === 0) return { content: 'No workspace overrides configured.' };
+            const lines = overrides.map(o =>
+              `**${o.botName}**\n  Workspace: ${o.workingDirectory}\n  Extra paths: ${o.allowPaths.length > 0 ? o.allowPaths.join(', ') : '(none)'}`
+            );
+            return { content: lines.join('\n\n') };
+          } catch (err: any) {
+            return { content: `Failed: ${err?.message ?? 'unknown error'}` };
           }
         },
       });
