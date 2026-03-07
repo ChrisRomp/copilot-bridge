@@ -8,8 +8,9 @@ import {
   getWorkspaceOverride,
   type ChannelPrefs,
 } from '../state/store.js';
-import { getChannelConfig, getChannelBotName, evaluateConfigPermissions, isBotAdmin } from '../config.js';
+import { getChannelConfig, getChannelBotName, evaluateConfigPermissions, isBotAdmin, getConfig, getPlatformBots } from '../config.js';
 import { getWorkspacePath, getWorkspaceAllowPaths, ensureWorkspacesDir } from './workspace-manager.js';
+import { onboardProject, slugify } from './onboarding.js';
 import { createLogger } from '../logger.js';
 import type { McpServerInfo } from './command-handler.js';
 import type {
@@ -295,6 +296,9 @@ export class SessionManager {
   private contextUsage = new Map<string, { currentTokens: number; tokenLimit: number }>();
   // Handler for send_file tool (set by index.ts, calls adapter.sendFile)
   private sendFileHandler: ((channelId: string, filePath: string, message?: string) => Promise<string>) | null = null;
+  // Handler for onboarding tools (set by index.ts, calls adapter admin methods)
+  private onboardHandler: ((channelId: string, adapter: ChannelAdapter) => ChannelAdapter) | null = null;
+  private getAdapterForChannel: ((channelId: string) => ChannelAdapter | null) | null = null;
 
   constructor(bridge: CopilotBridge) {
     this.bridge = bridge;
@@ -310,6 +314,11 @@ export class SessionManager {
   /** Register handler for the send_file custom tool. */
   onSendFile(handler: (channelId: string, filePath: string, message?: string) => Promise<string>): void {
     this.sendFileHandler = handler;
+  }
+
+  /** Register adapter resolver for onboarding tools. */
+  onGetAdapter(resolver: (channelId: string) => ChannelAdapter | null): void {
+    this.getAdapterForChannel = resolver;
   }
 
   /**
@@ -831,6 +840,105 @@ export class SessionManager {
           } catch (err: any) {
             log.error(`send_file failed for channel ${channelId.slice(0, 8)}...:`, err);
             return { content: `Failed to send file: ${err?.message ?? 'unknown error'}` };
+          }
+        },
+      });
+    }
+
+    // Admin-only onboarding tools
+    const config = getChannelConfig(channelId);
+    const botName = getChannelBotName(channelId);
+    const isAdmin = isBotAdmin(config.platform, botName);
+
+    if (isAdmin && this.getAdapterForChannel) {
+      const adapterResolver = this.getAdapterForChannel;
+
+      // Tool: get_platform_info — returns available teams, bots, and defaults
+      tools.push({
+        name: 'get_platform_info',
+        description: 'Get information about the bridge platform: available teams, bot names, and defaults. Use this when onboarding a new project to present options to the user.',
+        parameters: { type: 'object', properties: {} },
+        handler: async () => {
+          try {
+            const adapter = adapterResolver(channelId);
+            if (!adapter?.getTeams) return { content: 'Platform does not support team listing.' };
+
+            const teams = await adapter.getTeams();
+            const appConfig = getConfig();
+            const platformConfig = appConfig.platforms[config.platform];
+            const botNames = platformConfig.bots ? Object.keys(platformConfig.bots) : ['default'];
+
+            return {
+              content: JSON.stringify({
+                teams: teams.map(t => ({ id: t.id, name: t.name, displayName: t.displayName })),
+                bots: botNames,
+                defaults: {
+                  model: appConfig.defaults.model,
+                  triggerMode: appConfig.defaults.triggerMode,
+                  threadedReplies: appConfig.defaults.threadedReplies,
+                },
+              }, null, 2),
+            };
+          } catch (err: any) {
+            return { content: `Error: ${err?.message ?? 'unknown'}` };
+          }
+        },
+      });
+
+      // Tool: create_project — full onboarding orchestration
+      tools.push({
+        name: 'create_project',
+        description: 'Create a new project: set up a Mattermost channel, assign a bot, initialize the workspace, and optionally clone a git repo. The channel is immediately active after creation. Use get_platform_info first to get team IDs and available bots.',
+        parameters: {
+          type: 'object',
+          properties: {
+            project_name: { type: 'string', description: 'Human-readable project name (e.g., "Widget API"). Will be slugified for the channel name.' },
+            bot_name: { type: 'string', description: 'Bot to assign (e.g., "copilot", "bob"). Must be a configured bot name.' },
+            team_id: { type: 'string', description: 'Mattermost team ID (from get_platform_info).' },
+            private: { type: 'boolean', description: 'Create a private channel (default: true).' },
+            workspace_path: { type: 'string', description: 'Custom workspace directory path. If omitted, defaults to ~/.copilot-bridge/workspaces/<project-slug>/.' },
+            repo_url: { type: 'string', description: 'Git repository URL to clone into the workspace. Optional — skip for new projects.' },
+            user_id: { type: 'string', description: 'Mattermost user ID of the requesting user, to add them to the channel.' },
+          },
+          required: ['project_name', 'bot_name', 'team_id'],
+        },
+        handler: async (args: {
+          project_name: string;
+          bot_name: string;
+          team_id: string;
+          private?: boolean;
+          workspace_path?: string;
+          repo_url?: string;
+          user_id?: string;
+        }) => {
+          try {
+            const adapter = adapterResolver(channelId);
+            if (!adapter) return { content: 'Error: No adapter available for this channel.' };
+
+            const result = await onboardProject(adapter, {
+              projectName: args.project_name,
+              botName: args.bot_name,
+              platform: config.platform,
+              teamId: args.team_id,
+              private: args.private,
+              workspacePath: args.workspace_path,
+              repoUrl: args.repo_url,
+              userId: args.user_id,
+            });
+
+            return {
+              content: [
+                `✅ Project "${args.project_name}" created:`,
+                ...result.steps.map(s => `  - ${s}`),
+                '',
+                `Channel: #${result.channelName}`,
+                `Workspace: ${result.workspacePath}`,
+                result.cloned ? `Repo cloned: ${args.repo_url}` : '',
+              ].filter(Boolean).join('\n'),
+            };
+          } catch (err: any) {
+            log.error(`create_project failed:`, err);
+            return { content: `Failed to create project: ${err?.message ?? 'unknown error'}` };
           }
         },
       });

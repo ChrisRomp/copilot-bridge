@@ -191,6 +191,12 @@ async function main(): Promise<void> {
     return resolved.adapter.sendFile(channelId, filePath, message, { threadRootId });
   });
 
+  // Provide adapter resolver for onboarding tools
+  sessionManager.onGetAdapter((channelId) => {
+    const resolved = getAdapterForChannel(channelId);
+    return resolved?.adapter ?? null;
+  });
+
   // Connect all bot adapters and wire up handlers
   for (const [key, adapter] of botAdapters) {
     const streaming = botStreamers.get(key)!;

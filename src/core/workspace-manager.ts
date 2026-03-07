@@ -77,8 +77,8 @@ export function getWorkspaceAllowPaths(botName: string, platformName?: string): 
   return paths;
 }
 
-export function initWorkspace(botName: string): string {
-  const workspacePath = getWorkspacePath(botName);
+export function initWorkspace(botName: string, overridePath?: string): string {
+  const workspacePath = overridePath ?? getWorkspacePath(botName);
   if (!fs.existsSync(workspacePath)) {
     fs.mkdirSync(workspacePath, { recursive: true });
   }
