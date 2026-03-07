@@ -291,6 +291,11 @@ async function handleInboundMessage(
   platformName: string,
   botName: string,
 ): Promise<void> {
+  // Ignore messages from any bot we manage (prevents cross-bot loops)
+  for (const [, a] of botAdapters) {
+    if (msg.userId === a.getBotUserId()) return;
+  }
+
   // Auto-register DM channels for known bots
   if (!isConfiguredChannel(msg.channelId) && msg.isDM) {
     const workspacePath = getWorkspacePath(botName);
@@ -314,6 +319,10 @@ async function handleInboundMessage(
     log.debug(`Ignoring unconfigured channel ${msg.channelId}`);
     return;
   }
+
+  // Only the assigned bot processes messages for this channel (prevents duplicate handling)
+  const assignedBot = getChannelBotName(msg.channelId);
+  if (assignedBot && assignedBot !== botName) return;
 
   const resolved = getAdapterForChannel(msg.channelId);
   if (!resolved) {
