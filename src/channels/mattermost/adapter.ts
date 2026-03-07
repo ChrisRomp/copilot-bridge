@@ -31,6 +31,13 @@ export class MattermostAdapter implements ChannelAdapter {
   private messageHandlers: Array<(msg: InboundMessage) => void> = [];
   private reactionHandlers: Array<(reaction: InboundReaction) => void> = [];
 
+  // WebSocket reconnect replay
+  private disconnectedAt: number | null = null;
+  private activeChannels = new Set<string>();
+  private recentPostIds = new Set<string>();
+  private static readonly MAX_RECENT_POSTS = 500;
+  private static readonly MAX_REPLAY_WINDOW_MS = 60_000;
+
   constructor(platformName: string, url: string, token: string) {
     this.platform = platformName;
     this.url = url.replace(/\/+$/, '');
@@ -55,6 +62,29 @@ export class MattermostAdapter implements ChannelAdapter {
 
     this.wsClient.addMissedMessageListener(() => {
       log.warn(`WebSocket reconnected — missed events, resetting state`);
+    });
+
+    this.wsClient.addCloseListener((failCount: number) => {
+      if (!this.disconnectedAt) {
+        this.disconnectedAt = Date.now();
+        log.warn(`WebSocket closed (failCount=${failCount}), tracking disconnect time`);
+      }
+    });
+
+    this.wsClient.addErrorListener((event: Event) => {
+      log.warn(`WebSocket error:`, (event as any)?.message ?? event.type);
+    });
+
+    this.wsClient.addReconnectListener(() => {
+      const disconnectedAt = this.disconnectedAt;
+      this.disconnectedAt = null;
+      if (disconnectedAt) {
+        const gapMs = Date.now() - disconnectedAt;
+        log.info(`WebSocket reconnected after ${(gapMs / 1000).toFixed(1)}s`);
+        this.replayMissedMessages(disconnectedAt, gapMs).catch(err =>
+          log.error('Failed to replay missed messages:', err)
+        );
+      }
     });
 
     await this.wsClient.initialize(wsUrl, this.token);
@@ -159,6 +189,9 @@ export class MattermostAdapter implements ChannelAdapter {
 
       // Ignore own messages
       if (post.user_id === this.botId) return;
+
+      // Track for reconnect replay
+      this.trackPost(post.id, post.channel_id);
 
       const channelType: string = msg.data.channel_type ?? '';
       const isDM = channelType === 'D' || channelType === 'G';
@@ -357,5 +390,131 @@ export class MattermostAdapter implements ChannelAdapter {
     } catch (err) {
       log.error('Failed to parse reaction event:', err);
     }
+  }
+
+  /** Track a post ID and its channel for deduplication and replay targeting. */
+  private trackPost(postId: string, channelId: string): void {
+    this.activeChannels.add(channelId);
+    this.recentPostIds.add(postId);
+
+    // Bound the set to prevent unbounded growth
+    if (this.recentPostIds.size > MattermostAdapter.MAX_RECENT_POSTS) {
+      const iter = this.recentPostIds.values();
+      for (let i = 0; i < 100; i++) {
+        const val = iter.next().value;
+        if (val != null) this.recentPostIds.delete(val);
+      }
+    }
+  }
+
+  /** Fetch and replay messages missed during a WebSocket disconnect. */
+  private async replayMissedMessages(disconnectedAt: number, gapMs: number): Promise<void> {
+    if (gapMs > MattermostAdapter.MAX_REPLAY_WINDOW_MS) {
+      log.warn(`Disconnect lasted ${(gapMs / 1000).toFixed(1)}s (>${MattermostAdapter.MAX_REPLAY_WINDOW_MS / 1000}s cap) — skipping replay`);
+      return;
+    }
+
+    const channels = Array.from(this.activeChannels);
+    if (channels.length === 0) {
+      log.info('No active channels to replay');
+      return;
+    }
+
+    log.info(`Replaying missed messages for ${channels.length} channel(s), gap=${(gapMs / 1000).toFixed(1)}s`);
+
+    // Pre-fetch channel types for isDM detection
+    const channelTypes = new Map<string, string>();
+    for (const channelId of channels) {
+      try {
+        const baseUrl = this.client.getBaseRoute();
+        const resp = await fetch(`${baseUrl}/channels/${channelId}`, {
+          headers: { 'Authorization': `Bearer ${this.token}` },
+        });
+        if (resp.ok) {
+          const ch = await resp.json() as { type: string };
+          channelTypes.set(channelId, ch.type);
+        }
+      } catch { /* best effort */ }
+    }
+
+    // Cache for user lookups
+    const usernames = new Map<string, string>();
+    let replayCount = 0;
+
+    for (const channelId of channels) {
+      try {
+        const baseUrl = this.client.getBaseRoute();
+        const resp = await fetch(
+          `${baseUrl}/channels/${channelId}/posts?since=${disconnectedAt}`,
+          { headers: { 'Authorization': `Bearer ${this.token}` } },
+        );
+        if (!resp.ok) {
+          log.warn(`Failed to fetch posts for channel ${channelId.slice(0, 8)}: ${resp.status}`);
+          continue;
+        }
+
+        const data = await resp.json() as { order: string[]; posts: Record<string, any> };
+        // Process in chronological order (order is newest-first)
+        const postIds = [...(data.order ?? [])].reverse();
+
+        for (const postId of postIds) {
+          if (this.recentPostIds.has(postId)) continue;
+          const post = data.posts[postId];
+          if (!post || post.user_id === this.botId) continue;
+          if (post.delete_at > 0) continue;
+
+          this.trackPost(postId, channelId);
+
+          // Resolve username (cached)
+          let username = usernames.get(post.user_id) ?? '';
+          if (!username) {
+            try {
+              const userResp = await fetch(`${baseUrl}/users/${post.user_id}`, {
+                headers: { 'Authorization': `Bearer ${this.token}` },
+              });
+              if (userResp.ok) {
+                const user = await userResp.json() as { username: string };
+                username = user.username;
+                usernames.set(post.user_id, username);
+              }
+            } catch { /* best effort */ }
+          }
+
+          const channelType = channelTypes.get(channelId) ?? '';
+          const isDM = channelType === 'D' || channelType === 'G';
+          const mentionsBot = isDM || post.message?.includes(`@${this.botUsername}`);
+
+          const inbound: InboundMessage = {
+            platform: this.platform,
+            channelId: post.channel_id,
+            userId: post.user_id,
+            username,
+            text: post.message ?? '',
+            postId: post.id,
+            threadRootId: post.root_id || undefined,
+            mentionsBot,
+            isDM,
+            attachments: this.extractAttachments(post),
+          };
+
+          log.info(`Replaying missed post ${postId.slice(0, 8)} from ${username || 'unknown'} in channel ${channelId.slice(0, 8)}`);
+          for (const handler of this.messageHandlers) {
+            try {
+              const result: any = handler(inbound);
+              if (result && typeof result.catch === 'function') {
+                result.catch((err: unknown) => log.error('Replay handler error:', err));
+              }
+            } catch (err) {
+              log.error('Replay handler error:', err);
+            }
+          }
+          replayCount++;
+        }
+      } catch (err) {
+        log.error(`Error replaying channel ${channelId.slice(0, 8)}:`, err);
+      }
+    }
+
+    log.info(`Replay complete: ${replayCount} message(s) replayed across ${channels.length} channel(s)`);
   }
 }
