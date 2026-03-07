@@ -33,10 +33,13 @@ export class MattermostAdapter implements ChannelAdapter {
 
   // WebSocket reconnect replay
   private disconnectedAt: number | null = null;
-  private activeChannels = new Set<string>();
+  private lastServerTimestamp: number | null = null; // server-side create_at from last received post
+  private activeChannels = new Map<string, number>(); // channelId → last activity timestamp
   private recentPostIds = new Set<string>();
+  private isReplaying = false;
   private static readonly MAX_RECENT_POSTS = 500;
   private static readonly MAX_REPLAY_WINDOW_MS = 60_000;
+  private static readonly CHANNEL_STALENESS_MS = 3_600_000; // 1 hour
 
   constructor(platformName: string, url: string, token: string) {
     this.platform = platformName;
@@ -80,8 +83,10 @@ export class MattermostAdapter implements ChannelAdapter {
       this.disconnectedAt = null;
       if (disconnectedAt) {
         const gapMs = Date.now() - disconnectedAt;
+        // Use last known server timestamp (immune to clock skew), fall back to client time with safety buffer
+        const sinceTimestamp = this.lastServerTimestamp ?? (disconnectedAt - 5_000);
         log.info(`WebSocket reconnected after ${(gapMs / 1000).toFixed(1)}s`);
-        this.replayMissedMessages(disconnectedAt, gapMs).catch(err =>
+        this.replayMissedMessages(sinceTimestamp, gapMs).catch(err =>
           log.error('Failed to replay missed messages:', err)
         );
       }
@@ -191,7 +196,7 @@ export class MattermostAdapter implements ChannelAdapter {
       if (post.user_id === this.botId) return;
 
       // Track for reconnect replay
-      this.trackPost(post.id, post.channel_id);
+      this.trackPost(post.id, post.channel_id, post.create_at);
 
       const channelType: string = msg.data.channel_type ?? '';
       const isDM = channelType === 'D' || channelType === 'G';
@@ -393,9 +398,14 @@ export class MattermostAdapter implements ChannelAdapter {
   }
 
   /** Track a post ID and its channel for deduplication and replay targeting. */
-  private trackPost(postId: string, channelId: string): void {
-    this.activeChannels.add(channelId);
+  private trackPost(postId: string, channelId: string, serverTimestamp?: number): void {
+    this.activeChannels.set(channelId, Date.now());
     this.recentPostIds.add(postId);
+
+    // Track server-side timestamp for clock-skew-immune replay
+    if (serverTimestamp && (!this.lastServerTimestamp || serverTimestamp > this.lastServerTimestamp)) {
+      this.lastServerTimestamp = serverTimestamp;
+    }
 
     // Bound the set to prevent unbounded growth
     if (this.recentPostIds.size > MattermostAdapter.MAX_RECENT_POSTS) {
@@ -408,31 +418,44 @@ export class MattermostAdapter implements ChannelAdapter {
   }
 
   /** Fetch and replay messages missed during a WebSocket disconnect. */
-  private async replayMissedMessages(disconnectedAt: number, gapMs: number): Promise<void> {
+  private async replayMissedMessages(sinceTimestamp: number, gapMs: number): Promise<void> {
     if (gapMs > MattermostAdapter.MAX_REPLAY_WINDOW_MS) {
       log.warn(`Disconnect lasted ${(gapMs / 1000).toFixed(1)}s (>${MattermostAdapter.MAX_REPLAY_WINDOW_MS / 1000}s cap) — skipping replay`);
       return;
     }
 
-    const channels = Array.from(this.activeChannels);
-    if (channels.length === 0) {
-      log.info('No active channels to replay');
+    // Concurrency guard: cancel any previous replay
+    if (this.isReplaying) {
+      log.warn('Replay already in progress — skipping (newer reconnect will subsume)');
       return;
     }
+    this.isReplaying = true;
 
-    log.info(`Replaying missed messages for ${channels.length} channel(s), gap=${(gapMs / 1000).toFixed(1)}s`);
+    try {
+      // Filter to recently active channels only
+      const now = Date.now();
+      const channels = Array.from(this.activeChannels.entries())
+        .filter(([, lastActivity]) => now - lastActivity < MattermostAdapter.CHANNEL_STALENESS_MS)
+        .map(([id]) => id);
 
-    // Pre-fetch channel types for isDM detection
-    const channelTypes = new Map<string, string>();
-    for (const channelId of channels) {
-      try {
-        const baseUrl = this.client.getBaseRoute();
-        const resp = await fetch(`${baseUrl}/channels/${channelId}`, {
-          headers: { 'Authorization': `Bearer ${this.token}` },
-        });
-        if (resp.ok) {
-          const ch = await resp.json() as { type: string };
-          channelTypes.set(channelId, ch.type);
+      if (channels.length === 0) {
+        log.info('No active channels to replay');
+        return;
+      }
+
+      log.info(`Replaying missed messages for ${channels.length} channel(s), gap=${(gapMs / 1000).toFixed(1)}s`);
+
+      // Pre-fetch channel types for isDM detection
+      const channelTypes = new Map<string, string>();
+      for (const channelId of channels) {
+        try {
+          const baseUrl = this.client.getBaseRoute();
+          const resp = await fetch(`${baseUrl}/channels/${channelId}`, {
+            headers: { 'Authorization': `Bearer ${this.token}` },
+          });
+          if (resp.ok) {
+            const ch = await resp.json() as { type: string };
+            channelTypes.set(channelId, ch.type);
         }
       } catch { /* best effort */ }
     }
@@ -445,7 +468,7 @@ export class MattermostAdapter implements ChannelAdapter {
       try {
         const baseUrl = this.client.getBaseRoute();
         const resp = await fetch(
-          `${baseUrl}/channels/${channelId}/posts?since=${disconnectedAt}`,
+          `${baseUrl}/channels/${channelId}/posts?since=${sinceTimestamp}`,
           { headers: { 'Authorization': `Bearer ${this.token}` } },
         );
         if (!resp.ok) {
@@ -516,5 +539,8 @@ export class MattermostAdapter implements ChannelAdapter {
     }
 
     log.info(`Replay complete: ${replayCount} message(s) replayed across ${channels.length} channel(s)`);
+    } finally {
+      this.isReplaying = false;
+    }
   }
 }
