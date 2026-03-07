@@ -617,6 +617,10 @@ async function handleReaction(
     if (sessionManager.resolvePermission(reaction.channelId, false)) {
       await adapter.sendMessage(reaction.channelId, '❌ Denied via reaction.');
     }
+  } else if (reaction.emoji === 'floppy_disk') {
+    if (sessionManager.resolvePermission(reaction.channelId, true, true)) {
+      await adapter.sendMessage(reaction.channelId, '💾 Approved + remembered via reaction.');
+    }
   }
 }
 
