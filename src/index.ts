@@ -405,6 +405,17 @@ async function handleInboundMessage(
         await adapter.sendMessage(msg.channelId, '✅ New session created.', { threadRootId: threadRoot });
         break;
       }
+      case 'stop_session': {
+        const stopStreamKey = activeStreams.get(msg.channelId);
+        if (stopStreamKey) {
+          await streaming.cancelStream(stopStreamKey);
+          activeStreams.delete(msg.channelId);
+        }
+        await finalizeActivityFeed(msg.channelId, adapter);
+        await sessionManager.abortSession(msg.channelId);
+        await adapter.sendMessage(msg.channelId, '🛑 Task stopped.', { threadRootId: threadRoot });
+        break;
+      }
       case 'reload_session': {
         const oldReloadStream = activeStreams.get(msg.channelId);
         if (oldReloadStream) {

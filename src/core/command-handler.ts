@@ -39,7 +39,7 @@ export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'reload_session' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'set_reasoning';
+           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'set_reasoning' | 'stop_session';
   payload?: any;
 }
 
@@ -141,6 +141,10 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
   switch (parsed.command) {
     case 'new':
       return { handled: true, action: 'new_session', response: '🔄 Creating new session...' };
+
+    case 'stop':
+    case 'cancel':
+      return { handled: true, action: 'stop_session', response: '🛑 Stopping current task...' };
 
     case 'reload':
       return { handled: true, action: 'reload_session', response: '🔄 Reloading session...' };
@@ -353,6 +357,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         response: [
           '**Available Commands**',
           '`/new` — Start a new session',
+          '`/stop` — Stop the current task (alias: `/cancel`)',
           '`/reload` — Reload current session (re-reads AGENTS.md, config)',
           '`/resume [id]` — Resume current session (or a past one by ID)',
           '`/model [name]` — List models or switch model (fuzzy match)',

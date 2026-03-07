@@ -692,6 +692,14 @@ export class SessionManager {
     return this.channelSessions.get(channelId) ?? getChannelSession(channelId) ?? undefined;
   }
 
+  /** Abort the current turn for a channel's session. */
+  async abortSession(channelId: string): Promise<void> {
+    const sessionId = this.channelSessions.get(channelId);
+    if (sessionId) {
+      await this.bridge.abortSession(sessionId);
+    }
+  }
+
   /** Check if channel has a pending user input request. */
   hasPendingUserInput(channelId: string): boolean {
     const queue = this.pendingUserInput.get(channelId);

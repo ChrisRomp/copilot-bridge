@@ -159,6 +159,13 @@ export class CopilotBridge {
     }
   }
 
+  async abortSession(id: string): Promise<void> {
+    const session = this.sessions.get(id);
+    if (session) {
+      await session.abort();
+    }
+  }
+
   async deleteSession(id: string): Promise<void> {
     await this.destroySession(id);
     await this.client.deleteSession(id);
