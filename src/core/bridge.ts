@@ -49,7 +49,7 @@ export class CopilotBridge {
   async stop(): Promise<void> {
     if (!this.started) return;
     for (const [, session] of this.sessions) {
-      try { await session.destroy(); } catch { /* best-effort */ }
+      try { await session.disconnect(); } catch { /* best-effort */ }
     }
     this.sessions.clear();
     this.lifecycleUnsubscribe?.();
@@ -154,8 +154,11 @@ export class CopilotBridge {
   async destroySession(id: string): Promise<void> {
     const session = this.sessions.get(id);
     if (session) {
-      await session.destroy();
-      this.sessions.delete(id);
+      try {
+        await session.disconnect();
+      } finally {
+        this.sessions.delete(id);
+      }
     }
   }
 

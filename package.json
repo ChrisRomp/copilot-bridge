@@ -17,7 +17,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@github/copilot-sdk": "^0.1.30",
+    "@github/copilot-sdk": "^0.1.32",
     "@mattermost/client": "^10.3.0",
     "@mattermost/types": "^10.3.0",
     "better-sqlite3": "^11.7.0",
