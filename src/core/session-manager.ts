@@ -900,25 +900,25 @@ export class SessionManager {
             project_name: { type: 'string', description: 'Human-readable project name (e.g., "Widget API"). Will be slugified for the channel name.' },
             bot_name: { type: 'string', description: 'Bot to assign (e.g., "copilot", "bob"). Must be a configured bot name.' },
             team_id: { type: 'string', description: 'Mattermost team ID (from get_platform_info).' },
-            private: { type: 'boolean', description: 'Create a private channel (default: true).' },
-            workspace_path: { type: 'string', description: 'Custom workspace directory path. If omitted, defaults to ~/.copilot-bridge/workspaces/<project-slug>/.' },
+            private: { type: 'boolean', description: 'Create a private channel. Ask the user: private or public?' },
+            workspace_path: { type: 'string', description: 'Workspace directory path. Ask the user — default is ~/.copilot-bridge/workspaces/<project-slug>/.' },
             repo_url: { type: 'string', description: 'Git repository URL to clone into the workspace. Optional — skip for new projects.' },
             user_id: { type: 'string', description: 'Mattermost user ID of the requesting user, to add them to the channel.' },
-            trigger_mode: { type: 'string', description: 'How the bot responds: "all" (every message), "mention" (only when @mentioned or in DMs). Default from platform config.' },
-            threaded_replies: { type: 'boolean', description: 'Whether the bot replies in threads. Default from platform config.' },
+            trigger_mode: { type: 'string', enum: ['all', 'mention'], description: 'How the bot responds. Ask the user: "all" (every message) or "mention" (only when @mentioned).' },
+            threaded_replies: { type: 'boolean', description: 'Whether the bot replies in threads. Ask the user: yes or no.' },
           },
-          required: ['project_name', 'bot_name', 'team_id'],
+          required: ['project_name', 'bot_name', 'team_id', 'private', 'workspace_path', 'trigger_mode', 'threaded_replies'],
         },
         handler: async (args: {
           project_name: string;
           bot_name: string;
           team_id: string;
-          private?: boolean;
-          workspace_path?: string;
+          private: boolean;
+          workspace_path: string;
           repo_url?: string;
           user_id?: string;
-          trigger_mode?: string;
-          threaded_replies?: boolean;
+          trigger_mode: 'all' | 'mention';
+          threaded_replies: boolean;
         }) => {
           try {
             const adapter = adapterResolver(channelId);
@@ -933,7 +933,7 @@ export class SessionManager {
               workspacePath: args.workspace_path,
               repoUrl: args.repo_url,
               userId: args.user_id ?? this.lastMessageUserIds.get(channelId),
-              triggerMode: args.trigger_mode === 'all' || args.trigger_mode === 'mention' ? args.trigger_mode : undefined,
+              triggerMode: args.trigger_mode,
               threadedReplies: args.threaded_replies,
             });
 
