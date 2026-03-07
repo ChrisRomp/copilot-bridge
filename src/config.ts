@@ -356,7 +356,7 @@ export function getHardcodedRules(): Array<{ spec: string; action: 'allow' | 'de
     { spec: 'shell(rm -rf ~)', action: 'deny', source: 'hardcoded' },
     { spec: 'shell(mkfs)', action: 'deny', source: 'hardcoded' },
     { spec: 'shell(dd … of=/dev/*)', action: 'deny', source: 'hardcoded' },
-    { spec: 'shell(fork bomb)', action: 'deny', source: 'hardcoded' },
+    { spec: 'shell(:(){ :|:& };:)', action: 'deny', source: 'hardcoded' },
     { spec: 'shell(chmod -R / /etc /usr /var ~)', action: 'deny', source: 'hardcoded' },
     { spec: 'shell(chown -R / /etc /usr /var ~)', action: 'deny', source: 'hardcoded' },
     { spec: 'read/write in workspace', action: 'allow', source: 'hardcoded' },
