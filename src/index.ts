@@ -347,14 +347,19 @@ async function main(): Promise<void> {
         const resolved = getAdapterForChannel(channelId);
         if (resolved) {
           const { streaming } = resolved;
-          // Finalize any existing stream so the scheduled job gets its own message
-          const existingStream = activeStreams.get(channelId);
-          if (existingStream) {
-            await streaming.finalizeStream(existingStream);
-            activeStreams.delete(channelId);
-          }
-          const streamKey = await streaming.startStream(channelId);
-          activeStreams.set(channelId, streamKey);
+          // Atomically swap streams via eventLocks to prevent event interleaving
+          const evPrev = eventLocks.get(channelId) ?? Promise.resolve();
+          const evTask = evPrev.then(async () => {
+            const existingStream = activeStreams.get(channelId);
+            if (existingStream) {
+              await streaming.finalizeStream(existingStream);
+              activeStreams.delete(channelId);
+            }
+            const streamKey = await streaming.startStream(channelId);
+            activeStreams.set(channelId, streamKey);
+          });
+          eventLocks.set(channelId, evTask.catch(() => {}));
+          await evTask;
           busyChannels.add(channelId);
         }
         try {
@@ -467,12 +472,20 @@ async function handleMidTurnMessage(
 
   log.info(`Mid-turn steering for ${msg.channelId.slice(0, 8)}...: "${text.slice(0, 100)}"`);
 
-  // Finalize the current stream so the steered response starts a new message
-  const existingStream = activeStreams.get(msg.channelId);
-  if (existingStream) {
-    await resolved.streaming.finalizeStream(existingStream);
-    activeStreams.delete(msg.channelId);
-  }
+  // Atomically swap streams via eventLocks so no residual events from the
+  // previous response can sneak in between finalization and the new stream.
+  const evPrev = eventLocks.get(msg.channelId) ?? Promise.resolve();
+  const evTask = evPrev.then(async () => {
+    const existingStream = activeStreams.get(msg.channelId);
+    if (existingStream) {
+      await resolved.streaming.finalizeStream(existingStream);
+      activeStreams.delete(msg.channelId);
+    }
+    const newKey = await resolved.streaming.startStream(msg.channelId);
+    activeStreams.set(msg.channelId, newKey);
+  });
+  eventLocks.set(msg.channelId, evTask.catch(() => {}));
+  await evTask;
 
   await sessionManager.sendMidTurn(msg.channelId, text, msg.userId);
 
@@ -913,16 +926,21 @@ async function handleInboundMessage(
     log.info(`Forwarding to Copilot: "${text.slice(0, 100)}"`);
     adapter.setTyping(msg.channelId).catch(() => {});
 
-    const existingStreamKey = activeStreams.get(msg.channelId);
-    if (existingStreamKey) {
-      await streaming.finalizeStream(existingStreamKey);
-      activeStreams.delete(msg.channelId);
-    }
-
+    // Atomically swap streams via eventLocks to prevent event interleaving
     const threadRoot = resolveThreadRoot(msg, threadRequested, channelConfig);
-    initialStreamPosted.add(msg.channelId);
-    const streamKey = await streaming.startStream(msg.channelId, threadRoot);
-    activeStreams.set(msg.channelId, streamKey);
+    const evPrev = eventLocks.get(msg.channelId) ?? Promise.resolve();
+    const evTask = evPrev.then(async () => {
+      const existingStreamKey = activeStreams.get(msg.channelId);
+      if (existingStreamKey) {
+        await streaming.finalizeStream(existingStreamKey);
+        activeStreams.delete(msg.channelId);
+      }
+      initialStreamPosted.add(msg.channelId);
+      const streamKey = await streaming.startStream(msg.channelId, threadRoot);
+      activeStreams.set(msg.channelId, streamKey);
+    });
+    eventLocks.set(msg.channelId, evTask.catch(() => {}));
+    await evTask;
 
     // Mark busy before send so mid-turn messages arriving during the await are steered
     busyChannels.add(msg.channelId);
