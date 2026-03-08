@@ -147,6 +147,40 @@ function getDb(): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_agent_calls_created ON agent_calls(created_at);
     CREATE INDEX IF NOT EXISTS idx_agent_calls_chain ON agent_calls(chain_id);
+
+    CREATE TABLE IF NOT EXISTS scheduled_tasks (
+      id TEXT PRIMARY KEY,
+      channel_id TEXT NOT NULL,
+      bot_name TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      cron_expr TEXT,
+      run_at TEXT,
+      timezone TEXT NOT NULL DEFAULT 'UTC',
+      created_by TEXT,
+      description TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      last_run TEXT,
+      next_run TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sched_channel ON scheduled_tasks(channel_id);
+    CREATE INDEX IF NOT EXISTS idx_sched_enabled ON scheduled_tasks(enabled);
+
+    CREATE TABLE IF NOT EXISTS scheduled_task_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      description TEXT,
+      timezone TEXT NOT NULL DEFAULT 'UTC',
+      status TEXT NOT NULL DEFAULT 'success',
+      fired_at TEXT NOT NULL DEFAULT (datetime('now')),
+      error TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sched_hist_task ON scheduled_task_history(task_id);
+    CREATE INDEX IF NOT EXISTS idx_sched_hist_channel ON scheduled_task_history(channel_id);
   `);
 
   // Migration: ensure channel_prefs columns are nullable (fixes NOT NULL constraints from older schema)
@@ -155,6 +189,11 @@ function getDb(): Database.Database {
   // Schema migrations for existing DBs
   try {
     _db.exec(`ALTER TABLE channel_prefs ADD COLUMN reasoning_effort TEXT`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    _db.exec(`ALTER TABLE scheduled_task_history ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'`);
   } catch {
     // Column already exists
   }
@@ -542,6 +581,131 @@ export function getRecentAgentCalls(limit: number = 20): Array<AgentCallRecord &
     chainId: r.chain_id ?? undefined,
     depth: r.depth ?? 0,
     createdAt: r.created_at,
+  }));
+}
+
+// --- Scheduled Tasks ---
+
+export interface ScheduledTask {
+  id: string;
+  channelId: string;
+  botName: string;
+  prompt: string;
+  cronExpr?: string;
+  runAt?: string;
+  timezone: string;
+  createdBy?: string;
+  description?: string;
+  enabled: boolean;
+  lastRun?: string;
+  nextRun?: string;
+  createdAt: string;
+}
+
+export function insertScheduledTask(task: Omit<ScheduledTask, 'createdAt' | 'lastRun' | 'nextRun'> & { nextRun?: string }): void {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO scheduled_tasks (id, channel_id, bot_name, prompt, cron_expr, run_at, timezone, created_by, description, enabled, next_run)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    task.id, task.channelId, task.botName, task.prompt,
+    task.cronExpr ?? null, task.runAt ?? null, task.timezone,
+    task.createdBy ?? null, task.description ?? null,
+    task.enabled ? 1 : 0, task.nextRun ?? null,
+  );
+}
+
+export function getScheduledTask(id: string): ScheduledTask | null {
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id) as any;
+  return row ? mapTaskRow(row) : null;
+}
+
+export function getScheduledTasksForChannel(channelId: string): ScheduledTask[] {
+  const db = getDb();
+  // Show enabled tasks + paused recurring tasks (exclude disabled one-offs — they're finished)
+  const rows = db.prepare(
+    'SELECT * FROM scheduled_tasks WHERE channel_id = ? AND (enabled = 1 OR cron_expr IS NOT NULL) ORDER BY created_at DESC'
+  ).all(channelId) as any[];
+  return rows.map(mapTaskRow);
+}
+
+export function getEnabledScheduledTasks(): ScheduledTask[] {
+  const db = getDb();
+  const rows = db.prepare('SELECT * FROM scheduled_tasks WHERE enabled = 1').all() as any[];
+  return rows.map(mapTaskRow);
+}
+
+export function updateScheduledTaskEnabled(id: string, enabled: boolean): void {
+  const db = getDb();
+  db.prepare('UPDATE scheduled_tasks SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id);
+}
+
+export function updateScheduledTaskLastRun(id: string, lastRun: string, nextRun?: string): void {
+  const db = getDb();
+  db.prepare('UPDATE scheduled_tasks SET last_run = ?, next_run = ? WHERE id = ?').run(lastRun, nextRun ?? null, id);
+}
+
+export function deleteScheduledTask(id: string): void {
+  const db = getDb();
+  db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
+}
+
+function mapTaskRow(r: any): ScheduledTask {
+  return {
+    id: r.id,
+    channelId: r.channel_id,
+    botName: r.bot_name,
+    prompt: r.prompt,
+    cronExpr: r.cron_expr ?? undefined,
+    runAt: r.run_at ?? undefined,
+    timezone: r.timezone,
+    createdBy: r.created_by ?? undefined,
+    description: r.description ?? undefined,
+    enabled: !!r.enabled,
+    lastRun: r.last_run ?? undefined,
+    nextRun: r.next_run ?? undefined,
+    createdAt: r.created_at,
+  };
+}
+
+// --- Scheduled Task History ---
+
+export interface TaskHistoryEntry {
+  id: number;
+  taskId: string;
+  channelId: string;
+  prompt: string;
+  description?: string;
+  timezone: string;
+  status: 'success' | 'error';
+  firedAt: string;
+  error?: string;
+}
+
+export function insertTaskHistory(entry: Omit<TaskHistoryEntry, 'id' | 'firedAt'>): void {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO scheduled_task_history (task_id, channel_id, prompt, description, timezone, status, fired_at, error)
+    VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
+  `).run(entry.taskId, entry.channelId, entry.prompt, entry.description ?? null, entry.timezone, entry.status, entry.error ?? null);
+}
+
+export function getTaskHistory(channelId: string, limit = 20): TaskHistoryEntry[] {
+  const db = getDb();
+  const rows = db.prepare(
+    'SELECT * FROM scheduled_task_history WHERE channel_id = ? ORDER BY fired_at DESC LIMIT ?'
+  ).all(channelId, limit) as any[];
+  return rows.map(r => ({
+    id: r.id,
+    taskId: r.task_id,
+    channelId: r.channel_id,
+    prompt: r.prompt,
+    description: r.description ?? undefined,
+    timezone: r.timezone ?? 'UTC',
+    status: r.status,
+    firedAt: r.fired_at,
+    error: r.error ?? undefined,
   }));
 }
 

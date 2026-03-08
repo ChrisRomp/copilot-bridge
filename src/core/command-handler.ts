@@ -39,7 +39,7 @@ export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'reload_session' | 'reload_config' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session';
+           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule';
   payload?: any;
 }
 
@@ -366,6 +366,11 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       };
     }
 
+    case 'schedule':
+    case 'schedules':
+    case 'tasks':
+      return { handled: true, action: 'schedule', payload: parsed.args?.trim() };
+
     case 'help':
       return {
         handled: true,
@@ -390,6 +395,10 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/rules clear <spec>` — Clear a specific rule (e.g., `shell(git)`)',
           '`/autopilot` — Toggle auto-approve mode (alias: `/yolo`)',
           '`/streamer-mode [on|off]` — Toggle streamer mode (hides preview/internal models)',
+          '`/schedule list` — List scheduled tasks (aliases: `/schedules`, `/tasks`)',
+          '`/schedule cancel <id>` — Cancel a scheduled task',
+          '`/schedule pause|resume <id>` — Pause or resume a task',
+          '`/schedule history [n]` — Show recent task execution history',
           '`/mcp` — Show MCP servers and their source',
           '`/help` — Show this help',
         ].join('\n'),
