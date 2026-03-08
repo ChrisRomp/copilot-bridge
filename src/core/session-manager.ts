@@ -20,6 +20,9 @@ import type {
 
 const log = createLogger('session');
 
+/** Custom tools auto-approved without interactive prompt (they enforce workspace boundaries internally). */
+const AUTO_APPROVED_CUSTOM_TOOLS = ['send_file', 'show_file_in_chat'];
+
 type SessionEventHandler = (sessionId: string, channelId: string, event: any) => void;
 
 /** Simple mutex for serializing env-sensitive session creation. */
@@ -1195,9 +1198,16 @@ export class SessionManager {
     const reqKind = (request as any).kind;
     const reqCommand = typeof (request as any).fullCommandText === 'string' ? (request as any).fullCommandText
       : typeof (request as any).command === 'string' ? (request as any).command : undefined;
-    const reqShellCmd = reqCommand ? reqCommand.trim().split(/\s+/)[0] : undefined;
-    if (isHardDeny(reqKind, reqCommand, reqShellCmd)) {
+    if (isHardDeny(reqKind, reqCommand)) {
       return Promise.resolve({ kind: 'denied-by-rules' });
+    }
+
+    // Auto-approve bridge custom tools (they enforce their own workspace boundaries)
+    if (reqKind === 'custom-tool') {
+      const reqToolName = (request as any).toolName;
+      if (AUTO_APPROVED_CUSTOM_TOOLS.includes(reqToolName)) {
+        return Promise.resolve({ kind: 'approved' });
+      }
     }
 
     // Autopilot mode: allow everything (after safety checks)

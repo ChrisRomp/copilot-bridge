@@ -3,16 +3,15 @@ import { isHardDeny } from './config.js';
 
 /** Helper: test a shell command against isHardDeny. */
 function denied(command: string): boolean {
-  const shellCmd = command.trim().split(/\s+/)[0];
-  return isHardDeny('shell', command, shellCmd);
+  return isHardDeny('shell', command);
 }
 
 describe('isHardDeny', () => {
   // --- Non-shell requests are never hard-denied ---
   it('ignores non-shell kinds', () => {
-    expect(isHardDeny('read', 'rm -rf /', 'rm')).toBe(false);
-    expect(isHardDeny('write', 'mkfs /dev/sda', 'mkfs')).toBe(false);
-    expect(isHardDeny('mcp', 'rm -rf /', undefined)).toBe(false);
+    expect(isHardDeny('read', 'rm -rf /')).toBe(false);
+    expect(isHardDeny('write', 'mkfs /dev/sda')).toBe(false);
+    expect(isHardDeny('mcp', 'rm -rf /')).toBe(false);
   });
 
   // --- launchctl unload ---

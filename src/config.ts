@@ -491,61 +491,83 @@ function unwrapShellCommand(cmd: string): string {
 }
 
 /**
+ * Hardcoded safety rules — defined as data so both enforcement (isHardDeny)
+ * and display (getHardcodedRules) derive from a single source of truth.
+ */
+interface HardcodedRule {
+  /** Human-readable spec for /rules display */
+  spec: string;
+  /** Test function: returns true if the command matches this rule */
+  test: (effectiveCmd: string, effectiveShellCmd: string, originalCmd: string) => boolean;
+}
+
+const HARDCODED_DENY_RULES: HardcodedRule[] = [
+  {
+    spec: 'shell(launchctl unload)',
+    test: (eff, shellCmd, orig) => (shellCmd === 'launchctl' || orig.trim().split(/\s+/)[0] === 'launchctl') && /\bunload\b/.test(orig),
+  },
+  {
+    spec: 'shell(rm -rf /)',
+    test: (eff, shellCmd) => {
+      if (shellCmd !== 'rm') return false;
+      const hasRecursive = /\s-[^\s]*r|\s--recursive/.test(eff);
+      const hasForce = /\s-[^\s]*f|\s--force/.test(eff);
+      return hasRecursive && hasForce && (/\s+\/(\s|$)/.test(eff) || /\s+\/\*(\s|$)/.test(eff));
+    },
+  },
+  {
+    spec: 'shell(rm -rf ~)',
+    test: (eff, shellCmd) => {
+      if (shellCmd !== 'rm') return false;
+      const hasRecursive = /\s-[^\s]*r|\s--recursive/.test(eff);
+      const hasForce = /\s-[^\s]*f|\s--force/.test(eff);
+      return hasRecursive && hasForce && (/\s+~(\s|$)/.test(eff) || /\$HOME(\s|$)/.test(eff));
+    },
+  },
+  {
+    spec: 'shell(mkfs)',
+    test: (_eff, shellCmd) => shellCmd === 'mkfs' || /^mkfs\./.test(shellCmd),
+  },
+  {
+    spec: 'shell(dd … of=/dev/*)',
+    test: (eff, shellCmd) => shellCmd === 'dd' && /of=\/dev\//.test(eff),
+  },
+  {
+    spec: 'shell(:(){ :|:& };:)',
+    test: (_eff, _shellCmd, orig) => /:\(\)\s*\{.*:\|:.*&.*\}\s*;?\s*:/.test(orig),
+  },
+  {
+    spec: 'shell(chmod -R / /etc /usr /var ~)',
+    test: (eff, shellCmd) => shellCmd === 'chmod' && /\s-[^\s]*R/.test(eff) &&
+      (/\s+\/(\s|$)/.test(eff) || /\s+\/etc(\s|\/|$)/.test(eff) ||
+       /\s+\/usr(\s|\/|$)/.test(eff) || /\s+\/var(\s|\/|$)/.test(eff) ||
+       /\s+~(\s|$)/.test(eff) || /\$HOME(\s|$)/.test(eff)),
+  },
+  {
+    spec: 'shell(chown -R / /etc /usr /var ~)',
+    test: (eff, shellCmd) => shellCmd === 'chown' && /\s-[^\s]*R/.test(eff) &&
+      (/\s+\/(\s|$)/.test(eff) || /\s+\/etc(\s|\/|$)/.test(eff) ||
+       /\s+\/usr(\s|\/|$)/.test(eff) || /\s+\/var(\s|\/|$)/.test(eff) ||
+       /\s+~(\s|$)/.test(eff) || /\$HOME(\s|$)/.test(eff)),
+  },
+];
+
+/**
  * Hardcoded safety denies — cannot be overridden by config or stored rules.
  * These prevent destructive commands that should never run in any context.
  */
-export function isHardDeny(kind: string, command: string | undefined, shellCmd: string | undefined): boolean {
+export function isHardDeny(kind: string, command: string | undefined): boolean {
   if (kind !== 'shell' || !command) return false;
   const cmd = command.trim();
-  // Strip shell wrappers (sudo, env, bash -c, etc.) and absolute paths to find the real command
   const unwrapped = unwrapShellCommand(cmd);
   const realCmd = unwrapped.split(/\s+/)[0];
-  // Use unwrapped command for all checks below
-  const effectiveCmd = unwrapped;
-  const effectiveShellCmd = realCmd;
 
-  // Bridge self-harm (check both original and unwrapped)
-  if ((effectiveShellCmd === 'launchctl' || shellCmd === 'launchctl') && /\bunload\b/.test(cmd)) return true;
-
-  // Recursive delete on system/home paths
-  if (effectiveShellCmd === 'rm') {
-    const hasRecursive = /\s-[^\s]*r|\s--recursive/.test(effectiveCmd);
-    const hasForce = /\s-[^\s]*f|\s--force/.test(effectiveCmd);
-    if (hasRecursive && hasForce) {
-      if (/\s+\/(\s|$)/.test(effectiveCmd) || /\s+\/\*(\s|$)/.test(effectiveCmd)) return true;
-      if (/\s+~(\s|$)/.test(effectiveCmd) || /\$HOME(\s|$)/.test(effectiveCmd)) return true;
-    }
-  }
-
-  // Disk formatting and block device writes
-  if (effectiveShellCmd === 'mkfs' || /^mkfs\./.test(effectiveShellCmd)) return true;
-  if (effectiveShellCmd === 'dd' && /of=\/dev\//.test(effectiveCmd)) return true;
-
-  // Fork bomb (check original — wrappers don't change this)
-  if (/:\(\)\s*\{.*:\|:.*&.*\}\s*;?\s*:/.test(cmd)) return true;
-
-  // Recursive permission/ownership nuke on system paths
-  if ((effectiveShellCmd === 'chmod' || effectiveShellCmd === 'chown') && /\s-[^\s]*R/.test(effectiveCmd)) {
-    if (/\s+\/(\s|$)/.test(effectiveCmd) || /\s+\/etc(\s|\/|$)/.test(effectiveCmd) ||
-        /\s+\/usr(\s|\/|$)/.test(effectiveCmd) || /\s+\/var(\s|\/|$)/.test(effectiveCmd) ||
-        /\s+~(\s|$)/.test(effectiveCmd) || /\$HOME(\s|$)/.test(effectiveCmd)) return true;
-  }
-
-  return false;
+  return HARDCODED_DENY_RULES.some(rule => rule.test(unwrapped, realCmd, cmd));
 }
 
-/** Built-in safety rules surfaced by /remember list. */
+/** Built-in safety rules surfaced by /remember list — derived from HARDCODED_DENY_RULES. */
 export function getHardcodedRules(): Array<{ spec: string; action: 'allow' | 'deny'; source: 'hardcoded' }> {
-  return [
-    { spec: 'shell(launchctl unload)', action: 'deny', source: 'hardcoded' },
-    { spec: 'shell(rm -rf /)', action: 'deny', source: 'hardcoded' },
-    { spec: 'shell(rm -rf ~)', action: 'deny', source: 'hardcoded' },
-    { spec: 'shell(mkfs)', action: 'deny', source: 'hardcoded' },
-    { spec: 'shell(dd … of=/dev/*)', action: 'deny', source: 'hardcoded' },
-    { spec: 'shell(:(){ :|:& };:)', action: 'deny', source: 'hardcoded' },
-    { spec: 'shell(chmod -R / /etc /usr /var ~)', action: 'deny', source: 'hardcoded' },
-    { spec: 'shell(chown -R / /etc /usr /var ~)', action: 'deny', source: 'hardcoded' },
-  ];
+  return HARDCODED_DENY_RULES.map(rule => ({ spec: rule.spec, action: 'deny' as const, source: 'hardcoded' as const }));
 }
 
 /** Config-level rules surfaced by /remember list. */
@@ -601,7 +623,7 @@ export function evaluateConfigPermissions(
   })() : undefined;
 
   // Hardcoded safety denies — cannot be overridden
-  if (isHardDeny(kind, command, shellCmd)) {
+  if (isHardDeny(kind, command)) {
     return 'deny';
   }
 
