@@ -972,8 +972,8 @@ export class SessionManager {
           const text = event.data?.deltaContent ?? event.data?.text ?? event.deltaContent ?? '';
           if (text) chunks.push(text);
         }
-        if (event.type === 'assistant.message' && event.data?.content) {
-          // Full message event (non-streaming fallback)
+        if (event.type === 'assistant.message' && event.data?.content && chunks.length === 0) {
+          // Full message event — only use as fallback when no deltas were received
           chunks.push(event.data.content);
         }
         if (event.type === 'session.idle') {
