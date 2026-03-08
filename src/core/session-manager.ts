@@ -1101,7 +1101,7 @@ export class SessionManager {
 
     return {
       name: 'ask_agent',
-      description: 'Ask another agent a question. Creates a fresh session for the target agent with its own workspace, tools, and knowledge. Use this when you need information or capabilities from a different bot identity (e.g., asking Alice about home automation, asking a specialist about their domain).',
+      description: 'Ask another agent a question. Creates a fresh session for the target agent with its own workspace, tools, and knowledge. Use this when you need information or capabilities from a different bot identity (e.g., asking Alice about home automation, asking a specialist about their domain). IMPORTANT: The user cannot see the inter-agent exchange. After receiving the response, communicate the relevant information back to the user.',
       parameters: {
         type: 'object',
         properties: {
