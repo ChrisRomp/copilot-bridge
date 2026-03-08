@@ -39,7 +39,7 @@ export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'reload_session' | 'reload_config' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule';
+           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills';
   payload?: any;
 }
 
@@ -126,7 +126,7 @@ export function parseCommand(text: string): { command: string; args: string } | 
 
 export interface McpServerInfo {
   name: string;
-  source: 'global' | 'workspace' | 'workspace (override)';
+  source: 'user' | 'workspace' | 'workspace (override)';
 }
 
 export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[], contextUsage?: { currentTokens: number; tokenLimit: number } | null): CommandResult {
@@ -330,13 +330,13 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       if (!mcpInfo || mcpInfo.length === 0) {
         return { handled: true, response: '🔌 No MCP servers configured.' };
       }
-      const globalServers = mcpInfo.filter(s => s.source === 'global');
+      const userServers = mcpInfo.filter(s => s.source === 'user');
       const workspaceServers = mcpInfo.filter(s => s.source === 'workspace');
       const overrideServers = mcpInfo.filter(s => s.source === 'workspace (override)');
       const lines = ['🔌 **MCP Servers**', ''];
-      if (globalServers.length > 0) {
-        lines.push('**Global** (plugin + user config)');
-        for (const s of globalServers) lines.push(`• \`${s.name}\``);
+      if (userServers.length > 0) {
+        lines.push('**User** (plugin + user config)');
+        for (const s of userServers) lines.push(`• \`${s.name}\``);
         lines.push('');
       }
       if (workspaceServers.length > 0) {
@@ -345,7 +345,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         lines.push('');
       }
       if (overrideServers.length > 0) {
-        lines.push('**Workspace (overriding global)**');
+        lines.push('**Workspace (overriding user)**');
         for (const s of overrideServers) lines.push(`• \`${s.name}\``);
         lines.push('');
       }
@@ -371,15 +371,36 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
     case 'tasks':
       return { handled: true, action: 'schedule', payload: parsed.args?.trim() };
 
-    case 'help':
+    case 'skills':
+    case 'tools':
+      return { handled: true, action: 'skills' };
+
+    case 'help': {
+      const showAll = parsed.args?.trim().toLowerCase() === 'all';
+      const common = [
+        '**Commands**',
+        '`/new` — Start a new session',
+        '`/stop` — Stop the current task',
+        '`/model [name]` — List or switch models',
+        '`/status` — Show session info',
+        '`/context` — Show context window usage',
+        '`/verbose` — Toggle tool call visibility',
+        '`/autopilot` — Toggle auto-approve mode',
+        '`/schedule list` — List scheduled tasks',
+        '`/skills` — Show available skills and MCP tools',
+        '`/help all` — Show all commands',
+      ];
+      if (!showAll) return { handled: true, response: common.join('\n') };
       return {
         handled: true,
         response: [
-          '**Available Commands**',
+          '**All Commands**',
+          '',
+          '**Session**',
           '`/new` — Start a new session',
           '`/stop` — Stop the current task (alias: `/cancel`)',
-          '`/reload` — Reload current session (re-reads AGENTS.md, workspace config)',
-          '`/reload config` — Hot-reload config.json (applies safe changes, warns on restart-needed)',
+          '`/reload` — Reload session (re-reads AGENTS.md, workspace config)',
+          '`/reload config` — Hot-reload config.json',
           '`/resume [id]` — Resume current session (or a past one by ID)',
           '`/model [name]` — List models or switch model (fuzzy match)',
           '`/agent <name>` — Switch custom agent (empty to deselect)',
@@ -387,22 +408,28 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/context` — Show context window usage',
           '`/verbose` — Toggle tool call visibility',
           '`/status` — Show session info',
-          '`/approve` — Approve pending permission',
-          '`/deny` — Deny pending permission',
-          '`/remember` — Approve + save permission rule (during prompt)',
-          '`/rules` — Show all permission rules (alias: `/remember list`)',
-          '`/rules clear` — Clear all rules (alias: `/remember clear`)',
-          '`/rules clear <spec>` — Clear a specific rule (e.g., `shell(git)`)',
+          '',
+          '**Permissions**',
+          '`/approve` / `/deny` — Handle pending permission',
+          '`/remember` — Approve + save permission rule',
+          '`/rules` — Show all permission rules',
+          '`/rules clear [spec]` — Clear rules (all or specific)',
           '`/autopilot` — Toggle auto-approve mode (alias: `/yolo`)',
-          '`/streamer-mode [on|off]` — Toggle streamer mode (hides preview/internal models)',
+          '',
+          '**Scheduling**',
           '`/schedule list` — List scheduled tasks (aliases: `/schedules`, `/tasks`)',
           '`/schedule cancel <id>` — Cancel a scheduled task',
           '`/schedule pause|resume <id>` — Pause or resume a task',
           '`/schedule history [n]` — Show recent task execution history',
+          '',
+          '**Tools & Info**',
+          '`/skills` — Show available skills and MCP tools',
           '`/mcp` — Show MCP servers and their source',
-          '`/help` — Show this help',
+          '`/streamer-mode [on|off]` — Toggle streamer mode',
+          '`/help` — Show common commands',
         ].join('\n'),
       };
+    }
 
     default:
       return { handled: false };

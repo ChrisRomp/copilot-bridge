@@ -812,6 +812,40 @@ async function handleInboundMessage(
         }
         break;
       }
+
+      case 'skills': {
+        const skills = sessionManager.getSkillInfo(msg.channelId);
+        const mcpInfo = sessionManager.getMcpServerInfo(msg.channelId);
+        const lines: string[] = ['🧰 **Skills & Tools**', ''];
+
+        if (skills.length > 0) {
+          lines.push('**Skills**');
+          for (const s of skills) {
+            const desc = s.description ? ` — ${s.description}` : '';
+            lines.push(`• \`${s.name}\`${desc} _(${s.source})_`);
+          }
+          lines.push('');
+        }
+
+        if (mcpInfo.length > 0) {
+          lines.push('**MCP Servers**');
+          for (const s of mcpInfo) {
+            lines.push(`• \`${s.name}\` _(${s.source})_`);
+          }
+          lines.push('');
+        }
+
+        const customTools = ['send_file', 'show_file_in_chat', 'ask_agent', 'schedule'];
+        lines.push('**Copilot Bridge Tools**');
+        for (const t of customTools) lines.push(`• \`${t}\``);
+
+        if (skills.length === 0 && mcpInfo.length === 0) {
+          lines.push('', '_No skills or MCP servers configured. Add skills to `~/.copilot/skills/` or MCP servers to `~/.copilot/mcp-config.json`._');
+        }
+
+        await adapter.sendMessage(msg.channelId, lines.join('\n'), { threadRootId: threadRoot });
+        break;
+      }
     }
     return;
   }

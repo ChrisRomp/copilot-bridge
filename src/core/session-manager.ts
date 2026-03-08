@@ -362,16 +362,16 @@ export class SessionManager {
 
     const result: McpServerInfo[] = [];
 
-    // All global servers — mark workspace overrides accordingly
+    // All user-level servers — mark project overrides accordingly
     for (const name of globalNames) {
       if (name in workspaceServers) {
         result.push({ name, source: 'workspace (override)' });
       } else {
-        result.push({ name, source: 'global' });
+        result.push({ name, source: 'user' });
       }
     }
 
-    // Workspace-only servers (not in global)
+    // Project-only servers (not in user-level)
     for (const name of Object.keys(workspaceServers)) {
       if (!globalNames.has(name)) {
         result.push({ name, source: 'workspace' });
@@ -379,6 +379,38 @@ export class SessionManager {
     }
 
     return result.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** Get skill info for a channel — discovers skills and reads their descriptions from SKILL.md frontmatter. */
+  getSkillInfo(channelId: string): { name: string; description: string; source: string }[] {
+    const workingDirectory = this.resolveWorkingDirectory(channelId);
+    const dirs = discoverSkillDirectories(workingDirectory);
+    const skills: { name: string; description: string; source: string }[] = [];
+
+    for (const dir of dirs) {
+      const name = path.basename(dir);
+      const skillFile = path.join(dir, 'SKILL.md');
+      let description = '';
+      let source = 'user';
+
+      // Determine source from path
+      if (dir.includes('.copilot/skills')) source = 'user';
+      else if (dir.includes('.github/skills')) source = 'workspace';
+      else if (dir.includes('.agents/skills')) source = 'workspace';
+
+      // Try to read description from SKILL.md frontmatter
+      if (fs.existsSync(skillFile)) {
+        try {
+          const content = fs.readFileSync(skillFile, 'utf8');
+          const descMatch = content.match(/^description:\s*["']?(.+?)["']?\s*$/m);
+          if (descMatch) description = descMatch[1];
+        } catch { /* skip */ }
+      }
+
+      skills.push({ name, description, source });
+    }
+
+    return skills.sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /** Get or create a session for a channel. */
