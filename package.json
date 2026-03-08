@@ -21,6 +21,9 @@
     "@mattermost/client": "^10.3.0",
     "@mattermost/types": "^10.3.0",
     "better-sqlite3": "^11.7.0",
+    "cron": "^4.4.0",
+    "cronstrue": "^3.13.0",
+    "luxon": "^3.7.2",
     "ws": "^8.18.0"
   },
   "devDependencies": {

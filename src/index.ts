@@ -8,6 +8,8 @@ import { MattermostAdapter } from './channels/mattermost/adapter.js';
 import { StreamingHandler } from './channels/mattermost/streaming.js';
 import { getChannelPrefs, getAllChannelSessions, closeDb, listPermissionRulesForScope, removePermissionRule, clearPermissionRules } from './state/store.js';
 import { extractThreadRequest, resolveThreadRoot } from './core/thread-utils.js';
+import { initScheduler, stopAll as stopScheduler, listJobs, removeJob, pauseJob, resumeJob, formatInTimezone, describeCron } from './core/scheduler.js';
+import { getTaskHistory } from './state/store.js';
 import { createLogger } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -303,6 +305,51 @@ async function main(): Promise<void> {
 
   log.info('copilot-bridge ready!');
 
+  // Initialize scheduler — rehydrate persisted jobs
+  initScheduler({
+    sendMessage: async (channelId, prompt) => {
+      // Route through channelLocks to serialize with user messages
+      const prev = channelLocks.get(channelId) ?? Promise.resolve();
+      const task = prev.then(async () => {
+        const resolved = getAdapterForChannel(channelId);
+        if (resolved) {
+          const { streaming } = resolved;
+          // Finalize any existing stream so the scheduled job gets its own message
+          const existingStream = activeStreams.get(channelId);
+          if (existingStream) {
+            await streaming.finalizeStream(existingStream);
+            activeStreams.delete(channelId);
+          }
+          const streamKey = await streaming.startStream(channelId);
+          activeStreams.set(channelId, streamKey);
+          busyChannels.add(channelId);
+        }
+        try {
+          await sessionManager.sendMessage(channelId, prompt);
+        } catch (err: any) {
+          log.error(`Scheduled job sendMessage failed for ${channelId.slice(0, 8)}...:`, err);
+          busyChannels.delete(channelId);
+          const failedStream = activeStreams.get(channelId);
+          if (failedStream) {
+            const r = getAdapterForChannel(channelId);
+            if (r) await r.streaming.cancelStream(failedStream, err?.message ?? 'Scheduled job failed').catch(() => {});
+            activeStreams.delete(channelId);
+          }
+          throw err;
+        }
+      });
+      channelLocks.set(channelId, task.catch(() => {}));
+      await task;
+      return '';
+    },
+    postMessage: async (channelId, text) => {
+      const resolved = getAdapterForChannel(channelId);
+      if (resolved) {
+        await resolved.adapter.sendMessage(channelId, text);
+      }
+    },
+  });
+
   // Nudge admin bot sessions that may have been mid-task before restart
   nudgeAdminSessions(sessionManager).catch(err =>
     log.error('Admin nudge failed:', err)
@@ -311,6 +358,7 @@ async function main(): Promise<void> {
   // Graceful shutdown
   const shutdown = async () => {
     log.info('Shutting down...');
+    stopScheduler();
     configWatcher.stop();
     workspaceWatcher.stop();
     await sessionManager.shutdown();
@@ -382,6 +430,14 @@ async function handleMidTurnMessage(
   }
 
   log.info(`Mid-turn steering for ${msg.channelId.slice(0, 8)}...: "${text.slice(0, 100)}"`);
+
+  // Finalize the current stream so the steered response starts a new message
+  const existingStream = activeStreams.get(msg.channelId);
+  if (existingStream) {
+    await resolved.streaming.finalizeStream(existingStream);
+    activeStreams.delete(msg.channelId);
+  }
+
   await sessionManager.sendMidTurn(msg.channelId, text, msg.userId);
 
   // Acknowledge with ⚡ reaction (best-effort)
@@ -689,6 +745,70 @@ async function handleInboundMessage(
         } catch (err: any) {
           log.error('Failed to clear permission rules:', err);
           await adapter.sendMessage(msg.channelId, '❌ Failed to clear permission rules.', { threadRootId: threadRoot });
+        }
+        break;
+      }
+      case 'schedule': {
+        const args = cmdResult.payload as string | undefined;
+        const sub = args?.split(/\s+/)?.[0]?.toLowerCase();
+        const subArg = args?.slice((sub?.length ?? 0)).trim();
+
+        if (!sub || sub === 'list') {
+          const tasks = listJobs(msg.channelId);
+          if (tasks.length === 0) {
+            await adapter.sendMessage(msg.channelId, '📋 No scheduled tasks for this channel.', { threadRootId: threadRoot });
+          } else {
+            const lines = tasks.map(t => {
+              const tz = t.timezone ?? 'UTC';
+              const type = t.cronExpr ? describeCron(t.cronExpr) : 'one-off';
+              const status = t.enabled ? '✅' : '⏸️';
+              const desc = t.description ?? t.prompt.slice(0, 50);
+              const next = t.nextRun ? formatInTimezone(t.nextRun, tz) : undefined;
+              const lastRan = t.lastRun ? formatInTimezone(t.lastRun, tz) : undefined;
+              let detail = `${status} **${desc}** — ${type}\n   ID: \`${t.id}\``;
+              if (next) detail += ` | Next: ${next}`;
+              if (lastRan) detail += ` | Last: ${lastRan}`;
+              return detail;
+            });
+            await adapter.sendMessage(msg.channelId, `📋 **Scheduled Tasks**\n\n${lines.join('\n\n')}`, { threadRootId: threadRoot });
+          }
+        } else if (sub === 'cancel' || sub === 'remove' || sub === 'delete') {
+          if (!subArg) {
+            await adapter.sendMessage(msg.channelId, '⚠️ Usage: `/schedule cancel <id>`', { threadRootId: threadRoot });
+          } else {
+            const removed = removeJob(subArg, msg.channelId);
+            await adapter.sendMessage(msg.channelId, removed ? `🗑️ Task \`${subArg}\` cancelled.` : `⚠️ Task \`${subArg}\` not found.`, { threadRootId: threadRoot });
+          }
+        } else if (sub === 'pause') {
+          if (!subArg) {
+            await adapter.sendMessage(msg.channelId, '⚠️ Usage: `/schedule pause <id>`', { threadRootId: threadRoot });
+          } else {
+            const paused = pauseJob(subArg, msg.channelId);
+            await adapter.sendMessage(msg.channelId, paused ? `⏸️ Task \`${subArg}\` paused.` : `⚠️ Task \`${subArg}\` not found.`, { threadRootId: threadRoot });
+          }
+        } else if (sub === 'resume') {
+          if (!subArg) {
+            await adapter.sendMessage(msg.channelId, '⚠️ Usage: `/schedule resume <id>`', { threadRootId: threadRoot });
+          } else {
+            const resumed = resumeJob(subArg, msg.channelId);
+            await adapter.sendMessage(msg.channelId, resumed ? `▶️ Task \`${subArg}\` resumed.` : `⚠️ Task \`${subArg}\` not found.`, { threadRootId: threadRoot });
+          }
+        } else if (sub === 'history' || sub === 'log') {
+          const limit = subArg ? parseInt(subArg, 10) || 10 : 10;
+          const entries = getTaskHistory(msg.channelId, limit);
+          if (entries.length === 0) {
+            await adapter.sendMessage(msg.channelId, '📋 No task history for this channel.', { threadRootId: threadRoot });
+          } else {
+            const lines = entries.map(e => {
+              const icon = e.status === 'success' ? '✅' : '❌';
+              const desc = e.description ?? e.prompt.slice(0, 40);
+              const time = formatInTimezone(e.firedAt, e.timezone);
+              return `${icon} ${desc} — ${time}${e.error ? ` ⚠️ ${e.error}` : ''}`;
+            });
+            await adapter.sendMessage(msg.channelId, `📋 **Task History** (last ${entries.length})\n${lines.join('\n')}`, { threadRootId: threadRoot });
+          }
+        } else {
+          await adapter.sendMessage(msg.channelId, '⚠️ Usage: `/schedule [list|cancel|pause|resume|history] [id]`', { threadRootId: threadRoot });
         }
         break;
       }

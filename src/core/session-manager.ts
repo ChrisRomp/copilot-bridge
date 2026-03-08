@@ -13,6 +13,7 @@ import {
 import { getChannelConfig, getChannelBotName, getChannelBotConfig, evaluateConfigPermissions, isBotAdmin, getConfig, getInterAgentConfig, isHardDeny } from '../config.js';
 import { getWorkspacePath, getWorkspaceAllowPaths, ensureWorkspacesDir } from './workspace-manager.js';
 import { onboardProject } from './onboarding.js';
+import { addJob, removeJob, pauseJob, resumeJob, listJobs, formatInTimezone } from './scheduler.js';
 import {
   canCall, createContext, extendContext,
   getBotWorkspaceMap, buildWorkspacePrompt, buildCallerPrompt,
@@ -28,7 +29,7 @@ import type {
 const log = createLogger('session');
 
 /** Custom tools auto-approved without interactive prompt (they enforce workspace boundaries internally). */
-const AUTO_APPROVED_CUSTOM_TOOLS = ['send_file', 'show_file_in_chat', 'ask_agent'];
+const AUTO_APPROVED_CUSTOM_TOOLS = ['send_file', 'show_file_in_chat', 'ask_agent', 'schedule'];
 
 type SessionEventHandler = (sessionId: string, channelId: string, event: any) => void;
 
@@ -1547,10 +1548,127 @@ export class SessionManager {
       tools.push(this.buildAskAgentToolDef(channelId));
     }
 
+    // Scheduler tool: create/list/cancel/pause/resume scheduled tasks
+    tools.push(this.buildScheduleToolDef(channelId));
+
     if (tools.length > 0) {
       log.info(`Built ${tools.length} custom tool(s) for channel ${channelId.slice(0, 8)}...`);
     }
     return tools;
+  }
+
+  /** Build the schedule tool definition for creating/managing scheduled tasks. */
+  private buildScheduleToolDef(channelId: string): any {
+    const botName = getChannelBotName(channelId);
+
+    return {
+      name: 'schedule',
+      description: 'Create, list, cancel, pause, or resume scheduled tasks. Tasks fire at the specified time and send a prompt to the LLM for processing. Supports cron expressions for recurring tasks and ISO datetimes for one-off tasks.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['create', 'list', 'cancel', 'pause', 'resume'],
+            description: 'The action to perform.',
+          },
+          prompt: {
+            type: 'string',
+            description: 'The prompt to send when the job fires. Required for "create".',
+          },
+          cron: {
+            type: 'string',
+            description: 'Cron expression for recurring tasks (e.g., "0 9 * * 1-5" for weekdays at 9am). Use standard 5-field cron syntax.',
+          },
+          run_at: {
+            type: 'string',
+            description: 'ISO 8601 datetime for one-off tasks. IMPORTANT: current_datetime is UTC — use a Z suffix (e.g., "2026-03-09T22:31:00Z") or properly convert to local time before adding an offset. Do NOT take the UTC hour and attach a non-UTC offset. Mutually exclusive with cron.',
+          },
+          timezone: {
+            type: 'string',
+            description: 'IANA timezone for display and cron scheduling (e.g., "America/Los_Angeles"). Defaults to UTC.',
+          },
+          description: {
+            type: 'string',
+            description: 'Human-readable label for the task.',
+          },
+          id: {
+            type: 'string',
+            description: 'Task ID. Required for cancel/pause/resume.',
+          },
+        },
+        required: ['action'],
+      },
+      handler: async (args: {
+        action: string;
+        prompt?: string;
+        cron?: string;
+        run_at?: string;
+        timezone?: string;
+        description?: string;
+        id?: string;
+      }) => {
+        try {
+          switch (args.action) {
+            case 'create': {
+              if (!args.prompt) return { content: 'Error: prompt is required for create.' };
+              if (!args.cron && !args.run_at) return { content: 'Error: either cron or run_at is required.' };
+              const task = addJob({
+                channelId,
+                botName,
+                prompt: args.prompt,
+                cronExpr: args.cron,
+                runAt: args.run_at,
+                timezone: args.timezone,
+                description: args.description,
+                createdBy: this.lastMessageUserIds.get(channelId),
+              });
+              const type = task.cronExpr ? `recurring (${task.cronExpr})` : `one-off (${task.runAt})`;
+              const tz = task.timezone ?? 'UTC';
+              const nextRunLocal = task.nextRun ? formatInTimezone(task.nextRun, tz) : undefined;
+              return { content: JSON.stringify({ success: true, id: task.id, type, nextRun: nextRunLocal, timezone: tz, description: task.description }) };
+            }
+            case 'list': {
+              const tasks = listJobs(channelId);
+              if (tasks.length === 0) return { content: 'No scheduled tasks for this channel.' };
+              const summary = tasks.map(t => {
+                const tz = t.timezone ?? 'UTC';
+                return {
+                  id: t.id,
+                  description: t.description ?? t.prompt.slice(0, 60),
+                  type: t.cronExpr ? 'recurring' : 'one-off',
+                  schedule: t.cronExpr ?? t.runAt,
+                  timezone: tz,
+                  enabled: t.enabled,
+                  lastRun: t.lastRun ? formatInTimezone(t.lastRun, tz) : undefined,
+                  nextRun: t.nextRun ? formatInTimezone(t.nextRun, tz) : undefined,
+                };
+              });
+              return { content: JSON.stringify(summary) };
+            }
+            case 'cancel': {
+              if (!args.id) return { content: 'Error: id is required for cancel.' };
+              const removed = removeJob(args.id, channelId);
+              return { content: removed ? `Task ${args.id} cancelled and removed.` : `Task ${args.id} not found.` };
+            }
+            case 'pause': {
+              if (!args.id) return { content: 'Error: id is required for pause.' };
+              const paused = pauseJob(args.id, channelId);
+              return { content: paused ? `Task ${args.id} paused.` : `Task ${args.id} not found.` };
+            }
+            case 'resume': {
+              if (!args.id) return { content: 'Error: id is required for resume.' };
+              const resumed = resumeJob(args.id, channelId);
+              return { content: resumed ? `Task ${args.id} resumed.` : `Task ${args.id} not found or failed to resume.` };
+            }
+            default:
+              return { content: `Unknown action: ${args.action}. Use create, list, cancel, pause, or resume.` };
+          }
+        } catch (err: any) {
+          return { content: `Schedule error: ${err?.message ?? 'unknown error'}` };
+        }
+      },
+    };
   }
 
   private attachSessionEvents(session: CopilotSession, channelId: string): void {

@@ -206,6 +206,7 @@ Mattermost Channel → copilot-bridge → @github/copilot-sdk → Copilot CLI
 | `/approve` / `/deny` | Handle permission requests |
 | `/remember` | Approve + persist permission rule |
 | `/autopilot` | Toggle auto-approve mode |
+| `/schedule [list\|cancel\|pause\|resume\|history]` | Manage scheduled tasks |
 | `/help` | Show all commands |
 
 ## Memory
@@ -217,6 +218,18 @@ Maintain a `MEMORY.md` file in your workspace to persist important details acros
 - Agent roster and their purposes
 
 Read `MEMORY.md` at the start of each session if it exists. Update it when you learn something worth remembering. Keep it concise and organized — this is your long-term memory.
+
+## Scheduled Tasks
+
+You have a `schedule` tool that can create one-off or recurring tasks:
+- **One-off**: fires at a specific time, e.g., "remind me in 5 minutes"
+- **Recurring**: fires on a cron schedule, e.g., "every weekday at 9am"
+
+When users request reminders or timed tasks:
+1. Compute the target time from the current UTC time (provided as `current_datetime` in your system prompt)
+2. For `run_at`, always use a **UTC timestamp with Z suffix** (e.g., `2026-03-09T22:30:00Z`)
+3. Set `timezone` to the user's local IANA timezone (e.g., `America/Los_Angeles`) — this controls how times are displayed
+4. The `prompt` field is what you'll be asked to do when the task fires — write it as instructions to yourself
 
 ## Constraints
 
