@@ -268,12 +268,16 @@ async function executeJob(taskId: string, isOneOff: boolean): Promise<void> {
     updateScheduledTaskLastRun(taskId, now, nextRun);
   } catch (err: any) {
     log.error(`Job ${taskId} execution failed: ${err?.message}`);
-    insertTaskHistory({
-      taskId: task.id, channelId: task.channelId,
-      prompt: task.prompt, description: task.description,
-      timezone: task.timezone,
-      status: 'error', error: err?.message,
-    });
+    try {
+      insertTaskHistory({
+        taskId: task.id, channelId: task.channelId,
+        prompt: task.prompt, description: task.description,
+        timezone: task.timezone,
+        status: 'error', error: err?.message,
+      });
+    } catch (histErr: any) {
+      log.error(`Failed to record task history for ${taskId}: ${histErr?.message}`);
+    }
   }
 
   // One-off jobs: delete after execution (they won't run again)
