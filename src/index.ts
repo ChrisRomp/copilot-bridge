@@ -9,6 +9,7 @@ import { StreamingHandler } from './channels/mattermost/streaming.js';
 import { getChannelPrefs, getAllChannelSessions, closeDb, listPermissionRulesForScope, removePermissionRule, clearPermissionRules } from './state/store.js';
 import { extractThreadRequest, resolveThreadRoot } from './core/thread-utils.js';
 import { initScheduler, stopAll as stopScheduler, listJobs, removeJob, pauseJob, resumeJob, formatInTimezone, describeCron } from './core/scheduler.js';
+import { markBusy, markIdle, isBusy, waitForChannelIdle } from './core/channel-idle.js';
 import { getTaskHistory } from './state/store.js';
 import { createLogger } from './logger.js';
 import fs from 'node:fs';
@@ -39,42 +40,6 @@ const eventLocks = new Map<string, Promise<void>>();
 
 // Channels with an active startup nudge in flight (NO_REPLY filter only applies here)
 const nudgePending = new Set<string>();
-
-// Channels with an active agent turn in progress (for steering/queueing)
-const busyChannels = new Set<string>();
-
-// Per-channel idle waiters — resolved when session.idle fires to hold channelLocks
-const channelIdleWaiters = new Map<string, Array<() => void>>();
-const IDLE_WAIT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minute safety net
-
-/** Returns a promise that resolves when the channel becomes idle (session.idle fires). */
-function waitForChannelIdle(channelId: string): Promise<void> {
-  if (!busyChannels.has(channelId)) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    const waiters = channelIdleWaiters.get(channelId) ?? [];
-    waiters.push(resolve);
-    channelIdleWaiters.set(channelId, waiters);
-    // Safety timeout to prevent stuck locks
-    setTimeout(() => {
-      resolve();
-      const remaining = channelIdleWaiters.get(channelId);
-      if (remaining) {
-        const idx = remaining.indexOf(resolve);
-        if (idx >= 0) remaining.splice(idx, 1);
-        if (remaining.length === 0) channelIdleWaiters.delete(channelId);
-      }
-    }, IDLE_WAIT_TIMEOUT_MS);
-  });
-}
-
-/** Resolve all idle waiters for a channel (called on session.idle and error). */
-function resolveChannelIdleWaiters(channelId: string): void {
-  const waiters = channelIdleWaiters.get(channelId);
-  if (waiters) {
-    for (const resolve of waiters) resolve();
-    channelIdleWaiters.delete(channelId);
-  }
-}
 
 // Bot adapters keyed by "platform:botName" for channel→adapter lookup
 const botAdapters = new Map<string, ChannelAdapter>();
@@ -274,7 +239,7 @@ async function main(): Promise<void> {
 
     adapter.onMessage((msg) => {
       // If the channel is mid-turn, try steering (immediate mode) instead of serializing
-      if (busyChannels.has(msg.channelId)) {
+      if (isBusy(msg.channelId)) {
         handleMidTurnMessage(msg, sessionManager, platformName, botName)
           .catch(err => {
             // Expected fallbacks (slash commands, pending input) — debug level
@@ -360,7 +325,7 @@ async function main(): Promise<void> {
           });
           eventLocks.set(channelId, evTask.catch(() => {}));
           await evTask;
-          busyChannels.add(channelId);
+          markBusy(channelId);
         }
         try {
           await sessionManager.sendMessage(channelId, prompt);
@@ -368,8 +333,7 @@ async function main(): Promise<void> {
           await waitForChannelIdle(channelId);
         } catch (err: any) {
           log.error(`Scheduled job sendMessage failed for ${channelId.slice(0, 8)}...:`, err);
-          busyChannels.delete(channelId);
-          resolveChannelIdleWaiters(channelId);
+          markIdle(channelId);
           const failedStream = activeStreams.get(channelId);
           if (failedStream) {
             const r = getAdapterForChannel(channelId);
@@ -598,8 +562,7 @@ async function handleInboundMessage(
 
     switch (cmdResult.action) {
       case 'new_session': {
-        busyChannels.delete(msg.channelId);
-        resolveChannelIdleWaiters(msg.channelId);
+        markIdle(msg.channelId);
         const oldStreamKey = activeStreams.get(msg.channelId);
         if (oldStreamKey) {
           await streaming.cancelStream(oldStreamKey);
@@ -611,8 +574,7 @@ async function handleInboundMessage(
         break;
       }
       case 'stop_session': {
-        busyChannels.delete(msg.channelId);
-        resolveChannelIdleWaiters(msg.channelId);
+        markIdle(msg.channelId);
         const stopStreamKey = activeStreams.get(msg.channelId);
         if (stopStreamKey) {
           await streaming.cancelStream(stopStreamKey);
@@ -943,7 +905,7 @@ async function handleInboundMessage(
     await evTask;
 
     // Mark busy before send so mid-turn messages arriving during the await are steered
-    busyChannels.add(msg.channelId);
+    markBusy(msg.channelId);
 
     // Download any file attachments to .temp/ in the bot's workspace
     const sdkAttachments = await downloadAttachments(msg.attachments, msg.channelId, adapter);
@@ -953,8 +915,7 @@ async function handleInboundMessage(
     // doesn't start a new stream while this response is still being streamed.
     await waitForChannelIdle(msg.channelId);
   } catch (err) {
-    busyChannels.delete(msg.channelId);
-    resolveChannelIdleWaiters(msg.channelId);
+    markIdle(msg.channelId);
     log.error(`Error sending message for channel ${msg.channelId}:`, err);
     const streamKey = activeStreams.get(msg.channelId);
     if (streamKey) {
@@ -1131,8 +1092,7 @@ async function handleSessionEvent(
       break;
 
     case 'error':
-      busyChannels.delete(channelId);
-      resolveChannelIdleWaiters(channelId);
+      markIdle(channelId);
       nudgePending.delete(channelId);
       if (streamKey) {
         await streaming.cancelStream(streamKey, formatted.content);
@@ -1155,8 +1115,7 @@ async function handleSessionEvent(
       // turn_end fires between tool cycles — DON'T finalize there or we get
       // duplicate "Working..." messages from auto-starting new streams.
       if (event.type === 'session.idle') {
-        busyChannels.delete(channelId);
-        resolveChannelIdleWaiters(channelId);
+        markIdle(channelId);
         nudgePending.delete(channelId);
         await finalizeActivityFeed(channelId, adapter);
         initialStreamPosted.delete(channelId);
