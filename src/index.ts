@@ -43,6 +43,39 @@ const nudgePending = new Set<string>();
 // Channels with an active agent turn in progress (for steering/queueing)
 const busyChannels = new Set<string>();
 
+// Per-channel idle waiters — resolved when session.idle fires to hold channelLocks
+const channelIdleWaiters = new Map<string, Array<() => void>>();
+const IDLE_WAIT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minute safety net
+
+/** Returns a promise that resolves when the channel becomes idle (session.idle fires). */
+function waitForChannelIdle(channelId: string): Promise<void> {
+  if (!busyChannels.has(channelId)) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const waiters = channelIdleWaiters.get(channelId) ?? [];
+    waiters.push(resolve);
+    channelIdleWaiters.set(channelId, waiters);
+    // Safety timeout to prevent stuck locks
+    setTimeout(() => {
+      resolve();
+      const remaining = channelIdleWaiters.get(channelId);
+      if (remaining) {
+        const idx = remaining.indexOf(resolve);
+        if (idx >= 0) remaining.splice(idx, 1);
+        if (remaining.length === 0) channelIdleWaiters.delete(channelId);
+      }
+    }, IDLE_WAIT_TIMEOUT_MS);
+  });
+}
+
+/** Resolve all idle waiters for a channel (called on session.idle and error). */
+function resolveChannelIdleWaiters(channelId: string): void {
+  const waiters = channelIdleWaiters.get(channelId);
+  if (waiters) {
+    for (const resolve of waiters) resolve();
+    channelIdleWaiters.delete(channelId);
+  }
+}
+
 // Bot adapters keyed by "platform:botName" for channel→adapter lookup
 const botAdapters = new Map<string, ChannelAdapter>();
 const botStreamers = new Map<string, StreamingHandler>();
@@ -326,9 +359,12 @@ async function main(): Promise<void> {
         }
         try {
           await sessionManager.sendMessage(channelId, prompt);
+          // Hold the lock until the response is fully streamed
+          await waitForChannelIdle(channelId);
         } catch (err: any) {
           log.error(`Scheduled job sendMessage failed for ${channelId.slice(0, 8)}...:`, err);
           busyChannels.delete(channelId);
+          resolveChannelIdleWaiters(channelId);
           const failedStream = activeStreams.get(channelId);
           if (failedStream) {
             const r = getAdapterForChannel(channelId);
@@ -550,6 +586,7 @@ async function handleInboundMessage(
     switch (cmdResult.action) {
       case 'new_session': {
         busyChannels.delete(msg.channelId);
+        resolveChannelIdleWaiters(msg.channelId);
         const oldStreamKey = activeStreams.get(msg.channelId);
         if (oldStreamKey) {
           await streaming.cancelStream(oldStreamKey);
@@ -562,6 +599,7 @@ async function handleInboundMessage(
       }
       case 'stop_session': {
         busyChannels.delete(msg.channelId);
+        resolveChannelIdleWaiters(msg.channelId);
         const stopStreamKey = activeStreams.get(msg.channelId);
         if (stopStreamKey) {
           await streaming.cancelStream(stopStreamKey);
@@ -893,8 +931,12 @@ async function handleInboundMessage(
     const sdkAttachments = await downloadAttachments(msg.attachments, msg.channelId, adapter);
 
     await sessionManager.sendMessage(msg.channelId, text, sdkAttachments.length > 0 ? sdkAttachments : undefined, msg.userId);
+    // Hold the channelLock until session.idle so queued work (scheduler, etc.)
+    // doesn't start a new stream while this response is still being streamed.
+    await waitForChannelIdle(msg.channelId);
   } catch (err) {
     busyChannels.delete(msg.channelId);
+    resolveChannelIdleWaiters(msg.channelId);
     log.error(`Error sending message for channel ${msg.channelId}:`, err);
     const streamKey = activeStreams.get(msg.channelId);
     if (streamKey) {
@@ -1072,6 +1114,7 @@ async function handleSessionEvent(
 
     case 'error':
       busyChannels.delete(channelId);
+      resolveChannelIdleWaiters(channelId);
       nudgePending.delete(channelId);
       if (streamKey) {
         await streaming.cancelStream(streamKey, formatted.content);
@@ -1095,6 +1138,7 @@ async function handleSessionEvent(
       // duplicate "Working..." messages from auto-starting new streams.
       if (event.type === 'session.idle') {
         busyChannels.delete(channelId);
+        resolveChannelIdleWaiters(channelId);
         nudgePending.delete(channelId);
         await finalizeActivityFeed(channelId, adapter);
         initialStreamPosted.delete(channelId);

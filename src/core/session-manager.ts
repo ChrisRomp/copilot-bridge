@@ -393,10 +393,11 @@ export class SessionManager {
       let description = '';
       let source = 'user';
 
-      // Determine source from path
-      if (dir.includes('.copilot/skills')) source = 'user';
-      else if (dir.includes('.github/skills')) source = 'workspace';
-      else if (dir.includes('.agents/skills')) source = 'workspace';
+      // Determine source from path (normalize separators for cross-platform)
+      const normalized = dir.split(path.sep).join('/');
+      if (normalized.includes('.copilot/skills')) source = 'user';
+      else if (normalized.includes('.github/skills')) source = 'workspace';
+      else if (normalized.includes('.agents/skills')) source = 'workspace';
 
       // Try to read description from SKILL.md frontmatter
       if (fs.existsSync(skillFile)) {
