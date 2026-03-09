@@ -535,14 +535,14 @@ async function handleInboundMessage(
   // Strip bot mention from message text
   let text = stripBotMention(msg.text, channelConfig.bot);
 
-  if (!text) return;
+  if (!text && !msg.attachments?.length) return;
 
   // Detect dynamic thread request (🧵 or "reply in thread") and strip from text
   const threadExtract = extractThreadRequest(text);
   text = threadExtract.text;
   const threadRequested = threadExtract.threadRequested;
 
-  if (!text) return;
+  if (!text && !msg.attachments?.length) return;
 
   // Check for slash commands
   const sessionInfo = sessionManager.getSessionInfo(msg.channelId);
@@ -932,7 +932,9 @@ async function handleInboundMessage(
     // Download any file attachments to .temp/ in the bot's workspace
     const sdkAttachments = await downloadAttachments(msg.attachments, msg.channelId, adapter);
 
-    await sessionManager.sendMessage(msg.channelId, text, sdkAttachments.length > 0 ? sdkAttachments : undefined, msg.userId);
+    // If no text but attachments, provide a minimal prompt so the model knows to look at them
+    const prompt = text || (sdkAttachments.length > 0 ? 'See attached file(s).' : '');
+    await sessionManager.sendMessage(msg.channelId, prompt, sdkAttachments.length > 0 ? sdkAttachments : undefined, msg.userId);
     // Hold the channelLock until session.idle so queued work (scheduler, etc.)
     // doesn't start a new stream while this response is still being streamed.
     await waitForChannelIdle(msg.channelId);
