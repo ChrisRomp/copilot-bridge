@@ -242,8 +242,8 @@ async function main(): Promise<void> {
       if (isBusy(msg.channelId)) {
         handleMidTurnMessage(msg, sessionManager, platformName, botName)
           .catch(err => {
-            // Expected fallbacks (slash commands, pending input) — debug level
-            const expected = err?.message === 'slash-command-while-busy' || err?.message === 'pending-input-while-busy';
+            // Expected fallback (slash commands during busy) — debug level
+            const expected = err?.message === 'slash-command-while-busy';
             if (expected) {
               log.debug(`Mid-turn fallback (${err.message}), routing to normal handler`);
             } else {
@@ -428,10 +428,30 @@ async function handleMidTurnMessage(
     throw new Error('slash-command-while-busy');
   }
 
-  // Pending user input or permissions — route to normal handler (don't steer)
-  if (sessionManager.hasPendingUserInput(msg.channelId) ||
-      sessionManager.hasPendingPermission(msg.channelId)) {
-    throw new Error('pending-input-while-busy');
+  // Pending user input — resolve directly (bypasses channelLock to avoid deadlock
+  // since the lock is held by waitForChannelIdle which needs this to resolve first)
+  if (sessionManager.hasPendingUserInput(msg.channelId)) {
+    sessionManager.resolveUserInput(msg.channelId, text);
+    return;
+  }
+
+  // Pending permission — resolve directly for the same reason
+  if (sessionManager.hasPendingPermission(msg.channelId)) {
+    const lower = text.toLowerCase();
+    if (lower === 'yes' || lower === 'y' || lower === 'approve') {
+      sessionManager.resolvePermission(msg.channelId, true);
+      return;
+    }
+    if (lower === 'no' || lower === 'n' || lower === 'deny') {
+      sessionManager.resolvePermission(msg.channelId, false);
+      return;
+    }
+    // Slash commands like /approve, /deny, /remember also need to bypass
+    if (text.startsWith('/')) {
+      throw new Error('slash-command-while-busy');
+    }
+    // Unrecognized text while permission pending — ignore (user might be talking to someone else)
+    return;
   }
 
   log.info(`Mid-turn steering for ${msg.channelId.slice(0, 8)}...: "${text.slice(0, 100)}"`);
