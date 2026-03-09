@@ -6,13 +6,23 @@
 src/
 ├── index.ts                    # Main orchestrator, event routing, admin nudge
 ├── config.ts                   # Config loading and validation
+├── config.test.ts              # Config validation tests
 ├── logger.ts                   # Structured logging (timestamp + level + tag)
 ├── types.ts                    # Shared type definitions
 ├── core/
 │   ├── bridge.ts               # CopilotClient wrapper (SDK interface)
-│   ├── session-manager.ts      # Session lifecycle, permissions, MCP/skill loading, .env
+│   ├── channel-idle.ts         # Debounced idle detection & waiter queue
+│   ├── channel-idle.test.ts    # Idle detection tests
 │   ├── command-handler.ts      # Slash command parsing with fuzzy model matching
+│   ├── inter-agent.ts          # Bot-to-bot communication
+│   ├── inter-agent.test.ts     # Inter-agent tests
+│   ├── onboarding.ts           # Project creation & channel setup tools
+│   ├── scheduler.ts            # Cron + one-off task scheduling
+│   ├── session-manager.ts      # Session lifecycle, permissions, MCP/skill loading, .env
+│   ├── steering.test.ts        # Steering logic tests
 │   ├── stream-formatter.ts     # SDK event → chat message formatting
+│   ├── thread-utils.ts         # Thread-aware reply resolution
+│   ├── thread-utils.test.ts    # Thread utils tests
 │   └── workspace-manager.ts    # Workspace creation, template rendering, directory sync
 ├── channels/
 │   └── mattermost/
@@ -44,20 +54,38 @@ Both inbound messages and session events are serialized per-channel via separate
 
 ## Channel adapter pattern
 
-New platforms implement the `ChannelAdapter` interface (defined in `src/types.ts`). The Mattermost adapter is the reference implementation. Required methods:
+New platforms implement the `ChannelAdapter` interface (defined in `src/types.ts`). The Mattermost adapter is the reference implementation.
+
+Required methods:
 
 - `connect()` / `disconnect()` — WebSocket lifecycle
-- `sendMessage()` / `editMessage()` / `deleteMessage()` — Message operations
-- `addReaction()` / `setTyping()` — UX indicators
-- `onMessage` — Callback for inbound messages
+- `sendMessage()` / `updateMessage()` / `deleteMessage()` — Message operations
+- `replyInThread()` — Thread-aware replies
+- `setTyping()` — Typing indicator
+- `onMessage()` / `onReaction()` — Callbacks for inbound events
+- `downloadFile()` / `sendFile()` — File transfer
+- `getBotUserId()` — Bot identity for mention detection
+
+Optional methods:
+
+- `addReaction()` — Emoji reactions (best-effort, should not throw)
+- `createChannel()` / `addUserToChannel()` — Channel management
+- `getTeams()` / `getChannelByName()` — Team/channel discovery
+- `discoverDMChannels()` — DM channel enumeration
 
 ## Persistence
 
 SQLite database at `~/.copilot-bridge/state.db` (WAL mode) via `src/state/store.ts`:
 
 - **channel_sessions** — Maps channels to active Copilot session IDs
-- **channel_prefs** — Per-channel preferences (model, verbose, agent, etc.)
-- **permission_rules** — Stored allow/deny rules from `/remember`
+- **channel_prefs** — Per-channel preferences (model, agent, verbose, trigger mode, reasoning effort, etc.)
+- **permission_rules** — Stored allow/deny rules from `/remember` (scoped per channel or global)
+- **workspace_overrides** — Per-bot working directory and allowed path overrides
+- **settings** — Global key-value settings store
+- **dynamic_channels** — Channels created at runtime via onboarding/admin tools
+- **agent_calls** — Inter-agent call log (caller, target, duration, chain tracking)
+- **scheduled_tasks** — Cron and one-off scheduled task definitions
+- **scheduled_task_history** — Execution history for scheduled tasks (status, errors)
 
 ## Logging
 

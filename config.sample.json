@@ -2,9 +2,13 @@
   "platforms": {
     "mattermost": {
       "url": "https://chat.example.com",
+
+      "_comment_auth": "Use ONE of: 'botToken' (single bot) OR 'bots' (multiple identities)",
+
       "botToken": "SINGLE_BOT_TOKEN",
-      "_comment_bots": "OR use 'bots' for multiple identities:",
-      "bots": {
+
+      "_comment_bots": "Multi-bot example (remove 'botToken' above if using this):",
+      "_bots": {
         "copilot": { "token": "BOT_TOKEN_1", "admin": true },
         "bob": { "token": "BOT_TOKEN_2", "agent": "bob-agent" }
       }

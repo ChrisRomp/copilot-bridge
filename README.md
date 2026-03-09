@@ -26,13 +26,22 @@ Mattermost Channel → copilot-bridge → @github/copilot-sdk → Copilot CLI
 - **Interactive permissions** — Approve/deny tool use via chat, or `/autopilot` to auto-approve
 - **Session management** — `/reload` to refresh config, `/resume` to switch between sessions
 - **Persistent preferences** — Model, agent, verbose mode, permissions saved per-channel
+- **Scheduled tasks** — Recurring (cron) and one-off (datetime) tasks per channel
+- **Inter-agent communication** — Bot-to-bot messaging via `ask_agent` tool
+- **File sharing** — `send_file` and `show_file_in_chat` tools for pushing files to chat
+- **Attachment ingestion** — File and image attachments are extracted and passed to the session
+- **Mid-turn steering** — Send messages while the bot is working to redirect it
+- **Streamer mode** — Hide preview/internal models from `/model` list for on-air use
+- **Thread-aware replies** — Reply in threads via 🧵 trigger or per-channel config
+- **Config hot-reload** — `/reload config` applies safe changes without restarting the bridge
+- **Admin onboarding** — Templates and tools for creating channels, managing workspaces
 
 ## Quick Start
 
 1. **Prerequisites**: Node.js 20+, GitHub Copilot CLI installed and authenticated
-2. **Install**: `npm install`
+2. **Install**: `npm install` (npm package coming soon)
 3. **Configure**: Copy `config.sample.json` to `~/.copilot-bridge/config.json` and add your Mattermost URL + bot token(s)
-4. **Run**: `npx tsx src/index.ts`
+4. **Run**: `npm run dev` (development with watch mode) or `npm run build && npm start` (production)
 
 For DMs, that's it — the bridge auto-discovers DM channels for each bot. For group channels, add a `channels` entry mapping the channel ID to a working directory. See [Configuration](docs/configuration.md) for details.
 
@@ -48,21 +57,33 @@ Update and restart: `./scripts/deploy.sh`
 
 ## Chat Commands
 
-| Command | Description |
-|---------|-------------|
-| `/new` | Start a fresh session |
-| `/reload` | Reload session (re-reads AGENTS.md, config, MCP servers) |
-| `/resume [id]` | List past sessions, or resume one by ID |
-| `/model [name]` | List models or switch model (fuzzy match) |
-| `/context` | Show context window usage |
-| `/agent <name>` | Switch custom agent (empty to deselect) |
-| `/reasoning <level>` | Set reasoning effort (`low`/`medium`/`high`/`xhigh`) |
-| `/verbose` | Toggle tool call visibility |
-| `/status` | Show session info |
-| `/approve` / `/deny` | Handle permission requests |
-| `/remember` | Approve + persist the permission rule |
-| `/autopilot` | Toggle auto-approve mode |
-| `/help` | Show all commands |
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| **Session** | | |
+| `/new` | | Start a fresh session |
+| `/stop` | `/cancel` | Stop the current task |
+| `/reload` | | Reload session (re-reads AGENTS.md, workspace config) |
+| `/reload config` | | Hot-reload config.json (safe changes apply without restart) |
+| `/resume [id]` | | List past sessions, or resume one by ID |
+| `/model [name]` | `/models` | List models or switch model (fuzzy match) |
+| `/agent <name>` | | Switch custom agent (empty to deselect) |
+| `/reasoning <level>` | | Set reasoning effort (`low`/`medium`/`high`/`xhigh`) |
+| `/context` | | Show context window usage |
+| `/verbose` | | Toggle tool call visibility |
+| `/status` | | Show session info |
+| **Permissions** | | |
+| `/approve` / `/deny` | | Handle pending permission request |
+| `/remember` | | Approve + persist the permission rule |
+| `/rules` | `/rule` | List saved permission rules |
+| `/rules clear [spec]` | | Clear rules (all, or by spec) |
+| `/autopilot` | `/yolo` | Toggle auto-approve mode |
+| **Scheduling** | | |
+| `/schedule` | `/schedules`, `/tasks` | Manage scheduled tasks (list, cancel, pause, resume, history) |
+| **Tools & Info** | | |
+| `/skills` | `/tools` | Show available skills and MCP tools |
+| `/mcp` | | Show MCP servers and their source |
+| `/streamer-mode` | `/on-air` | Toggle streamer mode (hides preview/internal models) |
+| `/help` | | Show common commands; `/help all` for full list |
 
 ## Documentation
 
