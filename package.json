@@ -13,6 +13,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "init": "tsx scripts/init.ts",
+    "check": "tsx scripts/check.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

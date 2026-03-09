@@ -39,21 +39,16 @@ Mattermost Channel → copilot-bridge → @github/copilot-sdk → Copilot CLI
 ## Quick Start
 
 1. **Prerequisites**: Node.js 20+, GitHub Copilot CLI installed and authenticated
-2. **Install**: `npm install` (npm package coming soon)
-3. **Configure**: Copy `config.sample.json` to `~/.copilot-bridge/config.json` and add your Mattermost URL + bot token(s)
-4. **Run**: `npm run dev` (development with watch mode) or `npm run build && npm start` (production)
+2. **Install**: `git clone` + `npm install`
+3. **Configure**: `npm run init` (interactive wizard) — or manually copy `config.sample.json` to `~/.copilot-bridge/config.json`
+4. **Validate**: `npm run check` (verifies prerequisites, connectivity, tokens, channels)
+5. **Run**: `npm run dev` (development with watch mode) or `npm run build && npm start` (production)
 
-For DMs, that's it — the bridge auto-discovers DM channels for each bot. For group channels, add a `channels` entry mapping the channel ID to a working directory. See [Configuration](docs/configuration.md) for details.
+For DMs, that's it — the bridge auto-discovers DM channels for each bot. For group channels, add a `channels` entry mapping the channel ID to a working directory. See the [Setup Guide](docs/setup.md) for the full walkthrough or [Configuration](docs/configuration.md) for reference.
 
-### Running as a service (macOS)
+### Running as a service
 
-```bash
-cp scripts/com.copilot-bridge.plist ~/Library/LaunchAgents/
-# Edit paths in the plist if needed
-launchctl load ~/Library/LaunchAgents/com.copilot-bridge.plist
-```
-
-Update and restart: `./scripts/deploy.sh`
+See the [Setup Guide — Running as a Service](docs/setup.md#running-as-a-service) for macOS (launchd) and Linux (systemd) instructions, or run `npm run init` to install automatically.
 
 ## Chat Commands
 

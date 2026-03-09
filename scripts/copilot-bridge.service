@@ -1,0 +1,30 @@
+# copilot-bridge systemd service
+#
+# Install:
+#   sudo cp scripts/copilot-bridge.service /etc/systemd/system/
+#   # Edit ExecStart, WorkingDirectory, User, and HOME below
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now copilot-bridge
+#
+# Logs:
+#   sudo journalctl -u copilot-bridge -f
+#
+# Restart:
+#   sudo systemctl restart copilot-bridge
+
+[Unit]
+Description=Copilot Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=username
+ExecStart=/usr/local/bin/node dist/index.js
+WorkingDirectory=/path/to/copilot-bridge
+Environment=HOME=/home/username
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
