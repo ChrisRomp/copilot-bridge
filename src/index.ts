@@ -423,35 +423,41 @@ async function handleMidTurnMessage(
   const text = stripBotMention(msg.text, channelConfig.bot);
   if (!text) return;
 
-  // Slash commands still go through the normal serialized path
-  if (text.startsWith('/')) {
-    throw new Error('slash-command-while-busy');
-  }
-
   // Pending user input — resolve directly (bypasses channelLock to avoid deadlock
   // since the lock is held by waitForChannelIdle which needs this to resolve first)
   if (sessionManager.hasPendingUserInput(msg.channelId)) {
-    sessionManager.resolveUserInput(msg.channelId, text);
+    sessionManager.resolveUserInput(msg.channelId, text.startsWith('/') ? text.slice(1) : text);
     return;
   }
 
-  // Pending permission — resolve directly for the same reason
+  // Pending permission — resolve directly for the same reason.
+  // Must be checked BEFORE the general slash-command throw so /approve, /deny,
+  // /remember can resolve the permission instead of deadlocking on channelLocks.
   if (sessionManager.hasPendingPermission(msg.channelId)) {
     const lower = text.toLowerCase();
-    if (lower === 'yes' || lower === 'y' || lower === 'approve') {
+    if (lower === '/approve' || lower === 'yes' || lower === 'y' || lower === 'approve') {
       sessionManager.resolvePermission(msg.channelId, true);
       return;
     }
-    if (lower === 'no' || lower === 'n' || lower === 'deny') {
+    if (lower === '/deny' || lower === 'no' || lower === 'n' || lower === 'deny') {
       sessionManager.resolvePermission(msg.channelId, false);
       return;
     }
-    // Slash commands like /approve, /deny, /remember also need to bypass
+    if (lower === '/remember') {
+      sessionManager.resolvePermission(msg.channelId, true, true);
+      return;
+    }
+    // Other slash commands still fall through to the serialized path
     if (text.startsWith('/')) {
       throw new Error('slash-command-while-busy');
     }
-    // Unrecognized text while permission pending — ignore (user might be talking to someone else)
+    // Unrecognized text while permission pending — ignore
     return;
+  }
+
+  // Non-permission slash commands go through the normal serialized path
+  if (text.startsWith('/')) {
+    throw new Error('slash-command-while-busy');
   }
 
   log.info(`Mid-turn steering for ${msg.channelId.slice(0, 8)}...: "${text.slice(0, 100)}"`);
