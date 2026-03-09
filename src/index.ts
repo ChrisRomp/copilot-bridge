@@ -641,6 +641,15 @@ async function handleInboundMessage(
     try {
       models = await sessionManager.listModels();
     } catch {
+      // Check if the failure is an auth issue
+      const auth = await sessionManager.getAuthStatus();
+      if (!auth.isAuthenticated) {
+        const threadRoot = resolveThreadRoot(msg, threadRequested, channelConfig);
+        await adapter.sendMessage(msg.channelId,
+          '🔒 **Not authenticated.** Run `copilot login` on the bridge host to sign in.',
+          { threadRootId: threadRoot });
+        return;
+      }
       models = undefined;
     }
   }
@@ -993,6 +1002,19 @@ async function handleInboundMessage(
 
   // Regular message — forward to Copilot session
   try {
+    // Check auth before starting a session (prevents hanging on "Working...")
+    const hasSession = sessionManager.getSessionInfo(msg.channelId);
+    if (!hasSession) {
+      const auth = await sessionManager.getAuthStatus();
+      if (!auth.isAuthenticated) {
+        const threadRoot = resolveThreadRoot(msg, threadRequested, channelConfig);
+        await adapter.sendMessage(msg.channelId,
+          '🔒 **Not authenticated.** Run `copilot login` on the bridge host to sign in.',
+          { threadRootId: threadRoot });
+        return;
+      }
+    }
+
     console.log(`[bridge] Forwarding to Copilot: "${text}"`);
     log.info(`Forwarding to Copilot: "${text.slice(0, 100)}"`);
     adapter.setTyping(msg.channelId).catch(() => {});
