@@ -7,7 +7,7 @@ This guide walks you through installing and configuring copilot-bridge from scra
 | Requirement | Version | Notes |
 |-------------|---------|-------|
 | **Node.js** | 20+ | [nodejs.org](https://nodejs.org/) |
-| **GitHub Copilot CLI** | latest | `gh extension install github/gh-copilot` or [standalone install](https://github.com/github/copilot-cli) |
+| **GitHub Copilot CLI** | latest | Installed automatically via `npm install` (bundled in `@github/copilot-sdk`) |
 | **Mattermost** | 7+ | Self-hosted or cloud instance with admin access to create bots |
 
 ### Authentication
