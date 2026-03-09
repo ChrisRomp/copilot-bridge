@@ -190,17 +190,31 @@ npm start
 
 ## Running as a Service
 
-The bridge should run persistently so it's always available in chat. The quickest way is:
+The bridge should run persistently so it's always available in chat.
+
+### Automatic install (recommended)
 
 ```bash
 npm run install-service
 ```
 
-This detects your OS, generates the correct service file with your paths, and installs it. On Linux it requires `sudo` (it will prompt). You can also set it up manually:
+This detects your OS, generates the correct service file with your local paths, and installs it:
+- **macOS**: installs a launchd plist to `~/Library/LaunchAgents/` (no sudo needed)
+- **Linux**: installs a systemd unit to `/etc/systemd/system/` (prompts for sudo)
 
-### macOS (launchd)
+On Linux, build first since systemd runs the compiled output:
 
-`npm run install-service` handles this automatically. To do it manually:
+```bash
+npm run build
+npm run install-service
+```
+
+After installing, management commands are printed to the terminal.
+
+### Manual setup
+
+<details>
+<summary>macOS (launchd) — manual steps</summary>
 
 ```bash
 cp scripts/com.copilot-bridge.plist ~/Library/LaunchAgents/
@@ -217,27 +231,24 @@ Then load it:
 launchctl load ~/Library/LaunchAgents/com.copilot-bridge.plist
 ```
 
-To check status:
+Management:
 
 ```bash
-launchctl list com.copilot-bridge
-```
-
-To restart:
-
-```bash
-launchctl kickstart -k gui/$(id -u)/com.copilot-bridge
+launchctl list com.copilot-bridge                        # status
+launchctl kickstart -k gui/$(id -u)/com.copilot-bridge   # restart
+tail -f /tmp/copilot-bridge.log                          # logs
 ```
 
 > [!WARNING]
 > **Never use `launchctl unload` to restart** — if the bridge is running your session, `unload` kills it and the subsequent `load` never executes.
 
-### Linux (systemd)
+</details>
 
-`npm run install-service` handles this automatically (requires `sudo`). To do it manually:
+<details>
+<summary>Linux (systemd) — manual steps</summary>
 
 ```bash
-# Build first — systemd runs the compiled output
+# Build first
 npm run build
 
 # Install the service
@@ -257,6 +268,14 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now copilot-bridge
 ```
 
+Management:
+
+```bash
+sudo systemctl status copilot-bridge        # status
+sudo journalctl -u copilot-bridge -f        # logs
+sudo systemctl restart copilot-bridge       # restart
+```
+
 > [!TIP]
 > **Let Copilot help with service setup.** The paths in service files are environment-specific. If you have the Copilot CLI installed, ask it:
 > ```
@@ -265,13 +284,7 @@ sudo systemctl enable --now copilot-bridge
 > and it should run as my user.
 > ```
 
-Management commands:
-
-```bash
-sudo systemctl status copilot-bridge        # status
-sudo journalctl -u copilot-bridge -f        # logs
-sudo systemctl restart copilot-bridge       # restart
-```
+</details>
 
 ## What Happens on First Run
 
