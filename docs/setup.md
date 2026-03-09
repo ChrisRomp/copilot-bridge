@@ -335,6 +335,7 @@ See the [full configuration reference](configuration.md) and [architecture overv
 | Issue | Likely Cause | Fix |
 |-------|-------------|-----|
 | "Config file not found" | Missing config | Run `npm run init` or copy `config.sample.json` to `~/.copilot-bridge/config.json` |
+| `better-sqlite3` fails during `npm install` | Missing native build tools | `sudo apt-get install -y python3-full build-essential` (Linux) |
 | Bot doesn't respond | Token invalid or bot not in channel | Run `npm run check` to diagnose |
 | "WebSocket closed" | Bad Mattermost URL or token | Verify URL and token in config |
 | Copilot errors on first message | CLI not authenticated | Set `COPILOT_GITHUB_TOKEN` or run `gh auth login` |
