@@ -447,11 +447,8 @@ async function handleMidTurnMessage(
       sessionManager.resolvePermission(msg.channelId, true, true);
       return;
     }
-    // Other slash commands still fall through to the serialized path
-    if (text.startsWith('/')) {
-      throw new Error('slash-command-while-busy');
-    }
-    // Unrecognized text while permission pending — ignore
+    // Other slash commands and unrecognized text while permission pending — ignore.
+    // They can't be queued on channelLocks (deadlock) and the permission must be resolved first.
     return;
   }
 

@@ -11,8 +11,13 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 // Channels currently processing a response
 const busyChannels = new Set<string>();
 
-// Per-channel resolve callbacks waiting for idle
-const idleWaiters = new Map<string, Array<() => void>>();
+interface Waiter {
+  resolve: () => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+// Per-channel waiters with their timeout handles
+const idleWaiters = new Map<string, Waiter[]>();
 
 /** Mark a channel as busy (processing a response). */
 export function markBusy(channelId: string): void {
@@ -32,20 +37,18 @@ export function waitForChannelIdle(channelId: string, timeoutMs = DEFAULT_TIMEOU
   if (!busyChannels.has(channelId)) return Promise.resolve();
   return new Promise<void>((resolve) => {
     const waiters = idleWaiters.get(channelId) ?? [];
-    waiters.push(resolve);
-    idleWaiters.set(channelId, waiters);
-    // Safety timeout to prevent stuck locks
     const timer = setTimeout(() => {
       resolve();
       const remaining = idleWaiters.get(channelId);
       if (remaining) {
-        const idx = remaining.indexOf(resolve);
+        const idx = remaining.findIndex(w => w.resolve === resolve);
         if (idx >= 0) remaining.splice(idx, 1);
         if (remaining.length === 0) idleWaiters.delete(channelId);
       }
     }, timeoutMs);
-    // Don't hold the process open for the timeout
     if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+    waiters.push({ resolve, timer });
+    idleWaiters.set(channelId, waiters);
   });
 }
 
@@ -57,13 +60,19 @@ export function markIdle(channelId: string): void {
   busyChannels.delete(channelId);
   const waiters = idleWaiters.get(channelId);
   if (waiters) {
-    for (const resolve of waiters) resolve();
+    for (const { resolve, timer } of waiters) {
+      clearTimeout(timer);
+      resolve();
+    }
     idleWaiters.delete(channelId);
   }
 }
 
 /** Reset all state (for testing). */
 export function _resetForTest(): void {
+  for (const waiters of idleWaiters.values()) {
+    for (const { timer } of waiters) clearTimeout(timer);
+  }
   busyChannels.clear();
   idleWaiters.clear();
 }
