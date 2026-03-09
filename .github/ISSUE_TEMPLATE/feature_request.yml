@@ -1,0 +1,82 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+title: "Feature: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe what you'd like and why. Concrete use cases help prioritize.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What do you want? One or two sentences.
+      placeholder: "Support Slack as a channel adapter alongside Mattermost."
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why is this needed? What problem does it solve or what workflow does it improve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: How should it work? Include API surface, config changes, or UX flow if you have ideas.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Other approaches you thought about and why they're less ideal.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of the system does this affect?
+      options:
+        - Bridge core (session, streaming, events)
+        - Permissions (approval flow, rules, persistence)
+        - Channel adapter (Mattermost)
+        - New channel adapter
+        - CLI scripts (init, check, install-service)
+        - SDK integration (copilot-sdk, CLI subprocess)
+        - Scheduler
+        - Inter-agent communication
+        - MCP servers / tools
+        - Config / state persistence
+        - Documentation
+        - Other
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Links, screenshots, related issues, prior art.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: reporter
+    attributes:
+      label: Reported By
+      options:
+        - Human
+        - Agent (automated)
+      default: 0
+    validations:
+      required: false

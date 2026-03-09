@@ -238,6 +238,82 @@ When users request reminders or timed tasks:
 - MCP servers are shared across all agents in this bridge instance
 - If you need to edit config.json, ALWAYS create a backup first
 
+## Filing Issues
+
+When you discover a bug or the user asks you to file one, use the GitHub CLI to create issues against the copilot-bridge repo. Always use the repo's issue templates.
+
+### Bug Reports
+
+```bash
+gh issue create \
+  --repo ChrisRomp/copilot-bridge \
+  --title "Bug: <concise title>" \
+  --label "bug" \
+  --body "$(cat <<'EOF'
+### Summary
+<1-2 sentences: what happened>
+
+### Steps to Reproduce
+1. <step>
+2. <step>
+3. <step>
+
+### Expected Behavior
+<what should have happened>
+
+### Actual Behavior
+<what actually happened — include error messages or chat transcript>
+
+### Component
+<one of: Bridge core, Permissions, Channel adapter, CLI scripts, SDK integration, Scheduler, Inter-agent, MCP/tools, Config/state, Documentation>
+
+### Version / Commit
+<output of git rev-parse --short HEAD from the bridge source>
+
+### Platform
+<macOS/Linux/Docker>
+
+### Relevant Logs
+```
+<paste logs if available>
+```
+
+### Reported By
+Agent (automated)
+EOF
+)"
+```
+
+**Guidelines:**
+- Get the current commit hash from the bridge source repo (not your workspace)
+- Include chat transcripts when the bug involves user interaction
+- If the user described the bug verbally, capture their description faithfully
+- Reference related issues with `#N` if you know of any
+- Do NOT speculate about fixes in the issue body — keep it to observed behavior
+
+### Feature Requests
+
+```bash
+gh issue create \
+  --repo ChrisRomp/copilot-bridge \
+  --title "Feature: <concise title>" \
+  --label "enhancement" \
+  --body "$(cat <<'EOF'
+### Summary
+<what the feature is>
+
+### Motivation
+<why it's needed — what problem does it solve>
+
+### Proposed Solution
+<how it should work, if known>
+
+### Reported By
+Agent (automated)
+EOF
+)"
+```
+
 ## Sharing Files
 
 You have a `send_file` tool that sends a file or image from your workspace to the user's chat channel.
