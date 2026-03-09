@@ -452,8 +452,86 @@ async function handleMidTurnMessage(
     return;
   }
 
-  // Non-permission slash commands go through the normal serialized path
+  // Slash commands while busy: handle safe ones immediately, defer the rest
   if (text.startsWith('/')) {
+    const parsed = parseCommand(text);
+    if (!parsed) {
+      throw new Error('slash-command-while-busy');
+    }
+
+    const channelConfig = getChannelConfig(msg.channelId);
+    const threadExtract = extractThreadRequest(text);
+    const threadRoot = resolveThreadRoot(msg, threadExtract.threadRequested, channelConfig);
+
+    // Commands that MUST run immediately (abort/cancel current work)
+    // markIdleImmediate is called AFTER cleanup to prevent queued messages from
+    // starting a new stream while cancel/abort is still in flight.
+    if (parsed.command === 'stop' || parsed.command === 'cancel') {
+      const stopStreamKey = activeStreams.get(msg.channelId);
+      if (stopStreamKey) {
+        await resolved.streaming.cancelStream(stopStreamKey);
+        activeStreams.delete(msg.channelId);
+      }
+      await finalizeActivityFeed(msg.channelId, adapter);
+      await sessionManager.abortSession(msg.channelId);
+      markIdleImmediate(msg.channelId);
+      await adapter.sendMessage(msg.channelId, '🛑 Task stopped.', { threadRootId: threadRoot });
+      return;
+    }
+    if (parsed.command === 'new') {
+      const oldStreamKey = activeStreams.get(msg.channelId);
+      if (oldStreamKey) {
+        await resolved.streaming.cancelStream(oldStreamKey);
+        activeStreams.delete(msg.channelId);
+      }
+      await finalizeActivityFeed(msg.channelId, adapter);
+      await sessionManager.newSession(msg.channelId);
+      markIdleImmediate(msg.channelId);
+      await adapter.sendMessage(msg.channelId, '✅ New session created.', { threadRootId: threadRoot });
+      return;
+    }
+
+    // Read-only / toggle commands — safe to handle mid-turn
+    // Only commands where handleCommand returns a complete response (no separate action rendering).
+    // Commands with complex action handlers (skills, schedule, rules) defer to serialized path.
+    const SAFE_MID_TURN = new Set([
+      'context', 'status', 'help', 'verbose', 'autopilot', 'yolo',
+      'mcp', 'model', 'models', 'reasoning',
+      'streamer-mode', 'on-air',
+    ]);
+
+    if (SAFE_MID_TURN.has(parsed.command)) {
+      // Build the same inputs that handleInboundMessage would
+      const sessionInfo = sessionManager.getSessionInfo(msg.channelId);
+      const effPrefs = sessionManager.getEffectivePrefs(msg.channelId);
+      let models: any[] | undefined;
+      if (['model', 'models', 'status', 'reasoning'].includes(parsed.command)) {
+        try { models = await sessionManager.listModels(); } catch { models = undefined; }
+      }
+      const mcpInfo = parsed.command === 'mcp' ? sessionManager.getMcpServerInfo(msg.channelId) : undefined;
+      const contextUsage = sessionManager.getContextUsage(msg.channelId);
+
+      const cmdResult = handleCommand(
+        msg.channelId, text, sessionInfo ?? undefined,
+        { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort },
+        { workingDirectory: channelConfig.workingDirectory, bot: channelConfig.bot },
+        models, mcpInfo, contextUsage,
+      );
+
+      if (cmdResult.handled) {
+        // Model/agent switch while busy — defer to serialized path
+        if (cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent') {
+          throw new Error('slash-command-while-busy');
+        }
+        if (cmdResult.response) {
+          await adapter.sendMessage(msg.channelId, cmdResult.response, { threadRootId: threadRoot });
+        }
+        // handleCommand already persists prefs (verbose, autopilot, reasoning) via setChannelPrefs
+        return;
+      }
+    }
+
+    // All other slash commands — defer to serialized path
     throw new Error('slash-command-while-busy');
   }
 
