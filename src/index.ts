@@ -9,7 +9,7 @@ import { StreamingHandler } from './channels/mattermost/streaming.js';
 import { getChannelPrefs, getAllChannelSessions, closeDb, listPermissionRulesForScope, removePermissionRule, clearPermissionRules } from './state/store.js';
 import { extractThreadRequest, resolveThreadRoot } from './core/thread-utils.js';
 import { initScheduler, stopAll as stopScheduler, listJobs, removeJob, pauseJob, resumeJob, formatInTimezone, describeCron } from './core/scheduler.js';
-import { markBusy, markIdle, isBusy, waitForChannelIdle } from './core/channel-idle.js';
+import { markBusy, markIdle, markIdleImmediate, isBusy, waitForChannelIdle, cancelIdleDebounce } from './core/channel-idle.js';
 import { getTaskHistory } from './state/store.js';
 import { createLogger } from './logger.js';
 import fs from 'node:fs';
@@ -333,7 +333,7 @@ async function main(): Promise<void> {
           await waitForChannelIdle(channelId);
         } catch (err: any) {
           log.error(`Scheduled job sendMessage failed for ${channelId.slice(0, 8)}...:`, err);
-          markIdle(channelId);
+          markIdleImmediate(channelId);
           const failedStream = activeStreams.get(channelId);
           if (failedStream) {
             const r = getAdapterForChannel(channelId);
@@ -585,7 +585,7 @@ async function handleInboundMessage(
 
     switch (cmdResult.action) {
       case 'new_session': {
-        markIdle(msg.channelId);
+        markIdleImmediate(msg.channelId);
         const oldStreamKey = activeStreams.get(msg.channelId);
         if (oldStreamKey) {
           await streaming.cancelStream(oldStreamKey);
@@ -597,7 +597,7 @@ async function handleInboundMessage(
         break;
       }
       case 'stop_session': {
-        markIdle(msg.channelId);
+        markIdleImmediate(msg.channelId);
         const stopStreamKey = activeStreams.get(msg.channelId);
         if (stopStreamKey) {
           await streaming.cancelStream(stopStreamKey);
@@ -938,7 +938,7 @@ async function handleInboundMessage(
     // doesn't start a new stream while this response is still being streamed.
     await waitForChannelIdle(msg.channelId);
   } catch (err) {
-    markIdle(msg.channelId);
+    markIdleImmediate(msg.channelId);
     log.error(`Error sending message for channel ${msg.channelId}:`, err);
     const streamKey = activeStreams.get(msg.channelId);
     if (streamKey) {
@@ -1061,6 +1061,9 @@ async function handleSessionEvent(
 
   switch (formatted.type) {
     case 'content': {
+      // Content arriving means session is still active — cancel any idle debounce
+      cancelIdleDebounce(channelId);
+      if (!isBusy(channelId)) markBusy(channelId);
       // When response content starts, finalize the activity feed
       if (activityFeeds.has(channelId)) {
         await finalizeActivityFeed(channelId, adapter);
@@ -1105,6 +1108,8 @@ async function handleSessionEvent(
       break;
     }
     case 'tool_start':
+      cancelIdleDebounce(channelId);
+      if (!isBusy(channelId)) markBusy(channelId);
       if (verbose && formatted.content && !nudgePending.has(channelId)) {
         await appendActivityFeed(channelId, formatted.content, adapter);
       }
@@ -1115,7 +1120,7 @@ async function handleSessionEvent(
       break;
 
     case 'error':
-      markIdle(channelId);
+      markIdleImmediate(channelId);
       nudgePending.delete(channelId);
       if (streamKey) {
         await streaming.cancelStream(streamKey, formatted.content);

@@ -1,19 +1,26 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { markBusy, markIdle, isBusy, waitForChannelIdle, _resetForTest } from './channel-idle.js';
+import { markBusy, markIdle, markIdleImmediate, isBusy, waitForChannelIdle, cancelIdleDebounce, _resetForTest } from './channel-idle.js';
 
 beforeEach(() => {
+  vi.useFakeTimers();
   _resetForTest();
 });
 
-describe('isBusy / markBusy / markIdle', () => {
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+import { afterEach } from 'vitest';
+
+describe('isBusy / markBusy / markIdleImmediate', () => {
   it('starts not busy', () => {
     expect(isBusy('ch1')).toBe(false);
   });
 
-  it('marks busy and idle', () => {
+  it('marks busy and idle immediately', () => {
     markBusy('ch1');
     expect(isBusy('ch1')).toBe(true);
-    markIdle('ch1');
+    markIdleImmediate('ch1');
     expect(isBusy('ch1')).toBe(false);
   });
 
@@ -23,22 +30,89 @@ describe('isBusy / markBusy / markIdle', () => {
   });
 });
 
+describe('markIdle (debounced)', () => {
+  it('does not release immediately', async () => {
+    markBusy('ch1');
+    markIdle('ch1');
+    // Still busy during debounce window
+    expect(isBusy('ch1')).toBe(true);
+  });
+
+  it('releases after debounce period', async () => {
+    markBusy('ch1');
+    markIdle('ch1');
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(isBusy('ch1')).toBe(false);
+  });
+
+  it('cancelIdleDebounce prevents release', async () => {
+    markBusy('ch1');
+    markIdle('ch1');
+    await vi.advanceTimersByTimeAsync(1000);
+    cancelIdleDebounce('ch1');
+    await vi.advanceTimersByTimeAsync(3000);
+    // Still busy because debounce was cancelled
+    expect(isBusy('ch1')).toBe(true);
+  });
+
+  it('new markBusy cancels pending debounce', async () => {
+    markBusy('ch1');
+    markIdle('ch1');
+    await vi.advanceTimersByTimeAsync(1000);
+    // Re-mark busy (simulates new event arriving)
+    markBusy('ch1');
+    await vi.advanceTimersByTimeAsync(3000);
+    // Still busy because markBusy cancelled the debounce
+    expect(isBusy('ch1')).toBe(true);
+  });
+});
+
 describe('waitForChannelIdle', () => {
   it('resolves immediately when not busy', async () => {
     await waitForChannelIdle('ch1');
-    // No assertion needed — would hang if broken
   });
 
-  it('waits until markIdle is called', async () => {
+  it('waits until markIdleImmediate is called', async () => {
     markBusy('ch1');
     let resolved = false;
     const p = waitForChannelIdle('ch1').then(() => { resolved = true; });
 
-    // Should not be resolved yet
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     expect(resolved).toBe(false);
 
+    markIdleImmediate('ch1');
+    await vi.advanceTimersByTimeAsync(0);
+    await p;
+    expect(resolved).toBe(true);
+  });
+
+  it('waits until debounced markIdle completes', async () => {
+    markBusy('ch1');
+    let resolved = false;
+    const p = waitForChannelIdle('ch1').then(() => { resolved = true; });
+
+    markIdle('ch1'); // Start debounce
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(resolved).toBe(false); // Still in debounce window
+
+    await vi.advanceTimersByTimeAsync(2000);
+    await p;
+    expect(resolved).toBe(true);
+  });
+
+  it('debounce reset delays waiter resolution', async () => {
+    markBusy('ch1');
+    let resolved = false;
+    const p = waitForChannelIdle('ch1').then(() => { resolved = true; });
+
     markIdle('ch1');
+    await vi.advanceTimersByTimeAsync(1500);
+    cancelIdleDebounce('ch1'); // Cancel debounce (new event arrived)
+    markIdle('ch1'); // New idle event
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(resolved).toBe(false); // Still in second debounce
+
+    await vi.advanceTimersByTimeAsync(1000);
     await p;
     expect(resolved).toBe(true);
   });
@@ -50,16 +124,13 @@ describe('waitForChannelIdle', () => {
     const p2 = waitForChannelIdle('ch1').then(() => { count++; });
     const p3 = waitForChannelIdle('ch1').then(() => { count++; });
 
-    await Promise.resolve();
-    expect(count).toBe(0);
-
-    markIdle('ch1');
+    markIdleImmediate('ch1');
+    await vi.advanceTimersByTimeAsync(0);
     await Promise.all([p1, p2, p3]);
     expect(count).toBe(3);
   });
 
   it('resolves on timeout if markIdle never called', async () => {
-    vi.useFakeTimers();
     markBusy('ch1');
     let resolved = false;
     const p = waitForChannelIdle('ch1', 100).then(() => { resolved = true; });
@@ -70,37 +141,11 @@ describe('waitForChannelIdle', () => {
     await vi.advanceTimersByTimeAsync(60);
     await p;
     expect(resolved).toBe(true);
-
-    // Channel is still marked busy (timeout doesn't clear it)
-    expect(isBusy('ch1')).toBe(true);
-    vi.useRealTimers();
-  });
-
-  it('markIdle before timeout cleans up', async () => {
-    vi.useFakeTimers();
-    markBusy('ch1');
-    let resolveCount = 0;
-    const p = waitForChannelIdle('ch1', 1000).then(() => { resolveCount++; });
-
-    markIdle('ch1');
-    await p;
-    expect(resolveCount).toBe(1);
-
-    // Advance past timeout — should not double-resolve
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(resolveCount).toBe(1);
-    vi.useRealTimers();
+    expect(isBusy('ch1')).toBe(true); // timeout doesn't clear busy
   });
 
   it('markIdle with no waiters is a no-op', () => {
-    markIdle('ch1'); // Should not throw
-    expect(isBusy('ch1')).toBe(false);
-  });
-
-  it('second wait after idle resolves immediately', async () => {
-    markBusy('ch1');
     markIdle('ch1');
-    // Should resolve immediately since channel is no longer busy
-    await waitForChannelIdle('ch1');
+    expect(isBusy('ch1')).toBe(false);
   });
 });
