@@ -63,6 +63,7 @@ export function waitForChannelIdle(channelId: string, timeoutMs = DEFAULT_TIMEOU
   return new Promise<void>((resolve) => {
     const waiters = idleWaiters.get(channelId) ?? [];
     const timer = setTimeout(() => {
+      log.warn(`Channel ${channelId.slice(0, 8)}... idle waiter timed out after ${timeoutMs}ms`);
       resolve();
       const remaining = idleWaiters.get(channelId);
       if (remaining) {
@@ -96,6 +97,7 @@ function releaseChannel(channelId: string): void {
  * Call this on session.idle events.
  */
 export function markIdle(channelId: string): void {
+  if (!busyChannels.has(channelId)) return;
   cancelIdleDebounce(channelId);
   const timer = setTimeout(() => {
     idleDebounceTimers.delete(channelId);

@@ -1,6 +1,6 @@
 import { loadConfig, getConfig, isConfiguredChannel, registerDynamicChannel, markChannelAsDM, getChannelConfig, getPlatformBots, getChannelBotName, isBotAdmin, getHardcodedRules, getConfigRules, reloadConfig, ConfigWatcher } from './config.js';
 import { CopilotBridge } from './core/bridge.js';
-import { SessionManager } from './core/session-manager.js';
+import { SessionManager, BRIDGE_CUSTOM_TOOLS } from './core/session-manager.js';
 import { handleCommand, parseCommand } from './core/command-handler.js';
 import { formatEvent, formatPermissionRequest, formatUserInputRequest } from './core/stream-formatter.js';
 import { WorkspaceWatcher, initWorkspace, getWorkspacePath } from './core/workspace-manager.js';
@@ -426,7 +426,7 @@ async function handleMidTurnMessage(
   // Pending user input — resolve directly (bypasses channelLock to avoid deadlock
   // since the lock is held by waitForChannelIdle which needs this to resolve first)
   if (sessionManager.hasPendingUserInput(msg.channelId)) {
-    sessionManager.resolveUserInput(msg.channelId, text.startsWith('/') ? text.slice(1) : text);
+    sessionManager.resolveUserInput(msg.channelId, text);
     return;
   }
 
@@ -871,9 +871,8 @@ async function handleInboundMessage(
           lines.push('');
         }
 
-        const customTools = ['send_file', 'show_file_in_chat', 'ask_agent', 'schedule'];
         lines.push('**Copilot Bridge Tools**');
-        for (const t of customTools) lines.push(`• \`${t}\``);
+        for (const t of BRIDGE_CUSTOM_TOOLS) lines.push(`• \`${t}\``);
 
         if (skills.length === 0 && mcpInfo.length === 0) {
           lines.push('', '_No skills or MCP servers configured. Add skills to `~/.copilot/skills/` or MCP servers to `~/.copilot/mcp-config.json`._');

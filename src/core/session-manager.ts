@@ -29,7 +29,7 @@ import type {
 const log = createLogger('session');
 
 /** Custom tools auto-approved without interactive prompt (they enforce workspace boundaries internally). */
-const AUTO_APPROVED_CUSTOM_TOOLS = ['send_file', 'show_file_in_chat', 'ask_agent', 'schedule'];
+export const BRIDGE_CUSTOM_TOOLS = ['send_file', 'show_file_in_chat', 'ask_agent', 'schedule'];
 
 type SessionEventHandler = (sessionId: string, channelId: string, event: any) => void;
 
@@ -399,7 +399,7 @@ export class SessionManager {
       else if (normalized.includes('.github/skills')) source = 'workspace';
       else if (normalized.includes('.agents/skills')) source = 'workspace';
 
-      // Try to read description from SKILL.md frontmatter
+      // Try to read description from SKILL.md (matches first description: line)
       if (fs.existsSync(skillFile)) {
         try {
           const content = fs.readFileSync(skillFile, 'utf8');
@@ -1068,7 +1068,7 @@ export class SessionManager {
       // 3. Auto-approve bridge custom tools
       if (reqKind === 'custom-tool') {
         const reqToolName = (request as any).toolName;
-        if (AUTO_APPROVED_CUSTOM_TOOLS.includes(reqToolName)) {
+        if (BRIDGE_CUSTOM_TOOLS.includes(reqToolName)) {
           return { kind: 'approved' };
         }
       }
@@ -1735,7 +1735,7 @@ export class SessionManager {
     // Auto-approve bridge custom tools (they enforce their own workspace boundaries)
     if (reqKind === 'custom-tool') {
       const reqToolName = (request as any).toolName;
-      if (AUTO_APPROVED_CUSTOM_TOOLS.includes(reqToolName)) {
+      if (BRIDGE_CUSTOM_TOOLS.includes(reqToolName)) {
         return Promise.resolve({ kind: 'approved' });
       }
     }

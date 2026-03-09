@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { markBusy, markIdle, markIdleImmediate, isBusy, waitForChannelIdle, cancelIdleDebounce, _resetForTest } from './channel-idle.js';
 
 beforeEach(() => {
@@ -9,8 +9,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
 });
-
-import { afterEach } from 'vitest';
 
 describe('isBusy / markBusy / markIdleImmediate', () => {
   it('starts not busy', () => {
