@@ -11,7 +11,7 @@ import * as path from 'node:path';
 
 describe('config-gen', () => {
   describe('buildConfig', () => {
-    it('generates single-bot config with botToken', () => {
+    it('generates single-bot config with named bots object', () => {
       const bots: BotEntry[] = [{ name: 'copilot', token: 'tok123', admin: true }];
       const channels: ChannelEntry[] = [{
         id: 'ch1',
@@ -27,13 +27,13 @@ describe('config-gen', () => {
         channels,
       });
 
-      expect(config.platforms.mattermost.botToken).toBe('tok123');
-      expect(config.platforms.mattermost.bots).toBeUndefined();
+      expect(config.platforms.mattermost.bots).toBeDefined();
+      expect(config.platforms.mattermost.bots!['copilot'].token).toBe('tok123');
+      expect(config.platforms.mattermost.bots!['copilot'].admin).toBe(true);
       expect(config.channels).toHaveLength(1);
       expect(config.channels[0].id).toBe('ch1');
+      expect(config.channels[0].bot).toBe('copilot');
       expect(config.channels[0].workingDirectory).toBe('/tmp/project');
-      // Single bot — no bot field on channel
-      expect(config.channels[0].bot).toBeUndefined();
     });
 
     it('generates multi-bot config with bots object', () => {
@@ -50,7 +50,7 @@ describe('config-gen', () => {
 
       const config = buildConfig({ mmUrl: 'https://mm.test', bots, channels });
 
-      expect(config.platforms.mattermost.botToken).toBeUndefined();
+      expect(config.platforms.mattermost.bots).toBeDefined();
       expect(config.platforms.mattermost.bots).toBeDefined();
       expect(config.platforms.mattermost.bots!['copilot'].token).toBe('tok1');
       expect(config.platforms.mattermost.bots!['copilot'].admin).toBe(true);

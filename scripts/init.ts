@@ -13,7 +13,7 @@ import { askRequired, askSecret, confirm, choose, closePrompts } from './lib/pro
 import { runAllPrereqs, checkNodeVersion } from './lib/prerequisites.js';
 import { pingServer, validateBotToken, checkChannelAccess, getChannelInfo } from './lib/mattermost.js';
 import { buildConfig, writeConfig, configExists, getConfigPath, getConfigDir, type BotEntry, type ChannelEntry, type ConfigDefaults } from './lib/config-gen.js';
-import { detectPlatform } from './lib/service.js';
+import { detectPlatform, getServiceStatus } from './lib/service.js';
 
 async function main() {
   const isCli = process.env.COPILOT_BRIDGE_CLI === '1';
@@ -240,19 +240,42 @@ async function main() {
   info('DMs: enabled automatically');
   blank();
 
-  dim('Next steps:');
-  if (isCli) {
-    dim('  copilot-bridge check            Validate your setup');
-    dim('  copilot-bridge start            Start the bridge');
-    dim('  copilot-bridge install-service  Install as a system service');
+  // Detect running service and suggest restart
+  const serviceStatus = getServiceStatus();
+  if (serviceStatus.running) {
+    warn('The bridge service is currently running. Restart it to apply the new config:');
+    const osPlatformDone = detectPlatform();
+    if (osPlatformDone === 'macos') {
+      dim('  launchctl kickstart -k gui/$(id -u)/com.copilot-bridge');
+    } else if (osPlatformDone === 'linux') {
+      dim('  sudo systemctl restart copilot-bridge');
+    }
+    blank();
+  } else if (serviceStatus.detail !== 'unsupported platform' && !serviceStatus.detail.includes('not installed') && !serviceStatus.detail.includes('not loaded')) {
+    // Service is installed but not running
+    info('The bridge service is installed but not running. Start it with:');
+    const osPlatformDone = detectPlatform();
+    if (osPlatformDone === 'macos') {
+      dim('  launchctl kickstart gui/$(id -u)/com.copilot-bridge');
+    } else if (osPlatformDone === 'linux') {
+      dim('  sudo systemctl start copilot-bridge');
+    }
+    blank();
   } else {
-    dim('  npm run dev              Start in development mode (watch)');
-    dim('  npm run check            Validate your setup');
-    dim('  npm run install-service  Install as a system service');
-    dim('  npm run build            Build for production');
-    dim('  npm start                Start production server');
+    dim('Next steps:');
+    if (isCli) {
+      dim('  copilot-bridge check            Validate your setup');
+      dim('  copilot-bridge start            Start the bridge');
+      dim('  copilot-bridge install-service  Install as a system service');
+    } else {
+      dim('  npm run dev              Start in development mode (watch)');
+      dim('  npm run check            Validate your setup');
+      dim('  npm run install-service  Install as a system service');
+      dim('  npm run build            Build for production');
+      dim('  npm start                Start production server');
+    }
+    blank();
   }
-  blank();
 
   closePrompts();
 }

@@ -33,7 +33,6 @@ export interface GeneratedConfig {
   platforms: {
     mattermost: {
       url: string;
-      botToken?: string;
       bots?: Record<string, { token: string; admin?: boolean; agent?: string }>;
     };
   };
@@ -62,10 +61,8 @@ export function buildConfig(opts: {
     channels: [],
   };
 
-  // Single bot → botToken; multiple → bots object
-  if (opts.bots.length === 1) {
-    config.platforms.mattermost.botToken = opts.bots[0].token;
-  } else if (opts.bots.length > 1) {
+  // Always use named bots object (clearer schema, supports admin flag and multi-bot)
+  if (opts.bots.length > 0) {
     config.platforms.mattermost.bots = {};
     for (const bot of opts.bots) {
       config.platforms.mattermost.bots[bot.name] = {
@@ -81,7 +78,7 @@ export function buildConfig(opts: {
       id: ch.id,
       ...(ch.name ? { name: ch.name } : {}),
       platform: ch.platform,
-      ...(opts.bots.length > 1 ? { bot: ch.bot } : {}),
+      bot: ch.bot,
       workingDirectory: ch.workingDirectory,
     });
   }
