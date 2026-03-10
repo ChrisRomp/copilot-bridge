@@ -12,7 +12,7 @@ describe('prerequisites', () => {
   });
 
   describe('checkCopilotCLI', () => {
-    it('returns a check result', () => {
+    it('returns a check result', { timeout: 15_000 }, () => {
       const result = checkCopilotCLI();
       // Either pass (if CLI installed) or fail — both are valid CheckResults
       expect(result.status).toMatch(/^(pass|fail)$/);

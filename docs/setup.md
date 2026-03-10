@@ -92,7 +92,9 @@ cp config.sample.json ~/.copilot-bridge/config.json
   "platforms": {
     "mattermost": {
       "url": "https://chat.example.com",
-      "botToken": "YOUR_BOT_TOKEN"
+      "bots": {
+        "copilot": { "token": "YOUR_BOT_TOKEN" }
+      }
     }
   },
   "channels": []

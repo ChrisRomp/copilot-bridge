@@ -929,7 +929,7 @@ export class SessionManager {
       this.eventHandler?.(session.sessionId, channelId, {
         type: 'assistant.message',
         data: {
-          message: `⚠️ Model \`${prefs.model}\` is unavailable. Switched to \`${usedModel}\`.`,
+          content: `⚠️ Model \`${prefs.model}\` is unavailable. Switched to \`${usedModel}\`.`,
         },
       });
     }

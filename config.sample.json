@@ -2,15 +2,8 @@
   "platforms": {
     "mattermost": {
       "url": "https://chat.example.com",
-
-      "_comment_auth": "Use ONE of: 'botToken' (single bot) OR 'bots' (multiple identities)",
-
-      "botToken": "SINGLE_BOT_TOKEN",
-
-      "_comment_bots": "Multi-bot example (remove 'botToken' above and rename '_bots' to 'bots'):",
-      "_bots": {
-        "copilot": { "token": "BOT_TOKEN_1", "admin": true },
-        "bob": { "token": "BOT_TOKEN_2", "agent": "bob-agent" }
+      "bots": {
+        "copilot": { "token": "YOUR_BOT_TOKEN", "admin": true }
       }
     }
   },
@@ -26,21 +19,11 @@
       "triggerMode": "mention",
       "threadedReplies": true,
       "verbose": false
-    },
-    {
-      "id": "another-channel-id",
-      "platform": "mattermost",
-      "bot": "bob",
-      "name": "Bob's Channel",
-      "workingDirectory": "/path/to/other-project",
-      "model": "claude-sonnet-4.6",
-      "triggerMode": "mention",
-      "threadedReplies": true,
-      "verbose": false
     }
   ],
   "defaults": {
     "model": "claude-sonnet-4.6",
+    "fallbackModels": [],
     "agent": null,
     "triggerMode": "mention",
     "threadedReplies": true,

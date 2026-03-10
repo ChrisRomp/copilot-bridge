@@ -44,6 +44,7 @@ Both inbound messages and session events are serialized per-channel via separate
 - Sessions are created on first message per channel, persisted in SQLite (`channel_sessions` table)
 - On restart, sessions resume via `CopilotBridge.resumeSession()` using the stored session ID
 - `/new` destroys the current session and creates a fresh one
+- `/resume` accepts partial session ID prefixes (case-insensitive); reports ambiguity if multiple match
 - MCP servers and skill directories are loaded once at startup and passed to every session
 
 ### Stream Lifecycle
@@ -51,7 +52,9 @@ Both inbound messages and session events are serialized per-channel via separate
 - `StreamingHandler` manages edit-in-place messages with throttled updates (500ms)
 - One "Working..." stream is created per user message; it persists across tool cycles
 - Streams finalize only on `session.idle` (not `turn_end`, which fires between every tool cycle)
+- Thinking/reasoning events (`assistant.reasoning`, `assistant.reasoning_delta`) are suppressed from the stream to prevent message churn
 - In verbose mode, tool calls accumulate in a separate "activity feed" message that updates in place
+- Verbose mode preserves "Working..." messages by updating in place instead of deleting and recreating
 
 ## Bot Identity & Pronouns
 
@@ -66,6 +69,24 @@ New platforms implement `ChannelAdapter` (in `src/types.ts`). The Mattermost ada
 ### Permission Handling
 
 Permission flow: config rules → SQLite stored rules (from `/remember`) → interactive prompt. MCP permissions are stored at server level (`mcp:serverName` → `*`), not per individual tool. The `PendingPermission` type carries a `serverName` field for MCP tools.
+
+If the user sends unrecognized text during a permission prompt (not `/approve`, `/deny`, etc.), the permission is **auto-denied** and the text is processed as a normal message. This prevents lost messages when users ignore a permission prompt.
+
+### Model Fallback
+
+When a model returns a capacity, rate limit, or availability error, `model-fallback.ts` automatically tries alternative models:
+
+1. `parseModelId()` extracts provider/family/version from model IDs
+2. `STATIC_FALLBACK_MAP` defines explicit chains for known models (e.g., opus 4.6 → opus 4.5 → sonnet 4.6)
+3. `buildFallbackChain()` merges config overrides (`fallbackModels`) with auto-detected chains, filtered against available models (when `listModels()` fails and the available list is empty, config fallbacks are included unfiltered so the user's explicit preferences still apply)
+4. `tryWithFallback()` wraps session creation; on model error, tries each fallback in order
+5. `sendMessage()` in session-manager.ts has its own fallback loop for send-time failures
+
+The working model is saved to channel prefs and a ⚠️ notification is emitted as a synthetic `assistant.message` event with `data.content`.
+
+### Loop Detection
+
+`LoopDetector` (`src/core/loop-detector.ts`) tracks tool calls per channel. When the same tool is called with identical arguments 5+ times within 60 seconds, it warns the user. At 10+ repetitions, it forces a new session. History is reset on `/new` and session changes.
 
 ### Slash Commands
 
