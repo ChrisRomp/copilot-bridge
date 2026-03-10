@@ -10,6 +10,7 @@ import { getChannelPrefs, getAllChannelSessions, closeDb, listPermissionRulesFor
 import { extractThreadRequest, resolveThreadRoot } from './core/thread-utils.js';
 import { initScheduler, stopAll as stopScheduler, listJobs, removeJob, pauseJob, resumeJob, formatInTimezone, describeCron } from './core/scheduler.js';
 import { markBusy, markIdle, markIdleImmediate, isBusy, waitForChannelIdle, cancelIdleDebounce } from './core/channel-idle.js';
+import { LoopDetector } from './core/loop-detector.js';
 import { getTaskHistory } from './state/store.js';
 import { createLogger } from './logger.js';
 import fs from 'node:fs';
@@ -45,6 +46,8 @@ const nudgePending = new Set<string>();
 const botAdapters = new Map<string, ChannelAdapter>();
 const botStreamers = new Map<string, StreamingHandler>();
 
+// Per-channel tool call loop detection
+const loopDetector = new LoopDetector();
 /** Format a date as a relative age string (e.g., "2h ago", "3d ago"). */
 function formatAge(date: Date): string {
   const ms = Date.now() - new Date(date).getTime();
@@ -208,7 +211,7 @@ async function main(): Promise<void> {
   sessionManager.onSessionEvent((sessionId, channelId, event) => {
     const prev = eventLocks.get(channelId) ?? Promise.resolve();
     const next = prev.then(() =>
-      handleSessionEvent(channelId, event)
+      handleSessionEvent(channelId, event, sessionManager)
         .catch(err => log.error(`Unhandled error in event handler:`, err))
     );
     eventLocks.set(channelId, next);
@@ -488,6 +491,7 @@ async function handleMidTurnMessage(
         activeStreams.delete(msg.channelId);
       }
       await finalizeActivityFeed(msg.channelId, adapter);
+      loopDetector.reset(msg.channelId);
       await sessionManager.newSession(msg.channelId);
       markIdleImmediate(msg.channelId);
       await adapter.sendMessage(msg.channelId, '✅ New session created.', { threadRootId: threadRoot });
@@ -687,6 +691,7 @@ async function handleInboundMessage(
           activeStreams.delete(msg.channelId);
         }
         await finalizeActivityFeed(msg.channelId, adapter);
+        loopDetector.reset(msg.channelId);
         await sessionManager.newSession(msg.channelId);
         await adapter.sendMessage(msg.channelId, '✅ New session created.', { threadRootId: threadRoot });
         break;
@@ -1104,6 +1109,7 @@ async function handleReaction(
 async function handleSessionEvent(
   channelId: string,
   event: any,
+  sessionManager: SessionManager,
 ): Promise<void> {
   if (event.type === 'session.error' || event.type?.includes('error')) {
     log.error(`SDK error event: ${JSON.stringify(event).slice(0, 1000)}`);
@@ -1230,6 +1236,39 @@ async function handleSessionEvent(
     case 'tool_start':
       cancelIdleDebounce(channelId);
       if (!isBusy(channelId)) markBusy(channelId);
+
+      // --- Loop detection ---
+      if (event.type === 'tool.execution_start') {
+        const toolName = event.data?.toolName ?? event.data?.name ?? 'unknown';
+        const args = event.data?.arguments ?? {};
+        const loop = loopDetector.recordToolCall(channelId, toolName, args);
+
+        if (loop.isCritical) {
+          // Critical loop — warn and force a new session
+          await adapter.sendMessage(
+            channelId,
+            `🛑 **Loop detected**: \`${toolName}\` called ${loop.count} times with the same arguments. Resetting session.`,
+          );
+          const oldStreamKey = activeStreams.get(channelId);
+          if (oldStreamKey) {
+            await streaming.cancelStream(oldStreamKey);
+            activeStreams.delete(channelId);
+          }
+          await finalizeActivityFeed(channelId, adapter);
+          loopDetector.reset(channelId);
+          markIdleImmediate(channelId);
+          await sessionManager.newSession(channelId);
+          break;
+        } else if (loop.isLoop) {
+          // First warning — notify the user but let the session continue
+          await adapter.sendMessage(
+            channelId,
+            `⚠️ **Possible loop**: \`${toolName}\` called ${loop.count} times with the same arguments. ` +
+            `Will reset session if it continues.`,
+          );
+        }
+      }
+
       if (verbose && formatted.content && !nudgePending.has(channelId)) {
         await appendActivityFeed(channelId, formatted.content, adapter);
       }
