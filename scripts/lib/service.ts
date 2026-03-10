@@ -47,7 +47,8 @@ export interface LaunchdConfig {
 }
 
 export function generateLaunchdPlist(config: LaunchdConfig): string {
-  const npxPath = path.join(path.dirname(getNodePath()), 'npx');
+  const nodePath = getNodePath();
+  const tsxPath = path.join(config.bridgePath, 'node_modules', '.bin', 'tsx');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -57,8 +58,8 @@ export function generateLaunchdPlist(config: LaunchdConfig): string {
 
     <key>ProgramArguments</key>
     <array>
-        <string>${npxPath}</string>
-        <string>tsx</string>
+        <string>${nodePath}</string>
+        <string>${tsxPath}</string>
         <string>dist/index.js</string>
     </array>
 
@@ -119,7 +120,8 @@ export interface SystemdConfig {
 }
 
 export function generateSystemdUnit(config: SystemdConfig): string {
-  const npxPath = path.join(path.dirname(getNodePath()), 'npx');
+  const nodePath = getNodePath();
+  const tsxPath = path.join(config.bridgePath, 'node_modules', '.bin', 'tsx');
   return `[Unit]
 Description=Copilot Bridge
 After=network.target
@@ -127,7 +129,7 @@ After=network.target
 [Service]
 Type=simple
 User=${config.user}
-ExecStart=${npxPath} tsx ${config.bridgePath}/dist/index.js
+ExecStart=${nodePath} ${tsxPath} ${config.bridgePath}/dist/index.js
 WorkingDirectory=${config.bridgePath}
 Environment=HOME=${config.homePath}
 Environment=PATH=${getSystemPath()}

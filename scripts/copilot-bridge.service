@@ -19,7 +19,7 @@ After=network.target
 [Service]
 Type=simple
 User=username
-ExecStart=/usr/local/bin/npx tsx dist/index.js
+ExecStart=/usr/local/bin/node /path/to/copilot-bridge/node_modules/.bin/tsx dist/index.js
 WorkingDirectory=/path/to/copilot-bridge
 Environment=HOME=/home/username
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
