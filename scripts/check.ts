@@ -16,6 +16,7 @@ import { getConfigPath, getConfigDir } from './lib/config-gen.js';
 import { detectPlatform, getServiceStatus } from './lib/service.js';
 
 async function main() {
+  const isCli = process.env.COPILOT_BRIDGE_CLI === '1';
   console.log();
   heading('🔍 copilot-bridge check');
   dim('Validating your installation...\n');
@@ -38,7 +39,7 @@ async function main() {
     const result: CheckResult = { status: 'fail', label: 'Config file', detail: `not found at ${configPath}` };
     printCheck(result);
     results.push(result);
-    info(process.env.COPILOT_BRIDGE_CLI === '1'
+    info(isCli
       ? 'Run "copilot-bridge init" to create a config file.'
       : 'Run "npm run init" to create a config file.');
     printSummary(results);
@@ -227,7 +228,6 @@ async function main() {
     printCheck(result);
     results.push(result);
   } else {
-    const isCli = process.env.COPILOT_BRIDGE_CLI === '1';
     const platform = detectPlatform();
     const serviceHint = platform === 'macos'
       ? `install with: ${isCli ? 'copilot-bridge install-service' : 'npm run install-service'}`

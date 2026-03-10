@@ -16,6 +16,7 @@ import { buildConfig, writeConfig, configExists, getConfigPath, getConfigDir, ty
 import { detectPlatform } from './lib/service.js';
 
 async function main() {
+  const isCli = process.env.COPILOT_BRIDGE_CLI === '1';
   console.log();
   heading('🚀 copilot-bridge setup');
   dim('Interactive wizard to configure copilot-bridge.\n');
@@ -50,7 +51,9 @@ async function main() {
     blank();
     warn(`Existing config found at ${getConfigPath()}`);
     if (!await confirm('Overwrite with a new config?', false)) {
-      info('Run "npm run check" to validate your existing config.');
+      info(isCli
+        ? 'Run "copilot-bridge check" to validate your existing config.'
+        : 'Run "npm run check" to validate your existing config.');
       closePrompts();
       process.exit(0);
     }
@@ -103,7 +106,9 @@ async function main() {
       });
       success(`Added bot "${validation.bot.username}"${isAdmin ? ' (admin)' : ''}`);
     } else {
-      warn('Token validation failed. The token was still added — verify it later with "npm run check".');
+      warn(isCli
+        ? 'Token validation failed. The token was still added — verify it later with "copilot-bridge check".'
+        : 'Token validation failed. The token was still added — verify it later with "npm run check".');
       let name = await askRequired('Bot username (for config)');
       name = name.replace(/^@/, '');
       bots.push({ name, token, admin: false });
@@ -214,14 +219,16 @@ async function main() {
   const osPlatform = detectPlatform();
   if (osPlatform === 'macos') {
     info('To run as a launchd service (auto-start at login):');
-    dim('  npm run install-service\n');
+    dim(isCli ? '  copilot-bridge install-service\n' : '  npm run install-service\n');
   } else if (osPlatform === 'linux') {
     info('To run as a systemd service (auto-start at boot):');
-    dim('  npm run install-service');
+    dim(isCli ? '  copilot-bridge install-service' : '  npm run install-service');
     dim('  (requires sudo — installs to /etc/systemd/system/)\n');
-    dim('  Note: build first with npm run build\n');
+    if (!isCli) dim('  Note: build first with npm run build\n');
   } else {
-    info('Run the bridge manually: npm run dev (development) or npm start (production)');
+    info(isCli
+      ? 'Run the bridge manually: copilot-bridge start'
+      : 'Run the bridge manually: npm run dev (development) or npm start (production)');
   }
 
   // --- Done ---
@@ -233,8 +240,6 @@ async function main() {
   info('DMs: enabled automatically');
   blank();
 
-  // Detect if running via the copilot-bridge CLI (global install)
-  const isCli = process.env.COPILOT_BRIDGE_CLI === '1';
   dim('Next steps:');
   if (isCli) {
     dim('  copilot-bridge check            Validate your setup');
