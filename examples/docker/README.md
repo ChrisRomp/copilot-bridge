@@ -21,12 +21,12 @@ cp .env.example .env
 docker compose up -d
 
 # 3. Set up Mattermost
-# Open http://localhost:8065, create an admin account,
+# Open http://localhost:${MATTERMOST_PORT:-8065}, create an admin account,
 # then create a bot: System Console → Integrations → Bot Accounts
 
 # 4. Configure copilot-bridge
 copilot-bridge init
-# Enter http://localhost:8065 as the Mattermost URL
+# Enter http://localhost:${MATTERMOST_PORT:-8065} as the Mattermost URL
 ```
 
 ## With Cloudflare Tunnel
@@ -52,5 +52,6 @@ All data is stored in Docker named volumes:
 - `mattermost-data` — uploaded files
 - `mattermost-logs` — server logs
 - `mattermost-plugins` — installed plugins
+- `mattermost-client-plugins` — client plugins
 
 To back up, use `docker compose down` then back up the volumes. To reset everything: `docker compose down -v`.

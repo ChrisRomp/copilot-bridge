@@ -8,7 +8,7 @@
 # Usage:
 #   1. Copy .env.example to .env and fill in your values
 #   2. docker compose up -d
-#   3. Open http://localhost:8065 (or your tunnel URL) to create an admin account
+#   3. Open http://localhost:${MATTERMOST_PORT} (or your tunnel URL) to create an admin account
 #   4. Create a bot account in System Console → Integrations → Bot Accounts
 #   5. Configure copilot-bridge with the bot token
 #
@@ -32,7 +32,7 @@ services:
       retries: 5
 
   mattermost:
-    image: mattermost/mattermost-enterprise-edition:${MATTERMOST_IMAGE_TAG:-release-11.4}
+    image: mattermost/mattermost-team-edition:${MATTERMOST_IMAGE_TAG:-release-11.4}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -41,6 +41,8 @@ services:
       # Database
       MM_SQLSETTINGS_DRIVERNAME: postgres
       MM_SQLSETTINGS_DATASOURCE: postgres://${POSTGRES_USER:-mmuser}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mattermost}?sslmode=disable&connect_timeout=10
+      # Note: if your password contains URL-special characters (@, :, /, #, etc.)
+      # you must percent-encode them in .env (e.g., p@ss → p%40ss).
 
       # Site URL — set to your tunnel domain or localhost
       MM_SERVICESETTINGS_SITEURL: ${MM_SITEURL:-http://localhost:8065}
@@ -69,7 +71,7 @@ services:
   # Remove this service if you don't need external access.
   # Set up a tunnel at https://one.dash.cloudflare.com → Networks → Tunnels
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:${CLOUDFLARED_IMAGE_TAG:-2025.4.1}
     restart: unless-stopped
     depends_on:
       - mattermost
