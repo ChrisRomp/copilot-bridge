@@ -92,3 +92,81 @@ describe('busyChannels state logic', () => {
     expect(busyChannels.has('ch-1')).toBe(false);
   });
 });
+
+/**
+ * Simulates the permission-check logic in handleMidTurnMessage (index.ts).
+ * Returns { action, text? } describing what should happen next.
+ */
+function handlePermissionDuringMidTurn(
+  hasPending: boolean,
+  text: string,
+  resolvePermission: (allow: boolean, remember?: boolean) => void,
+): { action: 'approve' | 'deny' | 'remember' | 'deny-and-continue'; text?: string } | null {
+  if (!hasPending) return null;
+  const lower = text.toLowerCase();
+  if (lower === '/approve' || lower === 'yes' || lower === 'y' || lower === 'approve') {
+    resolvePermission(true);
+    return { action: 'approve' };
+  }
+  if (lower === '/deny' || lower === 'no' || lower === 'n' || lower === 'deny') {
+    resolvePermission(false);
+    return { action: 'deny' };
+  }
+  if (lower === '/remember') {
+    resolvePermission(true, true);
+    return { action: 'remember' };
+  }
+  // Unrecognized text — auto-deny and fall through
+  resolvePermission(false);
+  return { action: 'deny-and-continue', text };
+}
+
+describe('permission handling during mid-turn', () => {
+  it('approves on /approve, yes, y, approve', () => {
+    for (const input of ['/approve', 'yes', 'y', 'approve', 'Yes', 'APPROVE']) {
+      const resolve = vi.fn();
+      const result = handlePermissionDuringMidTurn(true, input, resolve);
+      expect(result?.action).toBe('approve');
+      expect(resolve).toHaveBeenCalledWith(true);
+    }
+  });
+
+  it('denies on /deny, no, n, deny', () => {
+    for (const input of ['/deny', 'no', 'n', 'deny', 'No', 'DENY']) {
+      const resolve = vi.fn();
+      const result = handlePermissionDuringMidTurn(true, input, resolve);
+      expect(result?.action).toBe('deny');
+      expect(resolve).toHaveBeenCalledWith(false);
+    }
+  });
+
+  it('remembers on /remember', () => {
+    const resolve = vi.fn();
+    const result = handlePermissionDuringMidTurn(true, '/remember', resolve);
+    expect(result?.action).toBe('remember');
+    expect(resolve).toHaveBeenCalledWith(true, true);
+  });
+
+  it('auto-denies on unrecognized text and signals continue', () => {
+    const resolve = vi.fn();
+    const result = handlePermissionDuringMidTurn(true, 'actually use JWT instead', resolve);
+    expect(result?.action).toBe('deny-and-continue');
+    expect(result?.text).toBe('actually use JWT instead');
+    expect(resolve).toHaveBeenCalledWith(false);
+  });
+
+  it('auto-denies on slash commands and signals continue', () => {
+    const resolve = vi.fn();
+    const result = handlePermissionDuringMidTurn(true, '/new', resolve);
+    expect(result?.action).toBe('deny-and-continue');
+    expect(result?.text).toBe('/new');
+    expect(resolve).toHaveBeenCalledWith(false);
+  });
+
+  it('returns null when no permission is pending', () => {
+    const resolve = vi.fn();
+    const result = handlePermissionDuringMidTurn(false, 'hello', resolve);
+    expect(result).toBeNull();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+});

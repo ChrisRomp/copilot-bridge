@@ -447,9 +447,9 @@ async function handleMidTurnMessage(
       sessionManager.resolvePermission(msg.channelId, true, true);
       return;
     }
-    // Other slash commands and unrecognized text while permission pending — ignore.
-    // They can't be queued on channelLocks (deadlock) and the permission must be resolved first.
-    return;
+    // Unrecognized text or slash commands — auto-deny the permission and
+    // fall through to process the message normally (mid-turn steering or command).
+    sessionManager.resolvePermission(msg.channelId, false);
   }
 
   // Slash commands while busy: handle safe ones immediately, defer the rest
@@ -998,6 +998,8 @@ async function handleInboundMessage(
       sessionManager.resolvePermission(msg.channelId, false);
       return;
     }
+    // Unrecognized text — auto-deny and fall through to process as a normal message
+    sessionManager.resolvePermission(msg.channelId, false);
   }
 
   // Regular message — forward to Copilot session
