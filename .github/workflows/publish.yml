@@ -3,8 +3,13 @@ name: Publish to npm
 on:
   release:
     types: [published]
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish_dev:
+        description: 'Publish a dev build to npm (tagged "dev")'
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -42,9 +47,9 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ""
 
-  # Publish to `dev` tag on every push to main
+  # Publish to `dev` tag on manual dispatch
   publish-dev:
-    if: github.event_name == 'push'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     steps:
