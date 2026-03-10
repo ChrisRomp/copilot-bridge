@@ -3,12 +3,17 @@ name: Publish to npm
 on:
   release:
     types: [published]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
+  # Publish to `latest` tag on GitHub Release
   publish:
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
 
     steps:
@@ -34,13 +39,11 @@ jobs:
         run: npm run build
 
       - name: Publish
-        run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance
 
-  # Publish a dev tag on every push to main
+  # Publish to `dev` tag on every push to main
   publish-dev:
-    if: false  # Enable when ready: change to `github.event_name == 'push'`
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
 
     steps:
@@ -66,6 +69,4 @@ jobs:
           npm version "${BASE}-dev.${SHORT_SHA}" --no-git-tag-version
 
       - name: Publish dev tag
-        run: npm publish --tag dev
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --tag dev --provenance
