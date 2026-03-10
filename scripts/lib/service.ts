@@ -27,12 +27,15 @@ export function getNodePath(): string {
 }
 
 export function getSystemPath(): string {
-  // Build a reasonable PATH that includes common Node install locations
+  // Include the directory containing the current node binary (e.g., nvm paths)
+  const nodeBinDir = path.dirname(getNodePath());
   const platform = detectPlatform();
-  if (platform === 'macos') {
-    return '/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
-  }
-  return '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
+  const basePath = platform === 'macos'
+    ? '/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
+    : '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
+  // Prepend node's bin dir if not already in the base path
+  if (basePath.split(':').includes(nodeBinDir)) return basePath;
+  return `${nodeBinDir}:${basePath}`;
 }
 
 // --- launchd (macOS) ---
