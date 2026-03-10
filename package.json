@@ -4,6 +4,10 @@
   "description": "Mattermost ↔ GitHub Copilot bridge",
   "type": "module",
   "main": "dist/index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ChrisRomp/copilot-bridge.git"
+  },
   "bin": {
     "copilot-bridge": "bin/copilot-bridge.js"
   },
