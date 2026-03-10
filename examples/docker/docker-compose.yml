@@ -59,7 +59,7 @@ services:
       MM_LOGSETTINGS_CONSOLELEVEL: INFO
       MM_LOGSETTINGS_ENABLEFILE: "true"
     ports:
-      - "${MATTERMOST_PORT:-8065}:8065"
+      - "127.0.0.1:${MATTERMOST_PORT:-8065}:8065"
     volumes:
       - mattermost-config:/mattermost/config
       - mattermost-data:/mattermost/data

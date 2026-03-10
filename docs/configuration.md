@@ -30,7 +30,7 @@ On reload failure (invalid JSON, validation errors), the existing config is pres
 
 ## Platforms
 
-Only platforms defined in this section are loaded — the bridge won't attempt to connect to a platform that isn't configured here. For example, even if `@slack/bolt` is installed, no Slack adapter will start unless `platforms.slack` is present in your config.
+Only platforms defined in this section are loaded — if a platform isn't listed here, the bridge won't attempt to connect to it, even if the corresponding adapter package is installed.
 
 Define your messaging platform connections and bot identities:
 
