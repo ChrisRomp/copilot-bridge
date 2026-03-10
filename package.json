@@ -2,6 +2,7 @@
   "name": "@chrisromp/copilot-bridge",
   "version": "0.6.0",
   "description": "Mattermost ↔ GitHub Copilot bridge",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "repository": {
