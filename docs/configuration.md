@@ -30,6 +30,8 @@ On reload failure (invalid JSON, validation errors), the existing config is pres
 
 ## Platforms
 
+Only platforms defined in this section are loaded — if a platform isn't listed here, the bridge won't attempt to connect to it, even if the corresponding adapter package is installed.
+
 Define your messaging platform connections and bot identities:
 
 ```json

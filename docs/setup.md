@@ -10,6 +10,13 @@ This guide walks you through installing and configuring copilot-bridge from scra
 | **GitHub Copilot CLI** | latest | Installed automatically via `npm install` (bundled in `@github/copilot-sdk`) |
 | **Mattermost** | 7+ | Self-hosted or cloud instance with admin access to create bots |
 
+> [!TIP]
+> **Need a Mattermost server?** See [mattermost.com/install](https://mattermost.com/install/) for all options, including:
+> - [Docker deployment](https://docs.mattermost.com/deployment-guide/server/deploy-containers.html) — official guide
+> - [DigitalOcean 1-Click](https://mattermost.com/blog/install-mattermost-digitalocean/) — ready-made droplet
+> - [Hostinger VPS](https://www.hostinger.com/vps/docker/mattermost) — managed Docker hosting
+> - [Docker Compose example](../examples/docker/) — sample stack with PostgreSQL and Cloudflare Tunnel
+
 ### Authentication
 
 The Copilot CLI needs a valid GitHub token. Any of these methods work (checked in priority order):
