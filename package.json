@@ -1,6 +1,6 @@
 {
   "name": "@chrisromp/copilot-bridge",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Mattermost ↔ GitHub Copilot bridge",
   "type": "module",
   "main": "dist/index.js",
