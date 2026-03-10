@@ -1,0 +1,126 @@
+name: Bug Report
+description: Report a bug in copilot-bridge
+title: "Bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Fill in what you can — not every field is required.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened? One or two sentences.
+      placeholder: "Permission prompt consumed my next message instead of treating it as a new turn."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Ordered steps to trigger the bug. Include chat transcript if applicable.
+      placeholder: |
+        1. Bot requests tool permission (e.g., shell command)
+        2. User sends a regular text message instead of /approve or /deny
+        3. Message is consumed as the permission response — text is discarded
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened? Include error messages, logs, or screenshots if available.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of the system is affected?
+      options:
+        - Bridge core (session, streaming, events)
+        - Permissions (approval flow, rules, persistence)
+        - Channel adapter (Mattermost)
+        - CLI scripts (init, check, install-service)
+        - SDK integration (copilot-sdk, CLI subprocess)
+        - Scheduler
+        - Inter-agent communication
+        - MCP servers / tools
+        - Config / state persistence
+        - Documentation
+        - Other
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / Commit
+      description: "Output of `git rev-parse --short HEAD` or package version"
+      placeholder: "abc1234 or 0.1.0"
+    validations:
+      required: false
+
+  - type: input
+    id: node_version
+    attributes:
+      label: Node.js Version
+      description: "Output of `node --version`"
+      placeholder: "v22.15.0"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS (launchd)
+        - Linux (systemd)
+        - Linux (other)
+        - Docker / Codespaces
+        - Other
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: Paste any relevant log output. This will be auto-formatted as code.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Anything else — screenshots, config snippets, related issues, workarounds tried.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: reporter
+    attributes:
+      label: Reported By
+      description: Who is filing this?
+      options:
+        - Human
+        - Agent (automated)
+      default: 0
+    validations:
+      required: false

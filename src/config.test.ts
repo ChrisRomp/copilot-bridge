@@ -471,19 +471,19 @@ describe('reloadConfig', () => {
     fs.writeFileSync(configFile, JSON.stringify(makeConfig()));
     loadConfig(configFile);
 
-    // Write invalid config (no channels)
-    const bad = makeConfig();
-    bad.channels = [];
-    fs.writeFileSync(configFile, JSON.stringify(bad));
+    // Write config with no channels — should now be valid (DMs auto-discovered)
+    const noChannels = makeConfig();
+    noChannels.channels = [];
+    fs.writeFileSync(configFile, JSON.stringify(noChannels));
 
-    // reloadConfig should fail with validation error
+    // reloadConfig should succeed with empty channels
     const result = reloadConfig();
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/Validation failed/);
+    expect(result.success).toBe(true);
 
-    // loadConfig should also fail on same input
+    // loadConfig should also succeed
     _resetConfigForTest();
-    expect(() => loadConfig(configFile)).toThrow(/at least one channel/);
+    const loaded = loadConfig(configFile);
+    expect(loaded.channels).toEqual([]);
   });
 
   it('loadConfig and reloadConfig produce identical defaults', () => {

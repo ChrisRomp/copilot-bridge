@@ -12,7 +12,11 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "tsx dist/index.js",
+    "init": "tsx scripts/init.ts",
+    "check": "tsx scripts/check.ts",
+    "install-service": "tsx scripts/install-service.ts",
+    "uninstall-service": "tsx scripts/uninstall-service.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

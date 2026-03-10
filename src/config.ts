@@ -31,9 +31,9 @@ function validateAndNormalize(raw: any): AppConfig {
     }
   }
 
-  // Validate channels
-  if (!Array.isArray(raw.channels) || raw.channels.length === 0) {
-    throw new Error('Config must have at least one channel');
+  // Validate channels (empty is allowed — DMs are auto-discovered)
+  if (!Array.isArray(raw.channels)) {
+    raw.channels = [];
   }
   for (const ch of raw.channels) {
     if (!ch.id) throw new Error('Each channel must have an "id"');

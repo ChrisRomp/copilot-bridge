@@ -670,6 +670,15 @@ export class SessionManager {
     return this.bridge.listModels();
   }
 
+  /** Check if the Copilot CLI is authenticated. */
+  async getAuthStatus(): Promise<{ isAuthenticated: boolean; statusMessage?: string; login?: string }> {
+    try {
+      return await this.bridge.getAuthStatus();
+    } catch {
+      return { isAuthenticated: false, statusMessage: 'Unable to check auth status' };
+    }
+  }
+
   /** Resolve a pending permission request (first in queue). */
   resolvePermission(channelId: string, allow: boolean, remember?: boolean): boolean {
     const queue = this.pendingPermissions.get(channelId);

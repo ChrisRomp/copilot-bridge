@@ -90,3 +90,12 @@ Use `createLogger(tag)` from `src/logger.ts`. Tags identify the subsystem (e.g.,
 
 SQLite database at `~/.copilot-bridge/state.db` via `src/state/store.ts`. Uses WAL mode. Stores channel sessions, preferences, and permission rules.
 
+### Filing Issues
+
+Use the repo's YAML issue templates (`.github/ISSUE_TEMPLATE/`) when creating issues via `gh issue create`. Two templates exist:
+
+- **`bug_report.yml`** — for bugs. Required fields: Summary, Steps to Reproduce, Expected Behavior, Actual Behavior. Include component, version (`git rev-parse --short HEAD`), platform, and logs when available.
+- **`feature_request.yml`** — for enhancements. Required fields: Summary, Motivation. Include Proposed Solution and Alternatives Considered when known.
+
+Always set `Reported By: Agent (automated)` when filing programmatically. Reference related issues with `#N`. Keep issue bodies factual — describe observed behavior, not speculative fixes.
+

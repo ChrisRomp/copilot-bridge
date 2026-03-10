@@ -28,7 +28,7 @@ export function ensureWorkspacesDir(): void {
   }
 }
 
-/** Recursively sync files from src to dest, updating only when source is newer. */
+/** Recursively copy files from src to dest, creating only files that don't exist. Never overwrites. */
 function syncDir(src: string, dest: string): void {
   if (!fs.existsSync(dest)) {
     fs.mkdirSync(dest, { recursive: true });
@@ -38,10 +38,8 @@ function syncDir(src: string, dest: string): void {
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
       syncDir(srcPath, destPath);
-    } else {
-      if (!fs.existsSync(destPath) || fs.statSync(srcPath).mtimeMs > fs.statSync(destPath).mtimeMs) {
-        fs.copyFileSync(srcPath, destPath);
-      }
+    } else if (!fs.existsSync(destPath)) {
+      fs.copyFileSync(srcPath, destPath);
     }
   }
 }
