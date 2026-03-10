@@ -751,7 +751,18 @@ async function handleInboundMessage(
         await finalizeActivityFeed(msg.channelId, adapter);
         const resumeAck = await adapter.sendMessage(msg.channelId, '⏳ Resuming session...', { threadRootId: threadRoot });
         try {
-          const resumedId = await sessionManager.resumeToSession(msg.channelId, cmdResult.payload);
+          const prefix = cmdResult.payload as string;
+          const matches = await sessionManager.resolveSessionPrefix(msg.channelId, prefix);
+          if (matches.length === 0) {
+            await adapter.updateMessage(msg.channelId, resumeAck, `❌ No session found matching prefix \`${prefix}\``);
+            break;
+          }
+          if (matches.length > 1) {
+            const list = matches.map((id: string) => `• \`${id.slice(0, 12)}\``).join('\n');
+            await adapter.updateMessage(msg.channelId, resumeAck, `⚠️ Ambiguous prefix \`${prefix}\` — matches multiple sessions:\n${list}\nPlease provide a longer prefix.`);
+            break;
+          }
+          const resumedId = await sessionManager.resumeToSession(msg.channelId, matches[0]);
           await adapter.updateMessage(msg.channelId, resumeAck, `✅ Resumed session \`${resumedId.slice(0, 8)}…\``);
         } catch (err: any) {
           await adapter.updateMessage(msg.channelId, resumeAck, `❌ Failed to resume session: ${err?.message ?? 'unknown error'}`);

@@ -835,6 +835,18 @@ export class SessionManager {
     return this.contextUsage.get(channelId) ?? null;
   }
 
+  /**
+   * Resolve a session ID prefix to matching full session IDs.
+   * Returns all session IDs (for the channel's workspace) whose ID starts with the given prefix.
+   */
+  async resolveSessionPrefix(channelId: string, prefix: string): Promise<string[]> {
+    const sessions = await this.listChannelSessions(channelId);
+    const lower = prefix.toLowerCase();
+    return sessions
+      .filter(s => s.sessionId.toLowerCase().startsWith(lower))
+      .map(s => s.sessionId);
+  }
+
   /** List past sessions for this channel's working directory. */
   async listChannelSessions(channelId: string): Promise<Array<{ sessionId: string; startTime: Date; modifiedTime: Date; summary?: string; isCurrent: boolean }>> {
     const workingDirectory = this.resolveWorkingDirectory(channelId);
