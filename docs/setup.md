@@ -1,6 +1,6 @@
 # Setup Guide
 
-This guide walks you through installing and configuring copilot-bridge from scratch. If you prefer an interactive experience, run `npm run init` after cloning — it automates most of these steps.
+This guide walks you through installing and configuring copilot-bridge from scratch. If you prefer an interactive experience, run `copilot-bridge init` (or `npm run init` from source) after installing — it automates most of these steps.
 
 ## Prerequisites
 
@@ -27,18 +27,38 @@ Environment variables: `COPILOT_GITHUB_TOKEN` > `GH_TOKEN` > `GITHUB_TOKEN` (fir
 
 ## Installation
 
+### From npm (recommended)
+
+```bash
+npm install -g @chrisromp/copilot-bridge
+```
+
+After installing, use `copilot-bridge <command>` anywhere:
+
+```bash
+copilot-bridge init              # Interactive setup wizard
+copilot-bridge check             # Validate configuration
+copilot-bridge start             # Start the bridge
+copilot-bridge install-service   # Install as system service
+```
+
+### From source
+
 ```bash
 git clone https://github.com/ChrisRomp/copilot-bridge.git
 cd copilot-bridge
 npm install
 ```
 
+When running from source, use `npm run <command>` (e.g., `npm run init`, `npm run check`).
+
 ## Configuration
 
 ### Interactive Setup (Recommended)
 
 ```bash
-npm run init
+copilot-bridge init
+# Or from source: npm run init
 ```
 
 The wizard walks you through:
@@ -140,7 +160,8 @@ For group channels, you need the Mattermost channel ID:
 ## Validate Your Setup
 
 ```bash
-npm run check
+copilot-bridge check
+# Or from source: npm run check
 ```
 
 This verifies everything end-to-end:
@@ -170,6 +191,12 @@ All checks passed!
 
 ## Running the Bridge
 
+### From npm (installed globally)
+
+```bash
+copilot-bridge start
+```
+
 ### From source (development)
 
 ```bash
@@ -185,9 +212,6 @@ npm run build
 npm start
 ```
 
-> [!NOTE]
-> `npm run dev` and `npm run build` are for running from a cloned repo. If you installed via a package, use the package's entry point directly (e.g., `npx copilot-bridge`).
-
 ## Running as a Service
 
 The bridge should run persistently so it's always available in chat.
@@ -195,7 +219,8 @@ The bridge should run persistently so it's always available in chat.
 ### Automatic install (recommended)
 
 ```bash
-npm run install-service
+copilot-bridge install-service
+# Or from source: npm run install-service
 ```
 
 This detects your OS, generates the correct service file with your local paths, and installs it:
@@ -214,10 +239,14 @@ After installing, management commands are printed to the terminal.
 To remove the service:
 
 ```bash
-npm run uninstall-service
+copilot-bridge uninstall-service
+# Or from source: npm run uninstall-service
 ```
 
 ### Manual setup
+
+> [!NOTE]
+> The manual steps below reference template files in the `scripts/` directory. If you installed via npm, these are at `$(npm root -g)/@chrisromp/copilot-bridge/scripts/`. The automated `copilot-bridge install-service` command is recommended instead.
 
 <details>
 <summary>macOS (launchd) — manual steps</summary>

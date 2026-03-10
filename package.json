@@ -1,17 +1,34 @@
 {
-  "name": "copilot-bridge",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@chrisromp/copilot-bridge",
+  "version": "0.6.0",
+  "description": "Mattermost ↔ GitHub Copilot bridge",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "copilot-bridge": "bin/copilot-bridge.js"
+  },
   "files": [
+    "bin/",
     "dist/",
+    "scripts/*.ts",
+    "scripts/lib/*.ts",
+    "!scripts/**/*.test.ts",
+    "!scripts/test-admin-api.ts",
+    "scripts/com.copilot-bridge.plist",
+    "scripts/copilot-bridge.service",
     "templates/",
     "config.sample.json"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "start": "tsx dist/index.js",
     "init": "tsx scripts/init.ts",
     "check": "tsx scripts/check.ts",

@@ -39,10 +39,12 @@ Mattermost Channel → copilot-bridge → @github/copilot-sdk → Copilot CLI
 ## Quick Start
 
 1. **Prerequisites**: Node.js 20+, GitHub Copilot CLI installed and authenticated
-2. **Install**: `git clone` + `npm install`
-3. **Configure**: `npm run init` (interactive wizard) — or manually copy `config.sample.json` to `~/.copilot-bridge/config.json`
-4. **Validate**: `npm run check` (verifies prerequisites, connectivity, tokens, channels)
-5. **Run**: `npm run dev` (development with watch mode) or `npm run build && npm start` (production)
+2. **Install** (pick one):
+   - **npm**: `npm install -g @chrisromp/copilot-bridge`
+   - **From source**: `git clone https://github.com/ChrisRomp/copilot-bridge.git && cd copilot-bridge && npm install`
+3. **Configure**: `copilot-bridge init` (or `npm run init` from source) — interactive wizard
+4. **Validate**: `copilot-bridge check` (or `npm run check`)
+5. **Run**: `copilot-bridge start` (or `npm run dev` for development with watch mode)
 
 For DMs, that's it — the bridge auto-discovers DM channels for each bot. For group channels, add a `channels` entry mapping the channel ID to a working directory. See the [Setup Guide](docs/setup.md) for the full walkthrough or [Configuration](docs/configuration.md) for reference.
 
