@@ -61,14 +61,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test
+
       - name: Build
         run: npm run build
 
       - name: Set dev version
         run: |
           BASE=$(node -p "require('./package.json').version")
-          SHORT_SHA=$(git rev-parse --short HEAD)
-          npm version "${BASE}-dev.${SHORT_SHA}" --no-git-tag-version
+          npm version "${BASE}-dev.${GITHUB_RUN_NUMBER}" --no-git-tag-version
 
       - name: Publish dev tag
         run: npm publish --tag dev --provenance
