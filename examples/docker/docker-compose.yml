@@ -1,0 +1,88 @@
+# Mattermost + PostgreSQL + Cloudflare Tunnel
+#
+# This sets up the infrastructure that copilot-bridge connects to:
+#   - Mattermost (team chat)
+#   - PostgreSQL (Mattermost database)
+#   - Cloudflare Tunnel (optional, for public HTTPS access without port forwarding)
+#
+# Usage:
+#   1. Copy .env.example to .env and fill in your values
+#   2. docker compose up -d
+#   3. Open http://localhost:8065 (or your tunnel URL) to create an admin account
+#   4. Create a bot account in System Console → Integrations → Bot Accounts
+#   5. Configure copilot-bridge with the bot token
+#
+# The bridge itself runs on the host (not in Docker) — it connects to
+# Mattermost via the URL in your copilot-bridge config.json.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mmuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-mattermost}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mmuser}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mattermost:
+    image: mattermost/mattermost-enterprise-edition:${MATTERMOST_IMAGE_TAG:-release-11.4}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Database
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: postgres://${POSTGRES_USER:-mmuser}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mattermost}?sslmode=disable&connect_timeout=10
+
+      # Site URL — set to your tunnel domain or localhost
+      MM_SERVICESETTINGS_SITEURL: ${MM_SITEURL:-http://localhost:8065}
+
+      # Bot accounts (required for copilot-bridge)
+      MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION: "true"
+      MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS: "true"
+
+      # File storage
+      MM_FILESETTINGS_DRIVERNAME: local
+      MM_FILESETTINGS_DIRECTORY: /mattermost/data
+
+      # Logging
+      MM_LOGSETTINGS_CONSOLELEVEL: INFO
+      MM_LOGSETTINGS_ENABLEFILE: "true"
+    ports:
+      - "${MATTERMOST_PORT:-8065}:8065"
+    volumes:
+      - mattermost-config:/mattermost/config
+      - mattermost-data:/mattermost/data
+      - mattermost-logs:/mattermost/logs
+      - mattermost-plugins:/mattermost/plugins
+      - mattermost-client-plugins:/mattermost/client/plugins
+
+  # Optional: Cloudflare Tunnel for public HTTPS access
+  # Remove this service if you don't need external access.
+  # Set up a tunnel at https://one.dash.cloudflare.com → Networks → Tunnels
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      - mattermost
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN in .env or remove cloudflared service}
+    profiles:
+      - tunnel
+
+volumes:
+  postgres-data:
+  mattermost-config:
+  mattermost-data:
+  mattermost-logs:
+  mattermost-plugins:
+  mattermost-client-plugins:
