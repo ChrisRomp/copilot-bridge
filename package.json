@@ -24,7 +24,7 @@
     "@github/copilot-sdk": "^0.1.32",
     "@mattermost/client": "^10.3.0",
     "@mattermost/types": "^10.3.0",
-    "better-sqlite3": "^11.7.0",
+    "better-sqlite3": "^12.6.2",
     "cron": "^4.4.0",
     "cronstrue": "^3.13.0",
     "luxon": "^3.7.2",
