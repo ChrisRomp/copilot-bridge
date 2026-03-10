@@ -65,7 +65,7 @@ export function buildConfig(opts: {
   // Single bot → botToken; multiple → bots object
   if (opts.bots.length === 1) {
     config.platforms.mattermost.botToken = opts.bots[0].token;
-  } else {
+  } else if (opts.bots.length > 1) {
     config.platforms.mattermost.bots = {};
     for (const bot of opts.bots) {
       config.platforms.mattermost.bots[bot.name] = {

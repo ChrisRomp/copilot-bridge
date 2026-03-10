@@ -97,6 +97,8 @@ export function installLaunchd(plistContent: string): { installed: boolean; path
   try {
     const dir = path.dirname(installPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    // Unload existing service before overwriting (ignore errors if not loaded)
+    try { execSync(`launchctl bootout gui/$(id -u) "${installPath}" 2>/dev/null`, { encoding: 'utf-8' }); } catch { /* not loaded */ }
     fs.writeFileSync(installPath, plistContent, 'utf-8');
     execSync(`launchctl load "${installPath}"`, { encoding: 'utf-8' });
     return { installed: true, path: installPath };
@@ -172,9 +174,9 @@ export function getServiceStatus(): { running: boolean; pid?: number; detail: st
     } catch (err) {
       // Exit code 3 = inactive/dead (unit exists but not running)
       // Exit code 4 = no such unit file
-      const stderr = err instanceof Error && 'stdout' in err ? String((err as { stdout: unknown }).stdout).trim() : '';
-      if (stderr === 'inactive' || stderr === 'failed' || stderr === 'activating' || stderr === 'deactivating') {
-        return { running: false, detail: `systemd: ${stderr}` };
+      const stdout = err instanceof Error && 'stdout' in err ? String((err as { stdout: unknown }).stdout).trim() : '';
+      if (stdout === 'inactive' || stdout === 'failed' || stdout === 'activating' || stdout === 'deactivating') {
+        return { running: false, detail: `systemd: ${stdout}` };
       }
       return { running: false, detail: 'systemd: not installed' };
     }
