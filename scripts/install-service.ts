@@ -21,6 +21,7 @@ import {
 import { execSync } from 'node:child_process';
 
 function main() {
+  const isCli = process.env.COPILOT_BRIDGE_CLI === '1';
   const osPlatform = detectPlatform();
   const bridgePath = process.cwd();
   const homePath = os.homedir();
@@ -35,7 +36,7 @@ function main() {
 
     const distPath = path.join(bridgePath, 'dist', 'index.js');
     if (!fs.existsSync(distPath)) {
-      fail(process.env.COPILOT_BRIDGE_CLI === '1'
+      fail(isCli
         ? 'dist/index.js not found. Package may be corrupted — try reinstalling.'
         : 'dist/index.js not found. Run "npm run build" first.');
       process.exit(1);
@@ -71,7 +72,7 @@ function main() {
 
     const distPath = path.join(bridgePath, 'dist', 'index.js');
     if (!fs.existsSync(distPath)) {
-      fail(process.env.COPILOT_BRIDGE_CLI === '1'
+      fail(isCli
         ? 'dist/index.js not found. Package may be corrupted — try reinstalling.'
         : 'dist/index.js not found. Run "npm run build" first.');
       process.exit(1);
@@ -118,7 +119,7 @@ function main() {
 
   } else {
     fail('Unsupported platform for automatic service install.');
-    info(process.env.COPILOT_BRIDGE_CLI === '1'
+    info(isCli
       ? 'Run the bridge manually: copilot-bridge start'
       : 'Run the bridge manually: npm run dev (development) or npm start (production)');
     process.exit(1);
