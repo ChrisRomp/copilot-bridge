@@ -13,6 +13,7 @@ export interface BotEntry {
   admin: boolean;
   agent?: string;
   appToken?: string; // Slack Socket Mode app-level token
+  access?: { mode: 'allowlist' | 'blocklist' | 'open'; users?: string[] };
 }
 
 export interface ChannelEntry {
@@ -36,10 +37,10 @@ export interface GeneratedConfig {
   platforms: {
     mattermost?: {
       url: string;
-      bots?: Record<string, { token: string; admin?: boolean; agent?: string }>;
+      bots?: Record<string, { token: string; admin?: boolean; agent?: string; access?: { mode: string; users: string[] } }>;
     };
     slack?: {
-      bots?: Record<string, { token: string; appToken: string; admin?: boolean; agent?: string }>;
+      bots?: Record<string, { token: string; appToken: string; admin?: boolean; agent?: string; access?: { mode: string; users: string[] } }>;
     };
   };
   channels: Array<{
@@ -75,6 +76,7 @@ export function buildConfig(opts: {
         token: bot.token,
         ...(bot.admin ? { admin: true } : {}),
         ...(bot.agent ? { agent: bot.agent } : {}),
+        ...(bot.access ? { access: bot.access } : {}),
       };
     }
   }
@@ -91,6 +93,7 @@ export function buildConfig(opts: {
         appToken: bot.appToken,
         ...(bot.admin ? { admin: true } : {}),
         ...(bot.agent ? { agent: bot.agent } : {}),
+        ...(bot.access ? { access: bot.access } : {}),
       };
     }
   }

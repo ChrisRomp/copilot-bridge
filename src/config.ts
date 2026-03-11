@@ -1,11 +1,33 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgentConfig } from './types.js';
+import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgentConfig, AccessConfig } from './types.js';
 import { getDynamicChannel } from './state/store.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('config');
+
+const VALID_ACCESS_MODES = ['allowlist', 'blocklist', 'open'];
+
+/** Validate an access config block. Throws on invalid input. Normalizes entries in-place. */
+function validateAccessConfig(platformName: string, label: string, access: any): void {
+  if (access === undefined) return;
+  if (access === null || typeof access !== 'object') throw new Error(`${platformName}:${label} access must be an object`);
+  if (!VALID_ACCESS_MODES.includes(access.mode)) {
+    throw new Error(`${platformName}:${label} access.mode must be one of: ${VALID_ACCESS_MODES.join(', ')}`);
+  }
+  if (access.users !== undefined) {
+    if (!Array.isArray(access.users)) throw new Error(`${platformName}:${label} access.users must be an array`);
+    for (let i = 0; i < access.users.length; i++) {
+      const u = access.users[i];
+      if (typeof u !== 'string' || u.trim().length === 0) {
+        throw new Error(`${platformName}:${label} access.users entries must be non-empty strings`);
+      }
+      // Normalize: strip leading @ and whitespace
+      access.users[i] = u.trim().replace(/^@/, '');
+    }
+  }
+}
 
 let _config: AppConfig | null = null;
 let _configPath: string | null = null;
@@ -25,16 +47,20 @@ function validateAndNormalize(raw: any): AppConfig {
     if (name === 'slack') {
       // Slack uses Socket Mode — no URL needed
       if (!p.bots) throw new Error('Platform "slack" requires "bots" with bot tokens');
+      validateAccessConfig(name, '(platform)', p.access);
       for (const [botName, bot] of Object.entries(p.bots)) {
         if (!(bot as any).token) throw new Error(`Platform "slack" bot "${botName}" missing "token"`);
         if (!(bot as any).appToken) throw new Error(`Platform "slack" bot "${botName}" missing "appToken" (required for Socket Mode)`);
+        validateAccessConfig(name, botName, (bot as any).access);
       }
     } else {
       if (!p.url) throw new Error(`Platform "${name}" missing "url"`);
       if (!p.botToken && !p.bots) throw new Error(`Platform "${name}" needs either "botToken" or "bots"`);
+      validateAccessConfig(name, '(platform)', p.access);
       if (p.bots) {
         for (const [botName, bot] of Object.entries(p.bots)) {
           if (!(bot as any).token) throw new Error(`Platform "${name}" bot "${botName}" missing "token"`);
+          validateAccessConfig(name, botName, (bot as any).access);
         }
       }
     }
@@ -427,20 +453,26 @@ export function getChannelBotConfig(channelId: string): BotConfig | null {
  * Get all unique bot tokens for a platform, keyed by bot name.
  * For single-bot configs, returns { "default": token }.
  */
-export function getPlatformBots(platformName: string): Map<string, { token: string; appToken?: string; agent?: string | null }> {
+export function getPlatformBots(platformName: string): Map<string, { token: string; appToken?: string; agent?: string | null; access?: AccessConfig }> {
   const config = getConfig();
   const platform = config.platforms[platformName];
   if (!platform) throw new Error(`Unknown platform "${platformName}"`);
 
-  const bots = new Map<string, { token: string; appToken?: string; agent?: string | null }>();
+  const bots = new Map<string, { token: string; appToken?: string; agent?: string | null; access?: AccessConfig }>();
   if (platform.bots) {
     for (const [name, bot] of Object.entries(platform.bots)) {
-      bots.set(name, { token: bot.token, appToken: bot.appToken, agent: bot.agent });
+      bots.set(name, { token: bot.token, appToken: bot.appToken, agent: bot.agent, access: bot.access });
     }
   } else if (platform.botToken) {
     bots.set('default', { token: platform.botToken });
   }
   return bots;
+}
+
+/** Get platform-level access config (if any). */
+export function getPlatformAccess(platformName: string): AccessConfig | undefined {
+  const config = getConfig();
+  return config.platforms[platformName]?.access;
 }
 
 /** Check if a bot is an admin. */

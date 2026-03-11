@@ -92,6 +92,33 @@ describe('config-gen', () => {
       });
       expect(config.platforms.mattermost.url).toBe('https://mm.test');
     });
+
+    it('includes access config for Mattermost bots', () => {
+      const config = buildConfig({
+        mmUrl: 'https://mm.test',
+        bots: [{ name: 'bot', token: 'tok', admin: false, access: { mode: 'allowlist', users: ['chris'] } }],
+        channels: [],
+      });
+      expect(config.platforms.mattermost!.bots!.bot.access).toEqual({ mode: 'allowlist', users: ['chris'] });
+    });
+
+    it('includes access config for Slack bots', () => {
+      const config = buildConfig({
+        bots: [],
+        channels: [],
+        slackBots: [{ name: 'bot', token: 'xoxb-tok', appToken: 'xapp-tok', admin: false, access: { mode: 'allowlist', users: ['U123'] } }],
+      });
+      expect(config.platforms.slack!.bots!.bot.access).toEqual({ mode: 'allowlist', users: ['U123'] });
+    });
+
+    it('omits access when not provided', () => {
+      const config = buildConfig({
+        mmUrl: 'https://mm.test',
+        bots: [{ name: 'bot', token: 'tok', admin: false }],
+        channels: [],
+      });
+      expect(config.platforms.mattermost!.bots!.bot.access).toBeUndefined();
+    });
   });
 
   describe('paths', () => {

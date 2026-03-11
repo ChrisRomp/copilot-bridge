@@ -316,6 +316,7 @@ describe('isModelError', () => {
     expect(isModelError(new Error('model not found: claude-opus-99'))).toBe(true);
     expect(isModelError(new Error('model is not available'))).toBe(true);
     expect(isModelError(new Error('The requested model does not exist'))).toBe(true);
+    expect(isModelError(new Error('The requested model is not supported'))).toBe(true);
   });
 
   it('detects rate limit errors', () => {

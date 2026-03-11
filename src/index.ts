@@ -1,4 +1,4 @@
-import { loadConfig, getConfig, isConfiguredChannel, registerDynamicChannel, markChannelAsDM, getChannelConfig, getPlatformBots, getChannelBotName, isBotAdmin, getHardcodedRules, getConfigRules, reloadConfig, ConfigWatcher } from './config.js';
+import { loadConfig, getConfig, isConfiguredChannel, registerDynamicChannel, markChannelAsDM, getChannelConfig, getPlatformBots, getPlatformAccess, getChannelBotName, isBotAdmin, getHardcodedRules, getConfigRules, reloadConfig, ConfigWatcher } from './config.js';
 import { CopilotBridge } from './core/bridge.js';
 import { SessionManager, BRIDGE_CUSTOM_TOOLS } from './core/session-manager.js';
 import { handleCommand, parseCommand } from './core/command-handler.js';
@@ -12,10 +12,11 @@ import { initScheduler, stopAll as stopScheduler, listJobs, removeJob, pauseJob,
 import { markBusy, markIdle, markIdleImmediate, isBusy, waitForChannelIdle, cancelIdleDebounce } from './core/channel-idle.js';
 import { LoopDetector, MAX_IDENTICAL_CALLS } from './core/loop-detector.js';
 import { getTaskHistory } from './state/store.js';
+import { checkUserAccess } from './core/access-control.js';
 import { createLogger } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment } from './types.js';
+import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig } from './types.js';
 
 const log = createLogger('bridge');
 
@@ -132,6 +133,104 @@ function getAdapterForChannel(channelId: string): { adapter: ChannelAdapter; str
   return { adapter, streaming };
 }
 
+const SLACK_UID_PATTERN = /^U[A-Z0-9]{6,}$/;
+
+/**
+ * Resolve non-UID entries in Slack bot access configs.
+ * Handles added manually as usernames are looked up via Slack API (with pagination) and replaced with UIDs.
+ */
+async function resolveSlackAccessUsers(config: AppConfig): Promise<void> {
+  const slackPlatform = config.platforms.slack;
+  if (!slackPlatform?.bots) return;
+
+  // Collect all access configs that need resolution: platform-level + per-bot
+  const accessTargets: { label: string; access: NonNullable<typeof slackPlatform.access>; tokenSource: string }[] = [];
+  const firstBotToken = Object.values(slackPlatform.bots)[0]?.token;
+
+  if (slackPlatform.access?.users?.length && firstBotToken) {
+    accessTargets.push({ label: 'platform "slack"', access: slackPlatform.access, tokenSource: firstBotToken });
+  }
+  for (const [botName, bot] of Object.entries(slackPlatform.bots)) {
+    if (bot.access?.users?.length) {
+      accessTargets.push({ label: `bot "${botName}"`, access: bot.access, tokenSource: bot.token });
+    }
+  }
+  if (accessTargets.length === 0) return;
+
+  // Deduplicate API calls — group by token
+  const membersByToken = new Map<string, any[]>();
+  for (const target of accessTargets) {
+    if (membersByToken.has(target.tokenSource)) continue;
+
+    const unresolved = target.access.users!.filter(u => !SLACK_UID_PATTERN.test(u));
+    if (unresolved.length === 0) continue;
+
+    const allMembers: any[] = [];
+    try {
+      let cursor: string | undefined;
+      do {
+        const params = new URLSearchParams({ limit: '200' });
+        if (cursor) params.set('cursor', cursor);
+        const resp = await fetch(`https://slack.com/api/users.list?${params}`, {
+          headers: { 'Authorization': `Bearer ${target.tokenSource}` },
+        });
+        if (!resp.ok) { log.warn(`  Slack users.list failed: HTTP ${resp.status}`); break; }
+        const data = await resp.json() as any;
+        if (!data.ok) { log.warn(`  Slack users.list failed: ${data.error}`); break; }
+        for (const m of data.members ?? []) allMembers.push(m);
+        cursor = data.response_metadata?.next_cursor || undefined;
+      } while (cursor);
+    } catch (err: any) {
+      log.warn(`  Failed to fetch Slack users: ${err.message}`);
+    }
+    membersByToken.set(target.tokenSource, allMembers);
+  }
+
+  // Resolve each access config
+  for (const target of accessTargets) {
+    const unresolved = target.access.users!.filter(u => !SLACK_UID_PATTERN.test(u));
+    if (unresolved.length === 0) continue;
+
+    log.info(`Resolving ${unresolved.length} Slack handle(s) for ${target.label} access list...`);
+    const allMembers = membersByToken.get(target.tokenSource) ?? [];
+
+    // Build lookup map for O(1) resolution
+    const nameMap = new Map<string, string>();
+    const displayMap = new Map<string, string>();
+    for (const m of allMembers) {
+      if (m.deleted || m.is_bot) continue;
+      const name = (m.name ?? '').toLowerCase();
+      if (name) nameMap.set(name, m.id);
+      const displayName = m.profile?.display_name_normalized?.toLowerCase() ?? '';
+      if (displayName) displayMap.set(displayName, m.id);
+      const realName = m.profile?.real_name_normalized?.toLowerCase() ?? '';
+      if (realName) displayMap.set(realName, m.id);
+    }
+
+    const resolved: string[] = [];
+    for (const handle of unresolved) {
+      const normalized = handle.replace(/^@/, '').toLowerCase();
+      const byName = nameMap.get(normalized);
+      if (byName) {
+        log.info(`  Resolved "${handle}" → ${byName} (by handle)`);
+        resolved.push(byName);
+      } else {
+        const byDisplay = displayMap.get(normalized);
+        if (byDisplay) {
+          log.warn(`  Resolved "${handle}" → ${byDisplay} (by display/real name — consider using the exact Slack handle for reliability)`);
+          resolved.push(byDisplay);
+        } else {
+          log.warn(`  Could not resolve Slack handle "${handle}" — keeping as-is`);
+          resolved.push(handle);
+        }
+      }
+    }
+
+    const uidEntries = target.access.users!.filter(u => SLACK_UID_PATTERN.test(u));
+    target.access.users = [...uidEntries, ...resolved];
+  }
+}
+
 async function main(): Promise<void> {
   log.info('copilot-bridge starting...');
 
@@ -143,6 +242,12 @@ async function main(): Promise<void> {
   const configWatcher = new ConfigWatcher();
   configWatcher.onReload((result) => {
     if (!result.success) return;
+    // Re-resolve Slack access handles after reload (config was re-read from disk).
+    // Fires asynchronously — messages during resolution use the old resolved values.
+    void (async () => {
+      try { await resolveSlackAccessUsers(getConfig()); }
+      catch (err: any) { log.warn(`Slack access resolution after reload failed: ${err.message}`); }
+    })();
     if (result.restartNeeded.length > 0) {
       // Notify admin channels about restart-needed changes
       for (const [key, adapter] of botAdapters) {
@@ -233,6 +338,9 @@ async function main(): Promise<void> {
     }
   }
 
+  // Resolve non-UID Slack access entries at startup
+  await resolveSlackAccessUsers(config);
+
   // Wire up session events → streaming output (serialized per channel)
   sessionManager.onSessionEvent((sessionId, channelId, event) => {
     const prev = eventLocks.get(channelId) ?? Promise.resolve();
@@ -295,7 +403,7 @@ async function main(): Promise<void> {
       );
       channelLocks.set(msg.channelId, next);
     });
-    adapter.onReaction((reaction) => handleReaction(reaction, sessionManager));
+    adapter.onReaction((reaction) => handleReaction(reaction, sessionManager, platformName, botName));
 
     await adapter.connect();
     log.info(`${key} connected`);
@@ -433,6 +541,13 @@ async function handleMidTurnMessage(
   // Ignore messages from any bot we manage on this platform
   for (const [key, a] of botAdapters) {
     if (key.startsWith(`${platformName}:`) && msg.userId === a.getBotUserId()) return;
+  }
+
+  // Check user-level access control
+  const botInfo = getPlatformBots(platformName).get(botName);
+  if (!checkUserAccess(msg.userId, msg.username, botInfo?.access, getPlatformAccess(platformName))) {
+    log.debug(`User ${msg.username} (${msg.userId}) denied mid-turn access to bot "${botName}"`);
+    return;
   }
 
   if (!isConfiguredChannel(msg.channelId)) return;
@@ -608,6 +723,13 @@ async function handleInboundMessage(
   // Ignore messages from any bot we manage on this platform (prevents cross-bot loops)
   for (const [key, a] of botAdapters) {
     if (key.startsWith(`${platformName}:`) && msg.userId === a.getBotUserId()) return;
+  }
+
+  // Check user-level access control (reads live config — hot-reloadable)
+  const botInfo = getPlatformBots(platformName).get(botName);
+  if (!checkUserAccess(msg.userId, msg.username, botInfo?.access, getPlatformAccess(platformName))) {
+    log.debug(`User ${msg.username} (${msg.userId}) denied access to bot "${botName}"`);
+    return; // silent drop
   }
 
   // Auto-register DM channels for known bots
@@ -1126,9 +1248,21 @@ async function handleInboundMessage(
 async function handleReaction(
   reaction: InboundReaction,
   sessionManager: SessionManager,
+  platformName: string,
+  botName: string,
 ): Promise<void> {
   if (!isConfiguredChannel(reaction.channelId)) return;
   if (reaction.action !== 'added') return;
+
+  // Check user-level access control.
+  // Reactions only carry userId (no username), so this matches against userId only.
+  // For Slack (UIDs stored in config), this is exact. For Mattermost (usernames in config),
+  // this is best-effort — admin bots should use both username and user ID in allowlists.
+  const botInfo = getPlatformBots(platformName).get(botName);
+  if (!checkUserAccess(reaction.userId, reaction.userId, botInfo?.access, getPlatformAccess(platformName))) {
+    log.debug(`User ${reaction.userId} denied reaction access to bot "${botName}"`);
+    return;
+  }
 
   const resolved = getAdapterForChannel(reaction.channelId);
   if (!resolved) return;

@@ -77,10 +77,11 @@ The wizard walks you through:
 1. Prerequisite validation
 2. Platform selection (Mattermost, Slack, or both)
 3. Platform-specific connection setup (URLs, tokens, app manifests)
-4. Channel configuration (with per-channel trigger mode and threading)
-5. Default settings (model, trigger mode, threading)
-6. Config file generation (with backup if updating)
-7. Optional service installation
+4. User access control (allowlist setup — who can use each bot)
+5. Channel configuration (with per-channel trigger mode and threading)
+6. Default settings (model, trigger mode, threading)
+7. Config file generation (with backup if updating)
+8. Optional service installation
 
 ### Manual Setup
 

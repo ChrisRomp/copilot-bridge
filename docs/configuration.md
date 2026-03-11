@@ -16,7 +16,8 @@ The bridge watches `config.json` for changes and hot-applies safe settings autom
 - Channel settings: `triggerMode`, `threadedReplies`, `verbose`, `model`, `agent`
 - Defaults: `model`, `agent`, `triggerMode`, `threadedReplies`, `verbose`, `permissionMode`
 - Permissions: `allow`, `deny`, `allowPaths`, `allowUrls`
-- Bot config: `agent`, `admin` flag
+- Bot config: `agent`, `admin` flag, `access` (user allowlist/blocklist)
+- Platform-level `access` (user allowlist/blocklist)
 - New channel entries
 
 **Restart required (config updates but adapters keep old values):**
@@ -64,6 +65,85 @@ If you only need one bot, use `botToken` instead of `bots`:
   }
 }
 ```
+
+## User Access Control
+
+Control which users can interact with bots using the `access` block. Access can be set at **platform level** (inherited by all bots) and/or **bot level** (grants additional users for that bot).
+
+**Allowlists are additive** — a user is allowed if they appear in the platform allowlist OR the bot allowlist. Platform users inherit access to all bots; bot-level users only get access to that specific bot. **Blocklists always win** — a blocked user is denied regardless of allowlists at either level.
+
+```json
+{
+  "platforms": {
+    "mattermost": {
+      "url": "https://chat.example.com",
+      "access": {
+        "mode": "allowlist",
+        "users": ["chris"]
+      },
+      "bots": {
+        "copilot": {
+          "token": "BOT_TOKEN"
+        },
+        "alice": {
+          "token": "BOT_TOKEN_2",
+          "access": {
+            "mode": "allowlist",
+            "users": ["alex"]
+          }
+        },
+        "bob": {
+          "token": "BOT_TOKEN_3"
+        }
+      }
+    }
+  }
+}
+```
+
+In this example:
+- **chris** can talk to all bots (platform allowlist inherited everywhere)
+- **alex** can only talk to **alice** (bot-level allowlist on alice)
+- **bob bot**: no bot-level access, so only platform users (chris) can use it
+
+### Access modes
+
+| Mode | Behavior | Default? |
+|------|----------|----------|
+| `"allowlist"` | Only listed users can use the bot | — |
+| `"blocklist"` | Everyone **except** listed users | — |
+| `"open"` | All users can use the bot | — |
+
+### Resolution logic
+
+Access is **additive** across levels:
+
+- **Neither level configured** → deny all (secure by default)
+- **Only platform configured** → platform decides alone
+- **Only bot configured** → bot decides alone
+- **Both configured (allowlists)** → user passes if listed at **either** level (union)
+- **Blocklist at any level** → always denies matched users, regardless of allowlists
+
+This means platform allowlist users inherit access to every bot, while bot-level allowlists can grant additional users for specific bots.
+
+> ⚠️ **Breaking change (v0.8.0):** Previously, missing `access` defaulted to open. Now, if no `access` block exists at either level, all users are denied. Add `"access": { "mode": "open" }` at the platform or bot level to restore the previous behavior, or run `copilot-bridge init` to configure access during setup.
+
+### User identification
+
+- **Mattermost**: Use the Mattermost username (handle). Case-insensitive. Leading `@` is stripped automatically.
+- **Slack**: Use the Slack user ID (e.g., `U12345ABC`). During `init`, you can enter a Slack handle and it will be resolved to a UID via the Slack API. Handles manually added to the config are resolved to UIDs on startup.
+
+The access check matches each entry against both the user's platform ID and username, so either format works.
+
+> **Note:** Bot-level access control requires the `bots` config format (not the `botToken` shorthand). Platform-level access works with both formats.
+
+### Denied user behavior
+
+Messages from unauthorized users are **silently dropped** — no response is sent. Drops are logged at `DEBUG` level for troubleshooting.
+
+### Hot-reload
+
+Access config changes are hot-reloadable — edits take effect after `/reload config` or automatic file watcher pickup, with no restart needed.
 
 ## Channels
 

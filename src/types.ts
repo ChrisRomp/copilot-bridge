@@ -4,6 +4,13 @@ export interface BotConfig {
   appToken?: string;         // app-level token for Slack Socket Mode (xapp-...)
   agent?: string | null;     // default agent for this bot identity
   admin?: boolean;           // admin bots can manage all workspaces
+  access?: AccessConfig;     // user-level access control
+}
+
+// User-level access control
+export interface AccessConfig {
+  mode: 'allowlist' | 'blocklist' | 'open';
+  users?: string[];          // usernames (Mattermost) or UIDs (Slack)
 }
 
 // Platform configuration
@@ -11,6 +18,7 @@ export interface PlatformConfig {
   url?: string;                     // required for Mattermost; not needed for Slack (Socket Mode)
   botToken?: string;                // single-bot shorthand (backward compatible)
   bots?: Record<string, BotConfig>; // multi-bot: name → config
+  access?: AccessConfig;            // platform-level access control (takes precedence over bot-level)
 }
 
 // Channel configuration
@@ -97,6 +105,7 @@ export interface InboundReaction {
   platform: string;
   channelId: string;
   userId: string;
+  username?: string;
   postId: string;
   emoji: string;
   action: 'added' | 'removed';

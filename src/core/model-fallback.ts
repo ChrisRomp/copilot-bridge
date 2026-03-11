@@ -227,7 +227,7 @@ export function getFallbackChain(modelId: string, availableModels: string[]): st
 const MODEL_ERROR_PATTERNS = [
   /model.*capacity/i,
   /model.*(overloaded|over\s*loaded)/i,
-  /model.*(not\s+found|not\s+available|unavailable|does\s+not\s+exist)/i,
+  /model.*(not\s+found|not\s+available|unavailable|does\s+not\s+exist|not\s+supported)/i,
   /rate\s*limit/i,
   /too\s+many\s+requests/i,
   /resource\s+exhausted/i,

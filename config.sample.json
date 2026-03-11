@@ -2,8 +2,15 @@
   "platforms": {
     "mattermost": {
       "url": "https://chat.example.com",
+      "access": {
+        "mode": "allowlist",
+        "users": ["your-username"]
+      },
       "bots": {
-        "copilot": { "token": "YOUR_BOT_TOKEN", "admin": true }
+        "copilot": {
+          "token": "YOUR_BOT_TOKEN",
+          "admin": true
+        }
       }
     }
   },
