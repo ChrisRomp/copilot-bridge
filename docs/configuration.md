@@ -48,7 +48,7 @@ Define your messaging platform connections and bot identities:
 }
 ```
 
-Each bot needs a Mattermost bot account and token. Set `"admin": true` on the bot that should manage the bridge (create agents, edit config, restart).
+Each bot needs a platform bot account and token. Set `"admin": true` on the bot that should manage the bridge — admin bots get extra tools (`grant_path_access`, workspace management, config editing) and use the admin AGENTS.md template. This is a bridge-level setting, not a platform permission. If you only have one bot, make it admin.
 
 ### Single-bot shorthand
 

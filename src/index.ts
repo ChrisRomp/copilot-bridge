@@ -196,15 +196,37 @@ async function main(): Promise<void> {
 
   // Initialize channel adapters — one per bot identity
   for (const [platformName, platformConfig] of Object.entries(config.platforms)) {
-    const factory = adapterFactories[platformName];
-    if (!factory) {
-      log.warn(`No adapter for platform "${platformName}" — skipping`);
-      continue;
-    }
     const bots = getPlatformBots(platformName);
     for (const [botName, botInfo] of bots) {
       const key = `${platformName}:${botName}`;
-      const adapter = factory(platformName, platformConfig.url, botInfo.token);
+      let adapter: ChannelAdapter;
+
+      if (platformName === 'slack') {
+        // Slack needs appToken for Socket Mode — construct directly
+        if (!botInfo.appToken) {
+          log.error(`Slack bot "${botName}" missing appToken — skipping`);
+          continue;
+        }
+        try {
+          const { SlackAdapter } = await import('./channels/slack/adapter.js');
+          adapter = new SlackAdapter({
+            platformName,
+            botToken: botInfo.token,
+            appToken: botInfo.appToken,
+          });
+        } catch (err: any) {
+          log.error(`Failed to load Slack adapter: ${err.message}`);
+          continue;
+        }
+      } else {
+        const factory = adapterFactories[platformName];
+        if (!factory) {
+          log.warn(`No adapter for platform "${platformName}" — skipping`);
+          break; // skip all bots for this platform
+        }
+        adapter = factory(platformName, platformConfig.url ?? '', botInfo.token);
+      }
+
       botAdapters.set(key, adapter);
       botStreamers.set(key, new StreamingHandler(adapter));
       log.info(`Registered bot "${botName}" for ${platformName}`);
@@ -395,6 +417,8 @@ async function main(): Promise<void> {
 /** Strip the bot's own @mention from message text, keeping other mentions intact. */
 function stripBotMention(text: string, botName: string | undefined): string {
   if (!botName) return text;
+  // Handle Slack <@USERID> format (in case adapter didn't pre-strip)
+  text = text.replace(/<@[A-Z0-9]+>/g, '');
   return text.replace(new RegExp(`@\\S+`, 'g'), (match) => {
     if (match === `@${botName}`) return '';
     return match;
@@ -425,7 +449,10 @@ async function handleMidTurnMessage(
   const channelConfig = getChannelConfig(msg.channelId);
 
   // Respect trigger mode — don't steer on unmentioned messages in mention-only channels
-  if (channelConfig.triggerMode === 'mention' && !msg.mentionsBot && !msg.isDM) return;
+  if (channelConfig.triggerMode === 'mention' && !msg.mentionsBot && !msg.isDM) {
+    log.debug(`Ignoring mid-turn message (trigger=mention, no mention) in ${msg.channelId.slice(0, 8)}...`);
+    return;
+  }
 
   const text = stripBotMention(msg.text, channelConfig.bot);
   if (!text && !msg.attachments?.length) return;
@@ -624,7 +651,10 @@ async function handleInboundMessage(
 
   // Check trigger mode
   const triggerMode = channelConfig.triggerMode;
-  if (triggerMode === 'mention' && !msg.mentionsBot && !msg.isDM) return;
+  if (triggerMode === 'mention' && !msg.mentionsBot && !msg.isDM) {
+    log.debug(`Ignoring message (trigger=mention, no mention) in ${msg.channelId.slice(0, 8)}...`);
+    return;
+  }
 
   // Strip bot mention from message text
   let text = stripBotMention(msg.text, channelConfig.bot);
@@ -1162,6 +1192,7 @@ async function handleSessionEvent(
   // Handle custom bridge events (permissions, user input)
   if (event.type === 'bridge.permission_request') {
     const streamKey = activeStreams.get(channelId);
+    const threadRootId = streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined;
     if (streamKey) {
       await streaming.finalizeStream(streamKey);
       activeStreams.delete(channelId);
@@ -1169,12 +1200,13 @@ async function handleSessionEvent(
     await finalizeActivityFeed(channelId, adapter);
     const { toolName, serverName, input, commands } = event.data;
     const formatted = formatPermissionRequest(toolName, input, commands, serverName);
-    await adapter.sendMessage(channelId, formatted);
+    await adapter.sendMessage(channelId, formatted, { threadRootId });
     return;
   }
 
   if (event.type === 'bridge.user_input_request') {
     const streamKey = activeStreams.get(channelId);
+    const threadRootId = streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined;
     if (streamKey) {
       await streaming.finalizeStream(streamKey);
       activeStreams.delete(channelId);
@@ -1182,7 +1214,7 @@ async function handleSessionEvent(
     await finalizeActivityFeed(channelId, adapter);
     const { question, choices } = event.data;
     const formatted = formatUserInputRequest(question, choices);
-    await adapter.sendMessage(channelId, formatted);
+    await adapter.sendMessage(channelId, formatted, { threadRootId });
     return;
   }
 

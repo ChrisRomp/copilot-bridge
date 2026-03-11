@@ -12,6 +12,7 @@ export interface BotEntry {
   token: string;
   admin: boolean;
   agent?: string;
+  appToken?: string; // Slack Socket Mode app-level token
 }
 
 export interface ChannelEntry {
@@ -20,6 +21,8 @@ export interface ChannelEntry {
   platform: string;
   bot: string;
   workingDirectory: string;
+  triggerMode?: 'all' | 'mention';
+  threadedReplies?: boolean;
 }
 
 export interface ConfigDefaults {
@@ -31,9 +34,12 @@ export interface ConfigDefaults {
 
 export interface GeneratedConfig {
   platforms: {
-    mattermost: {
+    mattermost?: {
       url: string;
       bots?: Record<string, { token: string; admin?: boolean; agent?: string }>;
+    };
+    slack?: {
+      bots?: Record<string, { token: string; appToken: string; admin?: boolean; agent?: string }>;
     };
   };
   channels: Array<{
@@ -42,31 +48,44 @@ export interface GeneratedConfig {
     platform: string;
     bot?: string;
     workingDirectory: string;
+    triggerMode?: string;
+    threadedReplies?: boolean;
   }>;
   defaults?: ConfigDefaults;
 }
 
 export function buildConfig(opts: {
-  mmUrl: string;
+  mmUrl?: string;
   bots: BotEntry[];
   channels: ChannelEntry[];
   defaults?: ConfigDefaults;
+  slackBots?: BotEntry[];
 }): GeneratedConfig {
   const config: GeneratedConfig = {
-    platforms: {
-      mattermost: {
-        url: opts.mmUrl,
-      },
-    },
+    platforms: {},
     channels: [],
   };
 
-  // Always use named bots object (clearer schema, supports admin flag and multi-bot)
-  if (opts.bots.length > 0) {
+  // Mattermost platform
+  if (opts.mmUrl && opts.bots.length > 0) {
+    config.platforms.mattermost = { url: opts.mmUrl };
     config.platforms.mattermost.bots = {};
     for (const bot of opts.bots) {
       config.platforms.mattermost.bots[bot.name] = {
         token: bot.token,
+        ...(bot.admin ? { admin: true } : {}),
+        ...(bot.agent ? { agent: bot.agent } : {}),
+      };
+    }
+  }
+
+  // Slack platform
+  if (opts.slackBots && opts.slackBots.length > 0) {
+    config.platforms.slack = { bots: {} };
+    for (const bot of opts.slackBots) {
+      config.platforms.slack!.bots![bot.name] = {
+        token: bot.token,
+        appToken: bot.appToken!,
         ...(bot.admin ? { admin: true } : {}),
         ...(bot.agent ? { agent: bot.agent } : {}),
       };
@@ -80,6 +99,8 @@ export function buildConfig(opts: {
       platform: ch.platform,
       bot: ch.bot,
       workingDirectory: ch.workingDirectory,
+      ...(ch.triggerMode ? { triggerMode: ch.triggerMode } : {}),
+      ...(ch.threadedReplies !== undefined ? { threadedReplies: ch.threadedReplies } : {}),
     });
   }
 
@@ -111,6 +132,14 @@ export function writeConfig(config: GeneratedConfig): string {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
   const configPath = getConfigPath();
+
+  // Back up existing config before overwriting
+  if (fs.existsSync(configPath)) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const backupPath = `${configPath}.${timestamp}.bak`;
+    fs.copyFileSync(configPath, backupPath);
+  }
+
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
   return configPath;
 }
@@ -123,4 +152,33 @@ export function readExistingConfig(): GeneratedConfig | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Merge a new platform's config into an existing config.
+ * Preserves all existing platforms, channels, and defaults.
+ */
+export function mergeConfig(existing: GeneratedConfig, addition: GeneratedConfig): GeneratedConfig {
+  const merged: GeneratedConfig = {
+    platforms: { ...existing.platforms },
+    channels: [...(existing.channels ?? [])],
+    defaults: existing.defaults ?? addition.defaults,
+  };
+
+  // Merge new platforms (don't overwrite existing ones)
+  for (const [name, config] of Object.entries(addition.platforms)) {
+    if (!merged.platforms[name as keyof typeof merged.platforms]) {
+      (merged.platforms as any)[name] = config;
+    }
+  }
+
+  // Append new channels (skip duplicates by id)
+  const existingIds = new Set(merged.channels.map(c => c.id));
+  for (const ch of addition.channels ?? []) {
+    if (!existingIds.has(ch.id)) {
+      merged.channels.push(ch);
+    }
+  }
+
+  return merged;
 }

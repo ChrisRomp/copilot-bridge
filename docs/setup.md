@@ -25,9 +25,12 @@ The Copilot CLI needs a valid GitHub token. Any of these methods work (checked i
 |--------|-----|----------|
 | **Environment variable** | `export COPILOT_GITHUB_TOKEN=ghp_...` | Automation, CI, server deployments |
 | **GitHub CLI** | `gh auth login` | Development machines with `gh` installed |
-| **Copilot CLI** | `copilot auth login` | Standalone CLI installs |
+| **Copilot CLI** | `copilot login` | Standalone CLI installs |
 
 Environment variables: `COPILOT_GITHUB_TOKEN` > `GH_TOKEN` > `GITHUB_TOKEN` (first one found wins).
+
+> [!NOTE]
+> **Keyring prompts**: `copilot login` stores credentials in the system keyring when available (macOS Keychain, GNOME Keyring, etc.), or falls back to `~/.copilot/config.json` if no keyring is found. If the bridge triggers OS-level keyring unlock prompts at startup, set `COPILOT_GITHUB_TOKEN` directly to bypass keyring access.
 
 > [!TIP]
 > **BYOK (Bring Your Own Key)**: The SDK also supports using your own API keys from OpenAI, Anthropic, Azure AI Foundry, etc. — no Copilot subscription needed. See [issue #48](https://github.com/ChrisRomp/copilot-bridge/issues/48) for status.

@@ -1,14 +1,15 @@
 // Bot identity configuration
 export interface BotConfig {
   token: string;
-  agent?: string | null; // default agent for this bot identity
-  admin?: boolean;       // admin bots can manage all workspaces
+  appToken?: string;         // app-level token for Slack Socket Mode (xapp-...)
+  agent?: string | null;     // default agent for this bot identity
+  admin?: boolean;           // admin bots can manage all workspaces
 }
 
 // Platform configuration
 export interface PlatformConfig {
-  url: string;
-  botToken?: string;          // single-bot shorthand (backward compatible)
+  url?: string;                     // required for Mattermost; not needed for Slack (Socket Mode)
+  botToken?: string;                // single-bot shorthand (backward compatible)
   bots?: Record<string, BotConfig>; // multi-bot: name → config
 }
 
