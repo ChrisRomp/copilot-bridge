@@ -8,7 +8,7 @@ This guide walks you through installing and configuring copilot-bridge from scra
 |-------------|---------|-------|
 | **Node.js** | 20+ | [nodejs.org](https://nodejs.org/) |
 | **GitHub Copilot CLI** | latest | Installed automatically via `npm install` (bundled in `@github/copilot-sdk`) |
-| **Mattermost** | 7+ | Self-hosted or cloud instance with admin access to create bots |
+| **Chat platform** | — | At least one: **Mattermost** 7+ or **Slack** workspace with admin access to create apps/bots |
 
 > [!TIP]
 > **Need a Mattermost server?** See [mattermost.com/install](https://mattermost.com/install/) for all options, including:
@@ -16,6 +16,8 @@ This guide walks you through installing and configuring copilot-bridge from scra
 > - [DigitalOcean 1-Click](https://mattermost.com/blog/install-mattermost-digitalocean/) — ready-made droplet
 > - [Hostinger VPS](https://www.hostinger.com/vps/docker/mattermost) — managed Docker hosting
 > - [Docker Compose example](../examples/docker/) — sample stack with PostgreSQL and Cloudflare Tunnel
+>
+> **Using Slack?** You just need a Slack workspace where you can create apps. The `init` wizard generates a manifest URL that pre-fills all the required permissions.
 
 ### Authentication
 
@@ -73,11 +75,12 @@ copilot-bridge init
 
 The wizard walks you through:
 1. Prerequisite validation
-2. Mattermost URL and bot token setup (validates via API)
-3. Channel configuration
-4. Default settings (model, trigger mode, threading)
-5. Config file generation
-6. Optional service installation
+2. Platform selection (Mattermost, Slack, or both)
+3. Platform-specific connection setup (URLs, tokens, app manifests)
+4. Channel configuration (with per-channel trigger mode and threading)
+5. Default settings (model, trigger mode, threading)
+6. Config file generation (with backup if updating)
+7. Optional service installation
 
 ### Manual Setup
 
@@ -113,6 +116,26 @@ cp config.sample.json ~/.copilot-bridge/config.json
 
 With an empty `channels` array, the bridge still works — it auto-discovers DM conversations.
 
+**Slack (single bot, DMs only):**
+
+```json
+{
+  "platforms": {
+    "slack": {
+      "bots": {
+        "copilot": {
+          "token": "xoxb-YOUR-BOT-TOKEN",
+          "appToken": "xapp-YOUR-APP-TOKEN"
+        }
+      }
+    }
+  },
+  "channels": []
+}
+```
+
+Slack uses Socket Mode (WebSocket) — no public URL or webhook endpoint needed.
+
 **Multi-bot with group channels:**
 
 ```json
@@ -146,7 +169,10 @@ With an empty `channels` array, the bridge still works — it auto-discovers DM 
 
 See [Configuration](configuration.md) for the full reference.
 
-#### 3. Create Mattermost bot accounts
+#### 3. Create bot accounts
+
+<details>
+<summary>Mattermost</summary>
 
 In Mattermost as an admin:
 
@@ -159,15 +185,34 @@ In Mattermost as an admin:
 For group channels, add the bot to each channel:
 - Open the channel → **Channel Settings** → **Members** → **Add Members** → search for the bot
 
+</details>
+
+<details>
+<summary>Slack</summary>
+
+The easiest way is to use `copilot-bridge init` — it generates a manifest URL that pre-fills all permissions. For manual setup:
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From a manifest**
+2. Select your workspace and paste the manifest (or use `init` to generate one)
+3. Go to **OAuth & Permissions** → **Install to Workspace** → copy the **Bot User OAuth Token** (`xoxb-...`)
+4. Go to **Basic Information** → **App-Level Tokens** → **Generate Token** with `connections:write` scope → copy the token (`xapp-...`)
+5. Add both tokens to your `config.json` under `platforms.slack.bots`
+
+Required bot scopes: `chat:write`, `channels:history`, `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `im:write`, `files:read`, `files:write`, `reactions:read`, `reactions:write`, `users:read`
+
+To enable DMs, go to **App Home** and check **Allow users to send Slash commands and messages from the messages tab**.
+
+</details>
+
 > [!NOTE]
 > DMs don't require any channel setup — just message the bot directly.
 
 #### 4. Find channel IDs
 
-For group channels, you need the Mattermost channel ID:
-- In Mattermost, open the channel
-- Click the channel name → **View Info**
-- Copy the **ID** field
+For group channels, you need the platform-specific channel ID:
+
+- **Mattermost**: Open the channel → click the channel name → **View Info** → copy the **ID** field
+- **Slack**: Right-click the channel name → **View channel details** → copy the **Channel ID** at the bottom
 
 ## Validate Your Setup
 
@@ -188,9 +233,9 @@ Prerequisites
 
 Configuration
 ✅ Config: ~/.copilot-bridge/config.json
-✅ Config structure (platforms.mattermost present)
+✅ Config structure valid
 
-Mattermost
+Platforms
 ✅ Mattermost: https://chat.example.com (reachable)
 ✅ Bot "copilot" (token valid, admin)
 
@@ -343,7 +388,7 @@ When the bridge starts for the first time:
    - `AGENTS.md` — system prompt defining the bot's role, tools, and constraints. Admin bots get an admin-specific template with bridge management capabilities; regular bots get a sandboxed template. **Customize this file** to shape your bot's behavior.
    - `MEMORY.md` — persistent memory file the bot can read/write across sessions
    - These files are only created if they don't already exist — your customizations are safe across restarts
-4. **WebSocket connected** to Mattermost
+4. **Connected** to configured platforms (Mattermost via WebSocket, Slack via Socket Mode)
 5. **Listening** for messages
 
 The bridge is ready when you see the "listening for messages" log.
@@ -381,12 +426,14 @@ See the [full configuration reference](configuration.md) and [architecture overv
 
 | Issue | Likely Cause | Fix |
 |-------|-------------|-----|
-| "Config file not found" | Missing config | Run `npm run init` or copy `config.sample.json` to `~/.copilot-bridge/config.json` |
+| "Config file not found" | Missing config | Run `copilot-bridge init` or copy `config.sample.json` to `~/.copilot-bridge/config.json` |
 | `better-sqlite3` fails during `npm install` | Missing native build tools | `sudo apt-get install -y python3-full build-essential` (Linux) |
-| Bot doesn't respond | Token invalid or bot not in channel | Run `npm run check` to diagnose |
-| "WebSocket closed" | Bad Mattermost URL or token | Verify URL and token in config |
+| Bot doesn't respond | Token invalid or bot not in channel | Run `copilot-bridge check` to diagnose |
+| "WebSocket closed" (Mattermost) | Bad URL or token | Verify URL and token in config |
+| "Socket Mode" errors (Slack) | Invalid app token | Verify `appToken` starts with `xapp-` and has `connections:write` scope |
+| Can't DM the Slack bot | Messages tab not enabled | In Slack app settings → App Home → enable "Allow users to send messages" |
 | Copilot errors on first message | CLI not authenticated | Set `COPILOT_GITHUB_TOKEN` or run `gh auth login` |
 | Service won't start | Wrong paths in service file | Check `WorkingDirectory` and `ExecStart` paths |
 | Permission denied on files | Agent working outside workspace | Grant access via `allowPaths` in config or admin `grant_path_access` tool |
 
-Run `npm run check` at any time to validate your entire setup.
+Run `copilot-bridge check` (or `npm run check` from source) at any time to validate your entire setup.
