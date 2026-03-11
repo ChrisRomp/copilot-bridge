@@ -105,6 +105,8 @@ When no `access` block is present, the bot operates in **open** mode (backward c
 
 The access check matches each entry against both the user's platform ID and username, so either format works.
 
+> **Note:** Access control requires the `bots` config format (not the `botToken` shorthand). If you're using `botToken`, switch to the `bots` format to add access control.
+
 ### Denied user behavior
 
 Messages from unauthorized users are **silently dropped** — no response is sent. Drops are logged at `DEBUG` level for troubleshooting.

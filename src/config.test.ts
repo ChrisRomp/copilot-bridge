@@ -692,6 +692,12 @@ describe('access config validation', () => {
     expect(getConfig().platforms.mattermost?.bots?.copilot?.access).toBeUndefined();
   });
 
+  it('rejects null access', () => {
+    const cfg = makeConfig({ access: null });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    expect(() => loadConfig(configFile)).toThrow(/access must be an object/);
+  });
+
   it('rejects invalid mode', () => {
     const cfg = makeConfig({ access: { mode: 'deny' } });
     fs.writeFileSync(configFile, JSON.stringify(cfg));

@@ -104,6 +104,7 @@ export interface InboundReaction {
   platform: string;
   channelId: string;
   userId: string;
+  username?: string;
   postId: string;
   emoji: string;
   action: 'added' | 'removed';

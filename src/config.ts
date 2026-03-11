@@ -11,8 +11,8 @@ const VALID_ACCESS_MODES = ['allowlist', 'blocklist', 'open'];
 
 /** Validate an access config block on a bot. Throws on invalid input. */
 function validateAccessConfig(platformName: string, botName: string, access: any): void {
-  if (!access) return;
-  if (typeof access !== 'object') throw new Error(`Bot "${platformName}:${botName}" access must be an object`);
+  if (access === undefined) return;
+  if (access === null || typeof access !== 'object') throw new Error(`Bot "${platformName}:${botName}" access must be an object`);
   if (!VALID_ACCESS_MODES.includes(access.mode)) {
     throw new Error(`Bot "${platformName}:${botName}" access.mode must be one of: ${VALID_ACCESS_MODES.join(', ')}`);
   }

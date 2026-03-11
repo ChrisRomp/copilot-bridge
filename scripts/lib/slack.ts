@@ -164,9 +164,18 @@ export async function resolveSlackUser(botToken: string, handle: string): Promis
       for (const member of data.members ?? []) {
         if (member.deleted || member.is_bot) continue;
         const name = (member.name ?? '').toLowerCase();
+        // Prefer unique handle (member.name) over display/real name for security
+        if (name === normalized) {
+          return { userId: member.id, displayName: member.profile?.display_name || member.real_name || member.name };
+        }
+      }
+
+      // Second pass: try display_name and real_name (less reliable, not unique)
+      for (const member of data.members ?? []) {
+        if (member.deleted || member.is_bot) continue;
         const displayName = member.profile?.display_name_normalized?.toLowerCase() ?? '';
         const realName = member.profile?.real_name_normalized?.toLowerCase() ?? '';
-        if (name === normalized || displayName === normalized || realName === normalized) {
+        if (displayName === normalized || realName === normalized) {
           return { userId: member.id, displayName: member.profile?.display_name || member.real_name || member.name };
         }
       }
