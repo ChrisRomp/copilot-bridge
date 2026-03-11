@@ -3,13 +3,13 @@
  * Determines whether a user is allowed to interact with a bot based on access config.
  *
  * Two levels are supported:
- *   1. Platform-level — applies to all bots on a platform (takes precedence)
- *   2. Bot-level — per-bot override
+ *   1. Platform-level — inherited by all bots on a platform
+ *   2. Bot-level — can grant additional users beyond platform
  *
- * If the platform denies a user, the bot-level config cannot override that.
+ * Access is additive (union): a user is allowed if they pass EITHER level's allowlist.
+ * Platform blocklist always wins — blocked users are denied regardless of bot config.
  *
  * SECURITY: When neither level is configured, access defaults to DENY.
- * If only one level is configured, that level decides alone.
  * Use mode: "open" to explicitly allow all users at a given level.
  */
 
@@ -34,12 +34,12 @@ function evaluateAccess(userId: string, username: string, access: AccessConfig):
  *
  * Resolution logic:
  *   - Neither configured → deny (secure by default)
- *   - Only platform configured → platform decides
- *   - Only bot configured → bot decides
- *   - Both configured → both must allow (platform checked first)
+ *   - Blocklist at either level → blocked users always denied
+ *   - Allowlist is additive: user passes if listed at platform OR bot level
+ *   - Only one level configured → that level decides alone
  *
- * @param botAccess - Bot-level access config
- * @param platformAccess - Platform-level access config (checked first, takes precedence)
+ * @param botAccess - Bot-level access config (can grant additional users)
+ * @param platformAccess - Platform-level access config (inherited by all bots)
  */
 export function checkUserAccess(
   userId: string,
@@ -53,11 +53,13 @@ export function checkUserAccess(
   // Neither configured → deny (secure by default)
   if (!hasPlatform && !hasBot) return false;
 
-  // Platform configured → must pass platform gate
-  if (hasPlatform && !evaluateAccess(userId, username, platformAccess)) return false;
+  // Blocklists always deny — check both levels
+  if (hasPlatform && platformAccess.mode === 'blocklist' && !evaluateAccess(userId, username, platformAccess)) return false;
+  if (hasBot && botAccess.mode === 'blocklist' && !evaluateAccess(userId, username, botAccess)) return false;
 
-  // Bot configured → must pass bot gate
-  if (hasBot && !evaluateAccess(userId, username, botAccess)) return false;
+  // Allowlists are additive — pass if either level allows
+  if (hasPlatform && evaluateAccess(userId, username, platformAccess)) return true;
+  if (hasBot && evaluateAccess(userId, username, botAccess)) return true;
 
-  return true;
+  return false;
 }

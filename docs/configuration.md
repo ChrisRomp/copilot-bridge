@@ -67,9 +67,9 @@ If you only need one bot, use `botToken` instead of `bots`:
 
 ## User Access Control
 
-Control which users can interact with bots using the `access` block. Access can be set at **platform level** (applies to all bots on that platform) and/or **bot level** (per-bot override).
+Control which users can interact with bots using the `access` block. Access can be set at **platform level** (inherited by all bots) and/or **bot level** (grants additional users for that bot).
 
-**Platform-level access takes precedence** — if the platform denies a user, the bot-level config cannot override that. Both layers must allow the user for access to be granted.
+**Allowlists are additive** — a user is allowed if they appear in the platform allowlist OR the bot allowlist. Platform users inherit access to all bots; bot-level users only get access to that specific bot. **Blocklists always win** — a blocked user is denied regardless of allowlists at either level.
 
 ```json
 {
@@ -82,14 +82,17 @@ Control which users can interact with bots using the `access` block. Access can 
       },
       "bots": {
         "copilot": {
-          "token": "BOT_TOKEN",
+          "token": "BOT_TOKEN"
+        },
+        "alice": {
+          "token": "BOT_TOKEN_2",
           "access": {
             "mode": "allowlist",
-            "users": ["chris", "alice"]
+            "users": ["alex"]
           }
         },
         "bob": {
-          "token": "BOT_TOKEN_2"
+          "token": "BOT_TOKEN_3"
         }
       }
     }
@@ -98,9 +101,9 @@ Control which users can interact with bots using the `access` block. Access can 
 ```
 
 In this example:
-- **Platform level**: only `chris` can use any bot on this Mattermost instance
-- **copilot bot**: additionally restricts to `chris` and `alice` — but since the platform only allows `chris`, effectively only `chris` can use copilot
-- **bob bot**: no bot-level access block, so it inherits the platform allowlist — only `chris`
+- **chris** can talk to all bots (platform allowlist inherited everywhere)
+- **alex** can only talk to **alice** (bot-level allowlist on alice)
+- **bob bot**: no bot-level access, so only platform users (chris) can use it
 
 ### Access modes
 
@@ -112,14 +115,15 @@ In this example:
 
 ### Resolution logic
 
-Access is evaluated at each configured level independently:
+Access is **additive** across levels:
 
 - **Neither level configured** → deny all (secure by default)
 - **Only platform configured** → platform decides alone
 - **Only bot configured** → bot decides alone
-- **Both configured** → both must allow (platform checked first)
+- **Both configured (allowlists)** → user passes if listed at **either** level (union)
+- **Blocklist at any level** → always denies matched users, regardless of allowlists
 
-An unconfigured level (no `access` block) is **skipped**, not treated as deny. This lets you set a platform-wide allowlist without needing to repeat it on every bot.
+This means platform allowlist users inherit access to every bot, while bot-level allowlists can grant additional users for specific bots.
 
 > ⚠️ **Breaking change (v0.8.0):** Previously, missing `access` defaulted to open. Now, if no `access` block exists at either level, all users are denied. Add `"access": { "mode": "open" }` at the platform or bot level to restore the previous behavior, or run `copilot-bridge init` to configure access during setup.
 
