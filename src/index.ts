@@ -243,7 +243,7 @@ async function main(): Promise<void> {
   configWatcher.onReload((result) => {
     if (!result.success) return;
     // Re-resolve Slack access handles after reload (config was re-read from disk).
-    // Awaited via void async IIFE to prevent access checks during resolution window.
+    // Fires asynchronously — messages during resolution use the old resolved values.
     void (async () => {
       try { await resolveSlackAccessUsers(getConfig()); }
       catch (err: any) { log.warn(`Slack access resolution after reload failed: ${err.message}`); }

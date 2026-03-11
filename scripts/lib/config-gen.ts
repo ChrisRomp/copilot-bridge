@@ -13,7 +13,7 @@ export interface BotEntry {
   admin: boolean;
   agent?: string;
   appToken?: string; // Slack Socket Mode app-level token
-  access?: { mode: 'allowlist' | 'blocklist' | 'open'; users: string[] };
+  access?: { mode: 'allowlist' | 'blocklist' | 'open'; users?: string[] };
 }
 
 export interface ChannelEntry {

@@ -9,19 +9,22 @@ const log = createLogger('config');
 
 const VALID_ACCESS_MODES = ['allowlist', 'blocklist', 'open'];
 
-/** Validate an access config block on a bot. Throws on invalid input. */
-function validateAccessConfig(platformName: string, botName: string, access: any): void {
+/** Validate an access config block. Throws on invalid input. Normalizes entries in-place. */
+function validateAccessConfig(platformName: string, label: string, access: any): void {
   if (access === undefined) return;
-  if (access === null || typeof access !== 'object') throw new Error(`Bot "${platformName}:${botName}" access must be an object`);
+  if (access === null || typeof access !== 'object') throw new Error(`${platformName}:${label} access must be an object`);
   if (!VALID_ACCESS_MODES.includes(access.mode)) {
-    throw new Error(`Bot "${platformName}:${botName}" access.mode must be one of: ${VALID_ACCESS_MODES.join(', ')}`);
+    throw new Error(`${platformName}:${label} access.mode must be one of: ${VALID_ACCESS_MODES.join(', ')}`);
   }
   if (access.users !== undefined) {
-    if (!Array.isArray(access.users)) throw new Error(`Bot "${platformName}:${botName}" access.users must be an array`);
-    for (const u of access.users) {
+    if (!Array.isArray(access.users)) throw new Error(`${platformName}:${label} access.users must be an array`);
+    for (let i = 0; i < access.users.length; i++) {
+      const u = access.users[i];
       if (typeof u !== 'string' || u.trim().length === 0) {
-        throw new Error(`Bot "${platformName}:${botName}" access.users entries must be non-empty strings`);
+        throw new Error(`${platformName}:${label} access.users entries must be non-empty strings`);
       }
+      // Normalize: strip leading @ and whitespace
+      access.users[i] = u.trim().replace(/^@/, '');
     }
   }
 }

@@ -17,6 +17,7 @@ The bridge watches `config.json` for changes and hot-applies safe settings autom
 - Defaults: `model`, `agent`, `triggerMode`, `threadedReplies`, `verbose`, `permissionMode`
 - Permissions: `allow`, `deny`, `allowPaths`, `allowUrls`
 - Bot config: `agent`, `admin` flag, `access` (user allowlist/blocklist)
+- Platform-level `access` (user allowlist/blocklist)
 - New channel entries
 
 **Restart required (config updates but adapters keep old values):**
