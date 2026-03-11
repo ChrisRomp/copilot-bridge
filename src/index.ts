@@ -12,10 +12,11 @@ import { initScheduler, stopAll as stopScheduler, listJobs, removeJob, pauseJob,
 import { markBusy, markIdle, markIdleImmediate, isBusy, waitForChannelIdle, cancelIdleDebounce } from './core/channel-idle.js';
 import { LoopDetector, MAX_IDENTICAL_CALLS } from './core/loop-detector.js';
 import { getTaskHistory } from './state/store.js';
+import { checkUserAccess } from './core/access-control.js';
 import { createLogger } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment } from './types.js';
+import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig } from './types.js';
 
 const log = createLogger('bridge');
 
@@ -132,6 +133,63 @@ function getAdapterForChannel(channelId: string): { adapter: ChannelAdapter; str
   return { adapter, streaming };
 }
 
+const SLACK_UID_PATTERN = /^U[A-Z0-9]{6,}$/;
+
+/**
+ * Resolve non-UID entries in Slack bot access configs.
+ * Handles added manually as usernames are looked up via Slack API and replaced with UIDs.
+ */
+async function resolveSlackAccessUsers(config: AppConfig): Promise<void> {
+  const slackPlatform = config.platforms.slack;
+  if (!slackPlatform?.bots) return;
+
+  for (const [botName, bot] of Object.entries(slackPlatform.bots)) {
+    if (!bot.access?.users?.length) continue;
+
+    const unresolved = bot.access.users.filter(u => !SLACK_UID_PATTERN.test(u));
+    if (unresolved.length === 0) continue;
+
+    log.info(`Resolving ${unresolved.length} Slack handle(s) for bot "${botName}" access list...`);
+    const resolved: string[] = [];
+    for (const handle of unresolved) {
+      try {
+        const resp = await fetch(`https://slack.com/api/users.list?limit=200`, {
+          headers: { 'Authorization': `Bearer ${bot.token}` },
+        });
+        if (!resp.ok) { resolved.push(handle); continue; }
+        const data = await resp.json() as any;
+        if (!data.ok) { resolved.push(handle); continue; }
+
+        const normalized = handle.replace(/^@/, '').toLowerCase();
+        let found = false;
+        for (const member of data.members ?? []) {
+          if (member.deleted || member.is_bot) continue;
+          const name = (member.name ?? '').toLowerCase();
+          const displayName = member.profile?.display_name_normalized?.toLowerCase() ?? '';
+          const realName = member.profile?.real_name_normalized?.toLowerCase() ?? '';
+          if (name === normalized || displayName === normalized || realName === normalized) {
+            log.info(`  Resolved "${handle}" → ${member.id}`);
+            resolved.push(member.id);
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          log.warn(`  Could not resolve Slack handle "${handle}" — keeping as-is`);
+          resolved.push(handle);
+        }
+      } catch {
+        log.warn(`  Failed to resolve Slack handle "${handle}" — keeping as-is`);
+        resolved.push(handle);
+      }
+    }
+
+    // Replace handles with resolved UIDs in the live config
+    const uidEntries = bot.access.users.filter(u => SLACK_UID_PATTERN.test(u));
+    bot.access.users = [...uidEntries, ...resolved];
+  }
+}
+
 async function main(): Promise<void> {
   log.info('copilot-bridge starting...');
 
@@ -232,6 +290,9 @@ async function main(): Promise<void> {
       log.info(`Registered bot "${botName}" for ${platformName}`);
     }
   }
+
+  // Resolve non-UID Slack access entries at startup
+  await resolveSlackAccessUsers(config);
 
   // Wire up session events → streaming output (serialized per channel)
   sessionManager.onSessionEvent((sessionId, channelId, event) => {
@@ -435,6 +496,10 @@ async function handleMidTurnMessage(
     if (key.startsWith(`${platformName}:`) && msg.userId === a.getBotUserId()) return;
   }
 
+  // Check user-level access control
+  const botInfo = getPlatformBots(platformName).get(botName);
+  if (botInfo?.access && !checkUserAccess(msg.userId, msg.username, botInfo.access)) return;
+
   if (!isConfiguredChannel(msg.channelId)) return;
 
   const assignedBot = getChannelBotName(msg.channelId);
@@ -608,6 +673,13 @@ async function handleInboundMessage(
   // Ignore messages from any bot we manage on this platform (prevents cross-bot loops)
   for (const [key, a] of botAdapters) {
     if (key.startsWith(`${platformName}:`) && msg.userId === a.getBotUserId()) return;
+  }
+
+  // Check user-level access control (reads live config — hot-reloadable)
+  const botInfo = getPlatformBots(platformName).get(botName);
+  if (botInfo?.access && !checkUserAccess(msg.userId, msg.username, botInfo.access)) {
+    log.debug(`User ${msg.username} (${msg.userId}) denied access to bot "${botName}" (${botInfo.access.mode})`);
+    return; // silent drop
   }
 
   // Auto-register DM channels for known bots

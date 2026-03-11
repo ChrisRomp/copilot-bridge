@@ -4,6 +4,13 @@ export interface BotConfig {
   appToken?: string;         // app-level token for Slack Socket Mode (xapp-...)
   agent?: string | null;     // default agent for this bot identity
   admin?: boolean;           // admin bots can manage all workspaces
+  access?: AccessConfig;     // user-level access control
+}
+
+// User-level access control
+export interface AccessConfig {
+  mode: 'allowlist' | 'blocklist' | 'open';
+  users?: string[];          // usernames (Mattermost) or UIDs (Slack)
 }
 
 // Platform configuration

@@ -134,3 +134,48 @@ export async function validateAppToken(appToken: string): Promise<{
     return { ok: false, error: err.message };
   }
 }
+
+/**
+ * Resolve a Slack username/handle to a user ID.
+ * Uses the users.list API with pagination to find a matching user.
+ * Handle is case-insensitive with leading @ stripped.
+ */
+export async function resolveSlackUser(botToken: string, handle: string): Promise<{
+  userId: string | null;
+  displayName?: string;
+  error?: string;
+}> {
+  const normalized = handle.replace(/^@/, '').toLowerCase();
+  let cursor: string | undefined;
+
+  try {
+    do {
+      const params = new URLSearchParams({ limit: '200' });
+      if (cursor) params.set('cursor', cursor);
+
+      const resp = await fetch(`https://slack.com/api/users.list?${params}`, {
+        headers: { 'Authorization': `Bearer ${botToken}` },
+      });
+      if (!resp.ok) return { userId: null, error: `HTTP ${resp.status}` };
+
+      const data = await resp.json() as any;
+      if (!data.ok) return { userId: null, error: data.error };
+
+      for (const member of data.members ?? []) {
+        if (member.deleted || member.is_bot) continue;
+        const name = (member.name ?? '').toLowerCase();
+        const displayName = member.profile?.display_name_normalized?.toLowerCase() ?? '';
+        const realName = member.profile?.real_name_normalized?.toLowerCase() ?? '';
+        if (name === normalized || displayName === normalized || realName === normalized) {
+          return { userId: member.id, displayName: member.profile?.display_name || member.real_name || member.name };
+        }
+      }
+
+      cursor = data.response_metadata?.next_cursor || undefined;
+    } while (cursor);
+
+    return { userId: null, error: `User "${handle}" not found` };
+  } catch (err: any) {
+    return { userId: null, error: err.message };
+  }
+}

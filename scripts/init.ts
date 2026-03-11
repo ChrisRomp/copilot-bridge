@@ -13,8 +13,29 @@ import { askRequired, askSecret, confirm, choose, pressEnter, closePrompts } fro
 import { runAllPrereqs, checkNodeVersion } from './lib/prerequisites.js';
 import { pingServer, validateBotToken, checkChannelAccess, getChannelInfo } from './lib/mattermost.js';
 import { buildConfig, writeConfig, configExists, getConfigPath, getConfigDir, readExistingConfig, mergeConfig, type BotEntry, type ChannelEntry, type ConfigDefaults } from './lib/config-gen.js';
-import { generateManifestUrl, validateSlackToken, validateAppToken } from './lib/slack.js';
+import { generateManifestUrl, validateSlackToken, validateAppToken, resolveSlackUser } from './lib/slack.js';
 import { detectPlatform, getServiceStatus } from './lib/service.js';
+
+async function promptAllowlist(botName: string): Promise<{ mode: 'allowlist'; users: string[] } | undefined> {
+  info(`\nAccess control: who can use "${botName}"?`);
+  dim('By default, only users you list here can interact with this bot.\n');
+
+  let yourHandle = await askRequired('Your username (you\'ll be added to the allowlist)');
+  yourHandle = yourHandle.replace(/^@/, '').trim();
+  const users = [yourHandle];
+
+  const extra = await confirm('Add more users to the allowlist?', false);
+  if (extra) {
+    const moreRaw = await askRequired('Additional usernames (comma-separated)');
+    for (const u of moreRaw.split(',')) {
+      const trimmed = u.replace(/^@/, '').trim();
+      if (trimmed.length > 0) users.push(trimmed);
+    }
+  }
+
+  success(`Allowlist: ${users.join(', ')}`);
+  return { mode: 'allowlist', users };
+}
 
 async function main() {
   const isCli = process.env.COPILOT_BRIDGE_CLI === '1';
@@ -164,6 +185,8 @@ async function main() {
           admin: !!isAdmin,
         });
         success(`Added bot "${validation.bot.username}"${isAdmin ? ' (admin)' : ''}`);
+        const access = await promptAllowlist(validation.bot.username);
+        if (access) bots[bots.length - 1].access = access;
       } else {
         warn(isCli
           ? 'Token validation failed. The token was still added — verify it later with "copilot-bridge check".'
@@ -171,6 +194,8 @@ async function main() {
         let name = await askRequired('Bot username (for config)');
         name = name.replace(/^@/, '');
         bots.push({ name, token, admin: false });
+        const access = await promptAllowlist(name);
+        if (access) bots[bots.length - 1].access = access;
       }
 
       if (bots.length >= 1) {
@@ -289,6 +314,22 @@ async function main() {
     });
     success(`Added Slack bot "${slackBotName}"${isAdmin ? ' (admin)' : ''}`);
 
+    // Allowlist — resolve Slack handles to UIDs
+    const access = await promptAllowlist(slackBotName);
+    if (access) {
+      const resolvedUsers: string[] = [];
+      for (const handle of access.users) {
+        const result = await resolveSlackUser(botToken, handle);
+        if (result.userId) {
+          success(`  Resolved "${handle}" → ${result.userId}${result.displayName ? ` (${result.displayName})` : ''}`);
+          resolvedUsers.push(result.userId);
+        } else {
+          warn(`  Could not resolve "${handle}"${result.error ? `: ${result.error}` : ''} — storing as-is`);
+          resolvedUsers.push(handle);
+        }
+      }
+      slackBots[slackBots.length - 1].access = { mode: 'allowlist', users: resolvedUsers };
+    }
     // Slack channels (DMs auto-discovered, channels optional)
     blank();
     info('Slack DMs work automatically. You can optionally configure specific channels.');

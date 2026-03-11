@@ -623,3 +623,96 @@ describe('interAgent config validation', () => {
     expect(getConfig().interAgent?.allow?.summarizer?.canBeCalledBy).toEqual(['*']);
   });
 });
+
+describe('access config validation', () => {
+  let tmpDir: string;
+  let configFile: string;
+
+  beforeEach(() => {
+    _resetConfigForTest();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acl-test-'));
+    configFile = path.join(tmpDir, 'config.json');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeConfig(overrides: Record<string, any> = {}): Record<string, any> {
+    return {
+      platforms: {
+        mattermost: {
+          url: 'http://localhost:8065',
+          bots: { copilot: { token: 'test-token-123', ...overrides } },
+        },
+      },
+      channels: [
+        {
+          id: 'ch1',
+          platform: 'mattermost',
+          bot: 'copilot',
+          name: 'test',
+          workingDirectory: os.tmpdir(),
+          triggerMode: 'all',
+          threadedReplies: false,
+          verbose: false,
+        },
+      ],
+    };
+  }
+
+  it('accepts valid allowlist access config', () => {
+    const cfg = makeConfig({ access: { mode: 'allowlist', users: ['chris', 'alice'] } });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    loadConfig(configFile);
+    const config = getConfig();
+    const bot = config.platforms.mattermost?.bots?.copilot;
+    expect(bot?.access?.mode).toBe('allowlist');
+    expect(bot?.access?.users).toEqual(['chris', 'alice']);
+  });
+
+  it('accepts valid blocklist access config', () => {
+    const cfg = makeConfig({ access: { mode: 'blocklist', users: ['spambot'] } });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    loadConfig(configFile);
+    expect(getConfig().platforms.mattermost?.bots?.copilot?.access?.mode).toBe('blocklist');
+  });
+
+  it('accepts open mode with no users', () => {
+    const cfg = makeConfig({ access: { mode: 'open' } });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    loadConfig(configFile);
+    expect(getConfig().platforms.mattermost?.bots?.copilot?.access?.mode).toBe('open');
+  });
+
+  it('accepts config with no access block (backward compat)', () => {
+    const cfg = makeConfig();
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    loadConfig(configFile);
+    expect(getConfig().platforms.mattermost?.bots?.copilot?.access).toBeUndefined();
+  });
+
+  it('rejects invalid mode', () => {
+    const cfg = makeConfig({ access: { mode: 'deny' } });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    expect(() => loadConfig(configFile)).toThrow(/access\.mode/);
+  });
+
+  it('rejects non-array users', () => {
+    const cfg = makeConfig({ access: { mode: 'allowlist', users: 'chris' } });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    expect(() => loadConfig(configFile)).toThrow(/access\.users must be an array/);
+  });
+
+  it('rejects empty string in users array', () => {
+    const cfg = makeConfig({ access: { mode: 'allowlist', users: ['chris', ''] } });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    expect(() => loadConfig(configFile)).toThrow(/non-empty strings/);
+  });
+
+  it('rejects non-object access', () => {
+    const cfg = makeConfig({ access: 'allowlist' });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    expect(() => loadConfig(configFile)).toThrow(/access must be an object/);
+  });
+});
