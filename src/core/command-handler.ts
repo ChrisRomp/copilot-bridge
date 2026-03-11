@@ -1,5 +1,5 @@
 import { setChannelPrefs, getChannelPrefs, getGlobalSetting, setGlobalSetting } from '../state/store.js';
-import { discoverAgentDefinitions } from './inter-agent.js';
+import { discoverAgentDefinitions, discoverAgentNames } from './inter-agent.js';
 
 const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 const TRUTHY = new Set(['on', 'true', 'yes', '1', 'enable', 'enabled']);
@@ -219,12 +219,12 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           response: '✅ Agent deselected (using default Copilot)',
         };
       }
-      // Validate agent exists
+      // Validate agent exists (lightweight — reads filenames only)
       const agentWorkDir = channelMeta?.workingDirectory;
       if (agentWorkDir) {
-        const available = discoverAgentDefinitions(agentWorkDir);
+        const available = discoverAgentNames(agentWorkDir);
         if (!available.has(agent)) {
-          const names = [...available.keys()];
+          const names = [...available];
           const list = names.length > 0
             ? `Available agents: ${names.map(n => `**${n}**`).join(', ')}`
             : 'No agent definitions found in this workspace.';
@@ -256,7 +256,10 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       for (const [name, def] of agents) {
         const current = name === currentAgent ? ' ← current' : '';
         // Extract description from first non-heading, non-empty line
-        const descLine = def.content.split('\n').find(l => l.trim() && !l.startsWith('#'));
+        const descLine = def.content.split('\n').find(l => {
+          const trimmed = l.trim();
+          return trimmed && !trimmed.startsWith('#');
+        });
         const desc = descLine ? ` — ${descLine.trim().slice(0, 80)}` : '';
         lines.push(`• **${name}**${desc}${current}`);
       }

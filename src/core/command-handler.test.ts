@@ -147,4 +147,18 @@ describe('/agents command', () => {
     const result = handleCommand('ch-1', '/agents', undefined, undefined, { workingDirectory: tmpDir });
     expect(result.response).toContain('Handles network queries');
   });
+
+  it('skips indented headings when extracting description', () => {
+    const indentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cmd-test-indent-'));
+    try {
+      const agentsDir = path.join(indentDir, 'agents');
+      fs.mkdirSync(agentsDir);
+      fs.writeFileSync(path.join(agentsDir, 'test.agent.md'), '  # Indented Heading\nActual description line.');
+      const result = handleCommand('ch-1', '/agents', undefined, undefined, { workingDirectory: indentDir });
+      expect(result.response).toContain('Actual description line');
+      expect(result.response).not.toContain('Indented Heading');
+    } finally {
+      fs.rmSync(indentDir, { recursive: true, force: true });
+    }
+  });
 });

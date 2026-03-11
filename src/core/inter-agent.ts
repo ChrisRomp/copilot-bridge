@@ -211,6 +211,28 @@ export function discoverAgentDefinitions(workspacePath: string): Map<string, Age
 }
 
 /**
+ * Lightweight agent name discovery — reads only filenames, not file contents.
+ * Use for validation when you only need to check if an agent name exists.
+ */
+export function discoverAgentNames(workspacePath: string): Set<string> {
+  const agentsDir = path.join(workspacePath, 'agents');
+  const names = new Set<string>();
+
+  if (!fs.existsSync(agentsDir)) return names;
+
+  try {
+    for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.agent.md')) continue;
+      names.add(entry.name.replace(/\.agent\.md$/, ''));
+    }
+  } catch (err: any) {
+    log.warn(`Failed to scan agents directory ${agentsDir}: ${err?.message}`);
+  }
+
+  return names;
+}
+
+/**
  * Resolve which agent definition to use for an ephemeral session.
  * Priority: explicit agent param → bot's default agent → none.
  */

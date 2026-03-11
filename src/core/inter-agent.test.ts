@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   canCall, createContext, extendContext,
   buildWorkspacePrompt, buildCallerPrompt,
-  discoverAgentDefinitions, resolveAgentDefinition,
+  discoverAgentDefinitions, discoverAgentNames, resolveAgentDefinition,
   type InterAgentContext, type BotWorkspaceEntry,
 } from './inter-agent.js';
 import type { InterAgentConfig } from '../types.js';
@@ -267,6 +267,36 @@ describe('discoverAgentDefinitions', () => {
 
     const defs = discoverAgentDefinitions(tmpDir);
     expect(defs.size).toBe(0);
+  });
+});
+
+describe('discoverAgentNames', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ia-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns empty set when agents/ directory does not exist', () => {
+    const names = discoverAgentNames(tmpDir);
+    expect(names.size).toBe(0);
+  });
+
+  it('discovers agent names without reading content', () => {
+    const agentsDir = path.join(tmpDir, 'agents');
+    fs.mkdirSync(agentsDir);
+    fs.writeFileSync(path.join(agentsDir, 'network.agent.md'), '# Network Agent\nHandles network queries.');
+    fs.writeFileSync(path.join(agentsDir, 'hvac.agent.md'), '# HVAC Agent\nHandles HVAC queries.');
+    fs.writeFileSync(path.join(agentsDir, 'readme.md'), 'Not an agent file');
+
+    const names = discoverAgentNames(tmpDir);
+    expect(names.size).toBe(2);
+    expect(names.has('network')).toBe(true);
+    expect(names.has('hvac')).toBe(true);
   });
 });
 
