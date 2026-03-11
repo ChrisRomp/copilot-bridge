@@ -1,4 +1,5 @@
 import { setChannelPrefs, getChannelPrefs, getGlobalSetting, setGlobalSetting } from '../state/store.js';
+import { discoverAgentDefinitions } from './inter-agent.js';
 
 const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 const TRUTHY = new Set(['on', 'true', 'yes', '1', 'enable', 'enabled']);
@@ -210,12 +211,59 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
 
     case 'agent': {
       const agent = parsed.args || null;
+      if (!agent) {
+        return {
+          handled: true,
+          action: 'switch_agent',
+          payload: null,
+          response: '✅ Agent deselected (using default Copilot)',
+        };
+      }
+      // Validate agent exists
+      const agentWorkDir = channelMeta?.workingDirectory;
+      if (agentWorkDir) {
+        const available = discoverAgentDefinitions(agentWorkDir);
+        if (!available.has(agent)) {
+          const names = [...available.keys()];
+          const list = names.length > 0
+            ? `Available agents: ${names.map(n => `**${n}**`).join(', ')}`
+            : 'No agent definitions found in this workspace.';
+          return {
+            handled: true,
+            response: `⚠️ Agent **${agent}** not found.\n${list}`,
+          };
+        }
+      }
       return {
         handled: true,
         action: 'switch_agent',
         payload: agent,
-        response: agent ? `✅ Switched to agent **${agent}**` : '✅ Agent deselected (using default Copilot)',
+        response: `✅ Switched to agent **${agent}**`,
       };
+    }
+
+    case 'agents': {
+      const agentsWorkDir = channelMeta?.workingDirectory;
+      if (!agentsWorkDir) {
+        return { handled: true, response: '⚠️ No workspace configured for this channel.' };
+      }
+      const agents = discoverAgentDefinitions(agentsWorkDir);
+      if (agents.size === 0) {
+        return { handled: true, response: 'No agent definitions found.\nPlace `*.agent.md` files in `<workspace>/agents/` to define agents.' };
+      }
+      const currentAgent = sessionInfo?.agent ?? null;
+      const lines = ['**Available Agents**', ''];
+      for (const [name, def] of agents) {
+        const current = name === currentAgent ? ' ← current' : '';
+        // Extract description from first non-heading, non-empty line
+        const descLine = def.content.split('\n').find(l => l.trim() && !l.startsWith('#'));
+        const desc = descLine ? ` — ${descLine.trim().slice(0, 80)}` : '';
+        lines.push(`• **${name}**${desc}${current}`);
+      }
+      if (currentAgent && !agents.has(currentAgent)) {
+        lines.push('', `⚠️ Current agent **${currentAgent}** has no definition file.`);
+      }
+      return { handled: true, response: lines.join('\n') };
     }
 
     case 'verbose': {
@@ -404,6 +452,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/resume [id]` — Resume current session (or a past one by ID)',
           '`/model [name]` — List models or switch model (fuzzy match)',
           '`/agent <name>` — Switch custom agent (empty to deselect)',
+          '`/agents` — List available agent definitions',
           '`/reasoning <level>` — Set reasoning effort (low/medium/high/xhigh)',
           '`/context` — Show context window usage',
           '`/verbose` — Toggle tool call visibility',

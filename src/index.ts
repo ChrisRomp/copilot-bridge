@@ -647,7 +647,7 @@ async function handleMidTurnMessage(
     // Commands with complex action handlers (skills, schedule, rules) defer to serialized path.
     const SAFE_MID_TURN = new Set([
       'context', 'status', 'help', 'verbose', 'autopilot', 'yolo',
-      'mcp', 'model', 'models', 'reasoning',
+      'mcp', 'model', 'models', 'reasoning', 'agents',
       'streamer-mode', 'on-air',
     ]);
 
