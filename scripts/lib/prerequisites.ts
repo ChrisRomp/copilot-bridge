@@ -4,6 +4,9 @@
  */
 
 import { execSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { CheckResult } from './output.js';
 
 export function checkNodeVersion(): CheckResult {
@@ -64,16 +67,25 @@ export function checkGitHubAuth(): CheckResult {
     return { status: 'pass', label: 'GitHub authenticated', detail: 'via gh CLI' };
   }
 
-  // Check if Copilot CLI has stored credentials
-  const copilotAuth = tryCommand('copilot auth status 2>&1');
-  if (copilotAuth && !copilotAuth.includes('not logged in')) {
-    return { status: 'pass', label: 'GitHub authenticated', detail: 'via Copilot CLI' };
+  // Check if Copilot CLI has stored credentials (~/.copilot/config.json)
+  try {
+    const copilotConfig = join(homedir(), '.copilot', 'config.json');
+    if (existsSync(copilotConfig)) {
+      const data = JSON.parse(readFileSync(copilotConfig, 'utf-8'));
+      const users = data.logged_in_users;
+      if (Array.isArray(users) && users.length > 0) {
+        const login = users[0].login ?? 'unknown';
+        return { status: 'pass', label: 'GitHub authenticated', detail: `via Copilot CLI (${login})` };
+      }
+    }
+  } catch {
+    // Fall through
   }
 
   return {
     status: 'warn',
     label: 'GitHub authentication',
-    detail: 'no token found — set COPILOT_GITHUB_TOKEN, run gh auth login, or run copilot auth login',
+    detail: 'no token found — set COPILOT_GITHUB_TOKEN, run gh auth login, or run copilot login',
   };
 }
 

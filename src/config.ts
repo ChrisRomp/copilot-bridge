@@ -22,11 +22,20 @@ function validateAndNormalize(raw: any): AppConfig {
   }
   for (const [name, platform] of Object.entries(raw.platforms)) {
     const p = platform as any;
-    if (!p.url) throw new Error(`Platform "${name}" missing "url"`);
-    if (!p.botToken && !p.bots) throw new Error(`Platform "${name}" needs either "botToken" or "bots"`);
-    if (p.bots) {
+    if (name === 'slack') {
+      // Slack uses Socket Mode — no URL needed
+      if (!p.bots) throw new Error('Platform "slack" requires "bots" with bot tokens');
       for (const [botName, bot] of Object.entries(p.bots)) {
-        if (!(bot as any).token) throw new Error(`Platform "${name}" bot "${botName}" missing "token"`);
+        if (!(bot as any).token) throw new Error(`Platform "slack" bot "${botName}" missing "token"`);
+        if (!(bot as any).appToken) throw new Error(`Platform "slack" bot "${botName}" missing "appToken" (required for Socket Mode)`);
+      }
+    } else {
+      if (!p.url) throw new Error(`Platform "${name}" missing "url"`);
+      if (!p.botToken && !p.bots) throw new Error(`Platform "${name}" needs either "botToken" or "bots"`);
+      if (p.bots) {
+        for (const [botName, bot] of Object.entries(p.bots)) {
+          if (!(bot as any).token) throw new Error(`Platform "${name}" bot "${botName}" missing "token"`);
+        }
       }
     }
   }
@@ -206,6 +215,8 @@ function diffConfigs(oldCfg: AppConfig, newCfg: AppConfig): { changes: string[];
         restartNeeded.push(`bot "${name}:${bName}": added (new adapter needed)`);
       } else if ((oldBot as BotConfig).token !== (newBot as BotConfig).token) {
         restartNeeded.push(`bot "${name}:${bName}": token changed`);
+      } else if ((oldBot as BotConfig).appToken !== (newBot as BotConfig).appToken) {
+        restartNeeded.push(`bot "${name}:${bName}": appToken changed`);
       } else {
         // Non-token bot fields are hot-reloadable (agent, admin)
         if (JSON.stringify(oldBot) !== JSON.stringify(newBot)) {
@@ -416,15 +427,15 @@ export function getChannelBotConfig(channelId: string): BotConfig | null {
  * Get all unique bot tokens for a platform, keyed by bot name.
  * For single-bot configs, returns { "default": token }.
  */
-export function getPlatformBots(platformName: string): Map<string, { token: string; agent?: string | null }> {
+export function getPlatformBots(platformName: string): Map<string, { token: string; appToken?: string; agent?: string | null }> {
   const config = getConfig();
   const platform = config.platforms[platformName];
   if (!platform) throw new Error(`Unknown platform "${platformName}"`);
 
-  const bots = new Map<string, { token: string; agent?: string | null }>();
+  const bots = new Map<string, { token: string; appToken?: string; agent?: string | null }>();
   if (platform.bots) {
     for (const [name, bot] of Object.entries(platform.bots)) {
-      bots.set(name, { token: bot.token, agent: bot.agent });
+      bots.set(name, { token: bot.token, appToken: bot.appToken, agent: bot.agent });
     }
   } else if (platform.botToken) {
     bots.set('default', { token: platform.botToken });

@@ -46,6 +46,10 @@ export async function confirm(question: string, defaultYes = true): Promise<bool
   return answer.toLowerCase().startsWith('y');
 }
 
+export async function pressEnter(message = 'Press Enter to continue...'): Promise<void> {
+  await ask(message);
+}
+
 export async function choose(question: string, options: string[], defaultIndex = 0): Promise<number> {
   console.log(`\n${question}`);
   for (let i = 0; i < options.length; i++) {
