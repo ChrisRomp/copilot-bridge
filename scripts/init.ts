@@ -82,8 +82,8 @@ async function main() {
 
   if (mergeMode && existingConfig) {
     // In merge mode, only offer platforms not yet configured
-    const hasMattermost = !!existingConfig.platforms.mattermost;
-    const hasSlack = !!existingConfig.platforms.slack;
+    const hasMattermost = !!existingConfig.platforms?.mattermost;
+    const hasSlack = !!existingConfig.platforms?.slack;
     const available: string[] = [];
     if (!hasMattermost) available.push('Mattermost');
     if (!hasSlack) available.push('Slack');

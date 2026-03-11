@@ -215,6 +215,8 @@ function diffConfigs(oldCfg: AppConfig, newCfg: AppConfig): { changes: string[];
         restartNeeded.push(`bot "${name}:${bName}": added (new adapter needed)`);
       } else if ((oldBot as BotConfig).token !== (newBot as BotConfig).token) {
         restartNeeded.push(`bot "${name}:${bName}": token changed`);
+      } else if ((oldBot as BotConfig).appToken !== (newBot as BotConfig).appToken) {
+        restartNeeded.push(`bot "${name}:${bName}": appToken changed`);
       } else {
         // Non-token bot fields are hot-reloadable (agent, admin)
         if (JSON.stringify(oldBot) !== JSON.stringify(newBot)) {

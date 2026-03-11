@@ -83,9 +83,12 @@ export function buildConfig(opts: {
   if (opts.slackBots && opts.slackBots.length > 0) {
     config.platforms.slack = { bots: {} };
     for (const bot of opts.slackBots) {
+      if (!bot.appToken) {
+        throw new Error(`Slack bot "${bot.name}" is missing required appToken`);
+      }
       config.platforms.slack!.bots![bot.name] = {
         token: bot.token,
-        appToken: bot.appToken!,
+        appToken: bot.appToken,
         ...(bot.admin ? { admin: true } : {}),
         ...(bot.agent ? { agent: bot.agent } : {}),
       };

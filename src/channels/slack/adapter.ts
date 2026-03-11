@@ -281,9 +281,10 @@ export class SlackAdapter implements ChannelAdapter {
       const channelId = message.channel;
       const ts = message.ts;
 
-      // Dedup
-      if (this.recentMessageTs.has(ts)) return;
-      this.trackMessage(ts, channelId);
+      // Dedup using composite key (ts is only unique within a channel)
+      const messageKey = `${channelId}:${ts}`;
+      if (this.recentMessageTs.has(messageKey)) return;
+      this.trackMessage(messageKey);
 
       // Detect DM vs channel
       // Slack channel IDs: C = public, G = group/private, D = DM
@@ -374,8 +375,8 @@ export class SlackAdapter implements ChannelAdapter {
     });
   }
 
-  private trackMessage(ts: string, _channelId: string): void {
-    this.recentMessageTs.add(ts);
+  private trackMessage(key: string): void {
+    this.recentMessageTs.add(key);
 
     if (this.recentMessageTs.size > SlackAdapter.MAX_RECENT_MESSAGES) {
       const iter = this.recentMessageTs.values();
@@ -388,7 +389,8 @@ export class SlackAdapter implements ChannelAdapter {
 
   /**
    * Parse a message reference into [channelId, ts].
-   * Inbound messages store postId as "channelId:ts".
+   * Inbound postIds are stored as "channelId:ts"; sendMessage returns bare "ts".
+   * Returns ['', ref] when no channel prefix is present.
    */
   private parseMessageRef(ref: string): [string, string] {
     const idx = ref.indexOf(':');
