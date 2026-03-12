@@ -919,17 +919,16 @@ export class SessionManager {
       log.warn('Failed to fetch model list for fallback resolution');
     }
 
+    const resolvedMcpServers = this.resolveMcpServers(workingDirectory);
+
     const createWithModel = async (model: string) => {
-      const mcpServers = this.resolveMcpServers(workingDirectory);
-      this.sessionMcpServers.set(channelId, new Set(Object.keys(mcpServers)));
-      this.sessionSkillDirs.set(channelId, new Set(skillDirectories));
       return withWorkspaceEnv(workingDirectory, () =>
         this.bridge.createSession({
           model,
           workingDirectory,
           configDir: defaultConfigDir,
           reasoningEffort: reasoningEffort ?? undefined,
-          mcpServers,
+          mcpServers: resolvedMcpServers,
           skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
           onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
           onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
@@ -944,6 +943,9 @@ export class SessionManager {
       configFallbacks,
       createWithModel,
     );
+
+    this.sessionMcpServers.set(channelId, new Set(Object.keys(resolvedMcpServers)));
+    this.sessionSkillDirs.set(channelId, new Set(skillDirectories));
 
     if (didFallback) {
       log.info(`Model fallback: "${prefs.model}" → "${usedModel}" for channel ${channelId}`);
@@ -978,8 +980,6 @@ export class SessionManager {
     const customTools = this.buildCustomTools(channelId);
 
     const mcpServers = this.resolveMcpServers(workingDirectory);
-    this.sessionMcpServers.set(channelId, new Set(Object.keys(mcpServers)));
-    this.sessionSkillDirs.set(channelId, new Set(skillDirectories));
 
     const session = await withWorkspaceEnv(workingDirectory, () =>
       this.bridge.resumeSession(sessionId, {
@@ -994,6 +994,8 @@ export class SessionManager {
       })
     );
 
+    this.sessionMcpServers.set(channelId, new Set(Object.keys(mcpServers)));
+    this.sessionSkillDirs.set(channelId, new Set(skillDirectories));
     this.channelSessions.set(channelId, sessionId);
     this.sessionChannels.set(sessionId, channelId);
     this.attachSessionEvents(session, channelId);
