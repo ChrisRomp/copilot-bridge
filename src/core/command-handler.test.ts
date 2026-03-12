@@ -158,6 +158,8 @@ describe('/agents command', () => {
 
   it('skips indented headings when extracting description', () => {
     const indentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cmd-test-indent-'));
+    const savedHome = process.env.HOME;
+    process.env.HOME = indentDir;
     try {
       const agentsDir = path.join(indentDir, 'agents');
       fs.mkdirSync(agentsDir);
@@ -166,7 +168,25 @@ describe('/agents command', () => {
       expect(result.response).toContain('Actual description line');
       expect(result.response).not.toContain('Indented Heading');
     } finally {
+      process.env.HOME = savedHome;
       fs.rmSync(indentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('extracts description from YAML frontmatter', () => {
+    const fmDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cmd-test-fm-'));
+    const savedHome = process.env.HOME;
+    process.env.HOME = fmDir;
+    try {
+      const agentsDir = path.join(fmDir, 'agents');
+      fs.mkdirSync(agentsDir);
+      fs.writeFileSync(path.join(agentsDir, 'fancy.agent.md'), '---\nname: fancy\ndescription: A very fancy agent.\n---\n# Fancy Agent');
+      const result = handleCommand('ch-1', '/agents', undefined, undefined, { workingDirectory: fmDir });
+      expect(result.response).toContain('A very fancy agent');
+      expect(result.response).not.toContain('---');
+    } finally {
+      process.env.HOME = savedHome;
+      fs.rmSync(fmDir, { recursive: true, force: true });
     }
   });
 });

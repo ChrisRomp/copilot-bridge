@@ -114,6 +114,30 @@ function formatContextUsage(usage: { currentTokens: number; tokenLimit: number }
   return `${formatTokens(usage.currentTokens)}/${formatTokens(usage.tokenLimit)} tokens (${pct}%)`;
 }
 
+/** Extract a short description from agent markdown content (frontmatter or first body line). */
+function extractAgentDescription(content: string): string {
+  const lines = content.split('\n');
+  // Check for YAML frontmatter (description: field)
+  if (lines[0]?.trim() === '---') {
+    for (let i = 1; i < lines.length; i++) {
+      if (lines[i].trim() === '---') break; // end of frontmatter
+      const match = lines[i].match(/^description:\s*(.+)/i);
+      if (match) return ` — ${match[1].trim().slice(0, 80)}`;
+    }
+  }
+  // Fallback: first non-heading, non-empty, non-frontmatter line
+  let inFrontmatter = lines[0]?.trim() === '---';
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (inFrontmatter) {
+      if (trimmed === '---' && line !== lines[0]) inFrontmatter = false;
+      continue;
+    }
+    if (trimmed && !trimmed.startsWith('#')) return ` — ${trimmed.slice(0, 80)}`;
+  }
+  return '';
+}
+
 export function parseCommand(text: string): { command: string; args: string } | null {
   const trimmed = text.trim();
   if (!trimmed.startsWith('/')) return null;
@@ -255,12 +279,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       const lines = ['**Available Agents**', ''];
       for (const [name, def] of agents) {
         const current = name === currentAgent ? ' ← current' : '';
-        // Extract description from first non-heading, non-empty line
-        const descLine = def.content.split('\n').find(l => {
-          const trimmed = l.trim();
-          return trimmed && !trimmed.startsWith('#');
-        });
-        const desc = descLine ? ` — ${descLine.trim().slice(0, 80)}` : '';
+        const desc = extractAgentDescription(def.content);
         lines.push(`• **${name}**${desc}${current}`);
       }
       if (currentAgent && !agents.has(currentAgent)) {
