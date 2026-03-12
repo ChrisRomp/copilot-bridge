@@ -520,6 +520,7 @@ export class SessionManager {
       this.channelSessions.delete(otherChannel);
       this.sessionChannels.delete(targetSessionId);
       this.contextUsage.delete(otherChannel);
+      this.lastMessageUserIds.delete(otherChannel);
       clearChannelSession(otherChannel);
     }
 
