@@ -24,10 +24,13 @@ export interface BotWorkspaceEntry {
   workingDirectory: string;
 }
 
+export type AgentSource = 'plugin' | 'user' | 'workspace';
+
 export interface AgentDefinition {
   name: string;
   content: string;
   filePath: string;
+  source: AgentSource;
 }
 
 // --- Loop Prevention ---
@@ -187,8 +190,8 @@ export function buildCallerPrompt(context: InterAgentContext): string {
  *   2. User profile:      ~/.copilot/agents/
  *   3. Workspace:          <workspacePath>/agents/
  */
-function getAgentRoots(workspacePath: string): string[] {
-  const roots: string[] = [];
+function getAgentRoots(workspacePath: string): { dir: string; source: AgentSource }[] {
+  const roots: { dir: string; source: AgentSource }[] = [];
   const home = process.env.HOME;
 
   // 1. Plugin agents
@@ -201,7 +204,7 @@ function getAgentRoots(workspacePath: string): string[] {
             if (!entry.isDirectory()) continue;
             const full = path.join(dir, entry.name);
             const agentsDir = path.join(full, 'agents');
-            if (fs.existsSync(agentsDir)) roots.push(agentsDir);
+            if (fs.existsSync(agentsDir)) roots.push({ dir: agentsDir, source: 'plugin' });
             walk(full);
           }
         } catch { /* permission errors */ }
@@ -211,12 +214,12 @@ function getAgentRoots(workspacePath: string): string[] {
 
     // 2. User-level agents
     const userAgents = path.join(home, '.copilot', 'agents');
-    if (fs.existsSync(userAgents)) roots.push(userAgents);
+    if (fs.existsSync(userAgents)) roots.push({ dir: userAgents, source: 'user' });
   }
 
   // 3. Workspace agents (highest priority — overrides earlier sources)
   const wsAgents = path.join(workspacePath, 'agents');
-  if (fs.existsSync(wsAgents)) roots.push(wsAgents);
+  if (fs.existsSync(wsAgents)) roots.push({ dir: wsAgents, source: 'workspace' });
 
   return roots;
 }
@@ -228,7 +231,7 @@ function getAgentRoots(workspacePath: string): string[] {
 export function discoverAgentDefinitions(workspacePath: string): Map<string, AgentDefinition> {
   const definitions = new Map<string, AgentDefinition>();
 
-  for (const agentsDir of getAgentRoots(workspacePath)) {
+  for (const { dir: agentsDir, source } of getAgentRoots(workspacePath)) {
     try {
       for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
         if (!entry.isFile() || !entry.name.endsWith('.agent.md')) continue;
@@ -236,7 +239,7 @@ export function discoverAgentDefinitions(workspacePath: string): Map<string, Age
         const filePath = path.join(agentsDir, entry.name);
         try {
           const content = fs.readFileSync(filePath, 'utf-8');
-          definitions.set(name, { name, content, filePath });
+          definitions.set(name, { name, content, filePath, source });
           log.debug(`Discovered agent definition: ${name} at ${filePath}`);
         } catch (err: any) {
           log.warn(`Failed to read agent definition ${filePath}: ${err?.message}`);
@@ -257,7 +260,7 @@ export function discoverAgentDefinitions(workspacePath: string): Map<string, Age
 export function discoverAgentNames(workspacePath: string): Set<string> {
   const names = new Set<string>();
 
-  for (const agentsDir of getAgentRoots(workspacePath)) {
+  for (const { dir: agentsDir } of getAgentRoots(workspacePath)) {
     try {
       for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
         if (!entry.isFile() || !entry.name.endsWith('.agent.md')) continue;

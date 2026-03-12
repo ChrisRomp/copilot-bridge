@@ -280,7 +280,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       for (const [name, def] of agents) {
         const current = name === currentAgent ? ' ← current' : '';
         const desc = extractAgentDescription(def.content);
-        lines.push(`• **${name}**${desc}${current}`);
+        lines.push(`• **${name}** (${def.source})${desc}${current}`);
       }
       if (currentAgent && !agents.has(currentAgent)) {
         lines.push('', `⚠️ Current agent **${currentAgent}** has no definition file.`);
