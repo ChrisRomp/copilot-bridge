@@ -448,7 +448,7 @@ export class SessionManager {
       const unsub = this.sessionUnsubscribes.get(existingId);
       if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
       try {
-        this.bridge.destroySession(existingId);
+        await this.bridge.destroySession(existingId);
       } catch { /* best-effort */ }
       this.channelSessions.delete(channelId);
       this.sessionChannels.delete(existingId);
@@ -467,10 +467,11 @@ export class SessionManager {
       return this.createNewSession(channelId);
     }
 
-    // Detach event listeners and release the bridge handle
+    // Detach event listeners and disconnect so the CLI subprocess tears down
+    // in-memory state (including MCP connections), allowing a clean re-init.
     const unsub = this.sessionUnsubscribes.get(existingId);
     if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
-    this.bridge.releaseSession(existingId);
+    try { await this.bridge.destroySession(existingId); } catch { /* best-effort */ }
 
     // Re-attach the same session (re-reads workspace config, AGENTS.md, MCP, etc.)
     this.contextUsage.delete(channelId);
@@ -503,22 +504,23 @@ export class SessionManager {
     if (existingId) {
       const unsub = this.sessionUnsubscribes.get(existingId);
       if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
-      this.bridge.releaseSession(existingId);
+      try { await this.bridge.destroySession(existingId); } catch { /* best-effort */ }
       this.channelSessions.delete(channelId);
       this.sessionChannels.delete(existingId);
       this.contextUsage.delete(channelId);
       this.lastMessageUserIds.delete(channelId);
     }
 
-    // If target session is active on another channel, release it first
+    // If target session is active on another channel, disconnect it first
     const otherChannel = this.sessionChannels.get(targetSessionId);
     if (otherChannel) {
       const unsub = this.sessionUnsubscribes.get(targetSessionId);
       if (unsub) { unsub(); this.sessionUnsubscribes.delete(targetSessionId); }
-      this.bridge.releaseSession(targetSessionId);
+      try { await this.bridge.destroySession(targetSessionId); } catch { /* best-effort */ }
       this.channelSessions.delete(otherChannel);
       this.sessionChannels.delete(targetSessionId);
       this.contextUsage.delete(otherChannel);
+      this.lastMessageUserIds.delete(otherChannel);
       clearChannelSession(otherChannel);
     }
 
@@ -599,9 +601,9 @@ export class SessionManager {
       // Try to reconnect to the same session (CLI subprocess may have restarted)
       try {
         log.info(`Attempting to re-attach session ${sessionId}...`);
-        this.bridge.releaseSession(sessionId);
         const unsub = this.sessionUnsubscribes.get(sessionId);
         if (unsub) { unsub(); this.sessionUnsubscribes.delete(sessionId); }
+        try { await this.bridge.destroySession(sessionId); } catch { /* best-effort */ }
         await this.attachSession(channelId, sessionId);
         const reconnected = this.bridge.getSession(sessionId);
         if (reconnected) {
