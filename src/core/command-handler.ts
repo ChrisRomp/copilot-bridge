@@ -153,6 +153,8 @@ export function parseCommand(text: string): { command: string; args: string } | 
 export interface McpServerInfo {
   name: string;
   source: 'user' | 'workspace' | 'workspace (override)';
+  /** True if this server was added after the current session was created — not yet active. */
+  pending?: boolean;
 }
 
 export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[], contextUsage?: { currentTokens: number; tokenLimit: number } | null): CommandResult {

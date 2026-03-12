@@ -1123,7 +1123,8 @@ async function handleInboundMessage(
           lines.push('**Skills**');
           for (const s of skills) {
             const desc = s.description ? ` — ${s.description}` : '';
-            lines.push(`• \`${s.name}\`${desc} _(${s.source})_`);
+            const flag = s.pending ? ' ⏳ _reload to activate_' : '';
+            lines.push(`• \`${s.name}\`${desc} _(${s.source})_${flag}`);
           }
           lines.push('');
         }
@@ -1131,7 +1132,8 @@ async function handleInboundMessage(
         if (mcpInfo.length > 0) {
           lines.push('**MCP Servers**');
           for (const s of mcpInfo) {
-            lines.push(`• \`${s.name}\` _(${s.source})_`);
+            const flag = s.pending ? ' ⏳ _reload to activate_' : '';
+            lines.push(`• \`${s.name}\` _(${s.source})_${flag}`);
           }
           lines.push('');
         }

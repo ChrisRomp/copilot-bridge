@@ -308,6 +308,10 @@ export class SessionManager {
   // Cached context usage from session.usage_info events
   private contextUsage = new Map<string, { currentTokens: number; tokenLimit: number }>();
   private lastMessageUserIds = new Map<string, string>(); // channelId → userId of last message sender
+  // MCP server names that were passed to the session at creation/resume time
+  private sessionMcpServers = new Map<string, Set<string>>(); // channelId → server names
+  // Skill directories that were passed to the session at creation/resume time
+  private sessionSkillDirs = new Map<string, Set<string>>(); // channelId → skill dir paths
   // Handler for send_file tool (set by index.ts, calls adapter.sendFile)
   private sendFileHandler: ((channelId: string, filePath: string, message?: string) => Promise<string>) | null = null;
   private getAdapterForChannel: ((channelId: string) => ChannelAdapter | null) | null = null;
@@ -360,22 +364,23 @@ export class SessionManager {
     const workingDirectory = this.resolveWorkingDirectory(channelId);
     const { servers: workspaceServers } = loadWorkspaceMcpServers(workingDirectory);
     const globalNames = new Set(Object.keys(this.mcpServers));
+    const sessionServers = this.sessionMcpServers.get(channelId);
 
     const result: McpServerInfo[] = [];
 
     // All user-level servers — mark project overrides accordingly
     for (const name of globalNames) {
       if (name in workspaceServers) {
-        result.push({ name, source: 'workspace (override)' });
+        result.push({ name, source: 'workspace (override)', pending: sessionServers ? !sessionServers.has(name) : undefined });
       } else {
-        result.push({ name, source: 'user' });
+        result.push({ name, source: 'user', pending: sessionServers ? !sessionServers.has(name) : undefined });
       }
     }
 
     // Project-only servers (not in user-level)
     for (const name of Object.keys(workspaceServers)) {
       if (!globalNames.has(name)) {
-        result.push({ name, source: 'workspace' });
+        result.push({ name, source: 'workspace', pending: sessionServers ? !sessionServers.has(name) : undefined });
       }
     }
 
@@ -383,10 +388,11 @@ export class SessionManager {
   }
 
   /** Get skill info for a channel — discovers skills and reads their descriptions from SKILL.md frontmatter. */
-  getSkillInfo(channelId: string): { name: string; description: string; source: string }[] {
+  getSkillInfo(channelId: string): { name: string; description: string; source: string; pending?: boolean }[] {
     const workingDirectory = this.resolveWorkingDirectory(channelId);
     const dirs = discoverSkillDirectories(workingDirectory);
-    const skills: { name: string; description: string; source: string }[] = [];
+    const sessionDirs = this.sessionSkillDirs.get(channelId);
+    const skills: { name: string; description: string; source: string; pending?: boolean }[] = [];
 
     for (const dir of dirs) {
       const name = path.basename(dir);
@@ -409,7 +415,7 @@ export class SessionManager {
         } catch { /* skip */ }
       }
 
-      skills.push({ name, description, source });
+      skills.push({ name, description, source, pending: sessionDirs ? !sessionDirs.has(dir) : undefined });
     }
 
     return skills.sort((a, b) => a.name.localeCompare(b.name));
@@ -454,6 +460,8 @@ export class SessionManager {
       this.sessionChannels.delete(existingId);
       this.contextUsage.delete(channelId);
       this.lastMessageUserIds.delete(channelId);
+      this.sessionMcpServers.delete(channelId);
+      this.sessionSkillDirs.delete(channelId);
     }
     clearChannelSession(channelId);
     return this.createNewSession(channelId);
@@ -473,9 +481,14 @@ export class SessionManager {
     if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
     try { await this.bridge.destroySession(existingId); } catch { /* best-effort */ }
 
+    // Re-read global MCP servers so /reload picks up user-level config changes
+    this.mcpServers = loadMcpServers();
+
     // Re-attach the same session (re-reads workspace config, AGENTS.md, MCP, etc.)
     this.contextUsage.delete(channelId);
-      this.lastMessageUserIds.delete(channelId);
+    this.lastMessageUserIds.delete(channelId);
+    this.sessionMcpServers.delete(channelId);
+    this.sessionSkillDirs.delete(channelId);
     try {
       await this.attachSession(channelId, existingId);
       log.info(`Reloaded session ${existingId} for channel ${channelId}`);
@@ -487,6 +500,8 @@ export class SessionManager {
       this.sessionChannels.delete(existingId);
       this.contextUsage.delete(channelId);
       this.lastMessageUserIds.delete(channelId);
+      this.sessionMcpServers.delete(channelId);
+      this.sessionSkillDirs.delete(channelId);
       clearChannelSession(channelId);
       return this.createNewSession(channelId);
     }
@@ -509,6 +524,8 @@ export class SessionManager {
       this.sessionChannels.delete(existingId);
       this.contextUsage.delete(channelId);
       this.lastMessageUserIds.delete(channelId);
+      this.sessionMcpServers.delete(channelId);
+      this.sessionSkillDirs.delete(channelId);
     }
 
     // If target session is active on another channel, disconnect it first
@@ -521,6 +538,8 @@ export class SessionManager {
       this.sessionChannels.delete(targetSessionId);
       this.contextUsage.delete(otherChannel);
       this.lastMessageUserIds.delete(otherChannel);
+      this.sessionMcpServers.delete(otherChannel);
+      this.sessionSkillDirs.delete(otherChannel);
       clearChannelSession(otherChannel);
     }
 
@@ -901,13 +920,16 @@ export class SessionManager {
     }
 
     const createWithModel = async (model: string) => {
+      const mcpServers = this.resolveMcpServers(workingDirectory);
+      this.sessionMcpServers.set(channelId, new Set(Object.keys(mcpServers)));
+      this.sessionSkillDirs.set(channelId, new Set(skillDirectories));
       return withWorkspaceEnv(workingDirectory, () =>
         this.bridge.createSession({
           model,
           workingDirectory,
           configDir: defaultConfigDir,
           reasoningEffort: reasoningEffort ?? undefined,
-          mcpServers: this.resolveMcpServers(workingDirectory),
+          mcpServers,
           skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
           onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
           onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
@@ -955,6 +977,10 @@ export class SessionManager {
     const skillDirectories = discoverSkillDirectories(workingDirectory);
     const customTools = this.buildCustomTools(channelId);
 
+    const mcpServers = this.resolveMcpServers(workingDirectory);
+    this.sessionMcpServers.set(channelId, new Set(Object.keys(mcpServers)));
+    this.sessionSkillDirs.set(channelId, new Set(skillDirectories));
+
     const session = await withWorkspaceEnv(workingDirectory, () =>
       this.bridge.resumeSession(sessionId, {
         onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
@@ -962,7 +988,7 @@ export class SessionManager {
         configDir: defaultConfigDir,
         workingDirectory,
         reasoningEffort: reasoningEffort ?? undefined,
-        mcpServers: this.resolveMcpServers(workingDirectory),
+        mcpServers,
         skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
         tools: customTools.length > 0 ? customTools : undefined,
       })
