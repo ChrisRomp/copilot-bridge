@@ -32,9 +32,12 @@ describe('parseCommand', () => {
 
 describe('/agent command', () => {
   let tmpDir: string;
+  let origHome: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cmd-test-'));
+    origHome = process.env.HOME;
+    process.env.HOME = tmpDir;
     const agentsDir = path.join(tmpDir, 'agents');
     fs.mkdirSync(agentsDir);
     fs.writeFileSync(path.join(agentsDir, 'network.agent.md'), '# Network Agent\nHandles network queries.');
@@ -42,6 +45,7 @@ describe('/agent command', () => {
   });
 
   afterEach(() => {
+    process.env.HOME = origHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -94,9 +98,12 @@ describe('/agent command', () => {
 
 describe('/agents command', () => {
   let tmpDir: string;
+  let origHome: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cmd-test-'));
+    origHome = process.env.HOME;
+    process.env.HOME = tmpDir;
     const agentsDir = path.join(tmpDir, 'agents');
     fs.mkdirSync(agentsDir);
     fs.writeFileSync(path.join(agentsDir, 'network.agent.md'), '# Network Agent\nHandles network queries.');
@@ -104,6 +111,7 @@ describe('/agents command', () => {
   });
 
   afterEach(() => {
+    process.env.HOME = origHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

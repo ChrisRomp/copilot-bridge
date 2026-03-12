@@ -231,12 +231,16 @@ describe('buildCallerPrompt', () => {
 
 describe('discoverAgentDefinitions', () => {
   let tmpDir: string;
+  let origHome: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ia-test-'));
+    origHome = process.env.HOME;
+    process.env.HOME = tmpDir; // isolate from real user profile/plugins
   });
 
   afterEach(() => {
+    process.env.HOME = origHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -268,16 +272,52 @@ describe('discoverAgentDefinitions', () => {
     const defs = discoverAgentDefinitions(tmpDir);
     expect(defs.size).toBe(0);
   });
+
+  it('discovers agents from plugins', () => {
+    const pluginDir = path.join(tmpDir, '.copilot', 'installed-plugins', '_direct', 'test-plugin', 'agents');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, 'pluggy.agent.md'), '# Pluggy\nA plugin agent.');
+
+    const defs = discoverAgentDefinitions(tmpDir);
+    expect(defs.has('pluggy')).toBe(true);
+    expect(defs.get('pluggy')!.content).toContain('plugin agent');
+  });
+
+  it('discovers agents from user profile', () => {
+    const userAgents = path.join(tmpDir, '.copilot', 'agents');
+    fs.mkdirSync(userAgents, { recursive: true });
+    fs.writeFileSync(path.join(userAgents, 'custom.agent.md'), '# Custom\nUser custom agent.');
+
+    const defs = discoverAgentDefinitions(tmpDir);
+    expect(defs.has('custom')).toBe(true);
+  });
+
+  it('workspace agents override plugin agents of same name', () => {
+    const pluginDir = path.join(tmpDir, '.copilot', 'installed-plugins', '_direct', 'test-plugin', 'agents');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, 'shared.agent.md'), '# Plugin version');
+
+    const wsAgents = path.join(tmpDir, 'agents');
+    fs.mkdirSync(wsAgents);
+    fs.writeFileSync(path.join(wsAgents, 'shared.agent.md'), '# Workspace version');
+
+    const defs = discoverAgentDefinitions(tmpDir);
+    expect(defs.get('shared')!.content).toContain('Workspace version');
+  });
 });
 
 describe('discoverAgentNames', () => {
   let tmpDir: string;
+  let origHome: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ia-test-'));
+    origHome = process.env.HOME;
+    process.env.HOME = tmpDir;
   });
 
   afterEach(() => {
+    process.env.HOME = origHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -302,15 +342,19 @@ describe('discoverAgentNames', () => {
 
 describe('resolveAgentDefinition', () => {
   let tmpDir: string;
+  let origHome: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ia-test-'));
+    origHome = process.env.HOME;
+    process.env.HOME = tmpDir;
     const agentsDir = path.join(tmpDir, 'agents');
     fs.mkdirSync(agentsDir);
     fs.writeFileSync(path.join(agentsDir, 'network.agent.md'), '# Network Agent');
   });
 
   afterEach(() => {
+    process.env.HOME = origHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

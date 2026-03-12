@@ -181,30 +181,70 @@ export function buildCallerPrompt(context: InterAgentContext): string {
 // --- Agent Definition Discovery ---
 
 /**
- * Discover *.agent.md files in a bot's workspace agents/ directory.
- * Returns a map of agent name → definition.
+ * Collect all directories that may contain *.agent.md files.
+ * Sources (later entries win on name conflicts):
+ *   1. Installed plugins: ~/.copilot/installed-plugins/<vendor>/<plugin>/agents/
+ *   2. User profile:      ~/.copilot/agents/
+ *   3. Workspace:          <workspacePath>/agents/
+ */
+function getAgentRoots(workspacePath: string): string[] {
+  const roots: string[] = [];
+  const home = process.env.HOME;
+
+  // 1. Plugin agents
+  if (home) {
+    const pluginsDir = path.join(home, '.copilot', 'installed-plugins');
+    if (fs.existsSync(pluginsDir)) {
+      const walk = (dir: string) => {
+        try {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (!entry.isDirectory()) continue;
+            const full = path.join(dir, entry.name);
+            const agentsDir = path.join(full, 'agents');
+            if (fs.existsSync(agentsDir)) roots.push(agentsDir);
+            walk(full);
+          }
+        } catch { /* permission errors */ }
+      };
+      walk(pluginsDir);
+    }
+
+    // 2. User-level agents
+    const userAgents = path.join(home, '.copilot', 'agents');
+    if (fs.existsSync(userAgents)) roots.push(userAgents);
+  }
+
+  // 3. Workspace agents (highest priority — overrides earlier sources)
+  const wsAgents = path.join(workspacePath, 'agents');
+  if (fs.existsSync(wsAgents)) roots.push(wsAgents);
+
+  return roots;
+}
+
+/**
+ * Discover *.agent.md files from all agent sources (plugins, user profile, workspace).
+ * Returns a map of agent name → definition. Later sources override earlier ones.
  */
 export function discoverAgentDefinitions(workspacePath: string): Map<string, AgentDefinition> {
-  const agentsDir = path.join(workspacePath, 'agents');
   const definitions = new Map<string, AgentDefinition>();
 
-  if (!fs.existsSync(agentsDir)) return definitions;
-
-  try {
-    for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.agent.md')) continue;
-      const name = entry.name.replace(/\.agent\.md$/, '');
-      const filePath = path.join(agentsDir, entry.name);
-      try {
-        const content = fs.readFileSync(filePath, 'utf-8');
-        definitions.set(name, { name, content, filePath });
-        log.debug(`Discovered agent definition: ${name} at ${filePath}`);
-      } catch (err: any) {
-        log.warn(`Failed to read agent definition ${filePath}: ${err?.message}`);
+  for (const agentsDir of getAgentRoots(workspacePath)) {
+    try {
+      for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.agent.md')) continue;
+        const name = entry.name.replace(/\.agent\.md$/, '');
+        const filePath = path.join(agentsDir, entry.name);
+        try {
+          const content = fs.readFileSync(filePath, 'utf-8');
+          definitions.set(name, { name, content, filePath });
+          log.debug(`Discovered agent definition: ${name} at ${filePath}`);
+        } catch (err: any) {
+          log.warn(`Failed to read agent definition ${filePath}: ${err?.message}`);
+        }
       }
+    } catch (err: any) {
+      log.warn(`Failed to scan agents directory ${agentsDir}: ${err?.message}`);
     }
-  } catch (err: any) {
-    log.warn(`Failed to scan agents directory ${agentsDir}: ${err?.message}`);
   }
 
   return definitions;
@@ -212,21 +252,20 @@ export function discoverAgentDefinitions(workspacePath: string): Map<string, Age
 
 /**
  * Lightweight agent name discovery — reads only filenames, not file contents.
- * Use for validation when you only need to check if an agent name exists.
+ * Scans all agent sources (plugins, user profile, workspace).
  */
 export function discoverAgentNames(workspacePath: string): Set<string> {
-  const agentsDir = path.join(workspacePath, 'agents');
   const names = new Set<string>();
 
-  if (!fs.existsSync(agentsDir)) return names;
-
-  try {
-    for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.agent.md')) continue;
-      names.add(entry.name.replace(/\.agent\.md$/, ''));
+  for (const agentsDir of getAgentRoots(workspacePath)) {
+    try {
+      for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.agent.md')) continue;
+        names.add(entry.name.replace(/\.agent\.md$/, ''));
+      }
+    } catch (err: any) {
+      log.warn(`Failed to scan agents directory ${agentsDir}: ${err?.message}`);
     }
-  } catch (err: any) {
-    log.warn(`Failed to scan agents directory ${agentsDir}: ${err?.message}`);
   }
 
   return names;
@@ -247,7 +286,7 @@ export function resolveAgentDefinition(
   const definitions = discoverAgentDefinitions(workspacePath);
   const def = definitions.get(agentName);
   if (!def) {
-    log.warn(`Agent definition "${agentName}" not found in ${workspacePath}/agents/`);
+    log.warn(`Agent definition "${agentName}" not found (scanned plugins, user profile, and ${workspacePath}/agents/)`);
     return null;
   }
   return def;
