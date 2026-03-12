@@ -240,7 +240,7 @@ describe('discoverAgentDefinitions', () => {
   });
 
   afterEach(() => {
-    process.env.HOME = origHome;
+    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -317,7 +317,7 @@ describe('discoverAgentNames', () => {
   });
 
   afterEach(() => {
-    process.env.HOME = origHome;
+    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -354,7 +354,7 @@ describe('resolveAgentDefinition', () => {
   });
 
   afterEach(() => {
-    process.env.HOME = origHome;
+    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

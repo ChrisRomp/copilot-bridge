@@ -45,7 +45,7 @@ describe('/agent command', () => {
   });
 
   afterEach(() => {
-    process.env.HOME = origHome;
+    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -111,7 +111,7 @@ describe('/agents command', () => {
   });
 
   afterEach(() => {
-    process.env.HOME = origHome;
+    if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -168,7 +168,7 @@ describe('/agents command', () => {
       expect(result.response).toContain('Actual description line');
       expect(result.response).not.toContain('Indented Heading');
     } finally {
-      process.env.HOME = savedHome;
+      if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
       fs.rmSync(indentDir, { recursive: true, force: true });
     }
   });
@@ -185,7 +185,7 @@ describe('/agents command', () => {
       expect(result.response).toContain('A very fancy agent');
       expect(result.response).not.toContain('---');
     } finally {
-      process.env.HOME = savedHome;
+      if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
       fs.rmSync(fmDir, { recursive: true, force: true });
     }
   });

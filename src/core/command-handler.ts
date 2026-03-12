@@ -117,8 +117,9 @@ function formatContextUsage(usage: { currentTokens: number; tokenLimit: number }
 /** Extract a short description from agent markdown content (frontmatter or first body line). */
 function extractAgentDescription(content: string): string {
   const lines = content.split('\n');
+  const hasFrontmatter = lines[0]?.trim() === '---';
   // Check for YAML frontmatter (description: field)
-  if (lines[0]?.trim() === '---') {
+  if (hasFrontmatter) {
     for (let i = 1; i < lines.length; i++) {
       if (lines[i].trim() === '---') break; // end of frontmatter
       const match = lines[i].match(/^description:\s*(.+)/i);
@@ -126,11 +127,11 @@ function extractAgentDescription(content: string): string {
     }
   }
   // Fallback: first non-heading, non-empty, non-frontmatter line
-  let inFrontmatter = lines[0]?.trim() === '---';
-  for (const line of lines) {
-    const trimmed = line.trim();
+  let inFrontmatter = hasFrontmatter;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
     if (inFrontmatter) {
-      if (trimmed === '---' && line !== lines[0]) inFrontmatter = false;
+      if (trimmed === '---' && i > 0) inFrontmatter = false;
       continue;
     }
     if (trimmed && !trimmed.startsWith('#')) return ` — ${trimmed.slice(0, 80)}`;
@@ -251,7 +252,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           const names = [...available];
           const list = names.length > 0
             ? `Available agents: ${names.map(n => `**${n}**`).join(', ')}`
-            : 'No agent definitions found in this workspace.';
+            : 'No agent definitions found.';
           return {
             handled: true,
             response: `⚠️ Agent **${agent}** not found.\n${list}`,
@@ -273,7 +274,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       }
       const agents = discoverAgentDefinitions(agentsWorkDir);
       if (agents.size === 0) {
-        return { handled: true, response: 'No agent definitions found.\nPlace `*.agent.md` files in `<workspace>/agents/` to define agents.' };
+        return { handled: true, response: 'No agent definitions found.\nPlace `*.agent.md` files in `<workspace>/agents/`, `~/.copilot/agents/`, or install a plugin with agents.' };
       }
       const currentAgent = sessionInfo?.agent ?? null;
       const lines = ['**Available Agents**', ''];

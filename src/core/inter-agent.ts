@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import { getConfig, getInterAgentConfig } from '../config.js';
 import { getDynamicChannels } from '../state/store.js';
 import type { InterAgentConfig } from '../types.js';
@@ -192,24 +193,27 @@ export function buildCallerPrompt(context: InterAgentContext): string {
  */
 function getAgentRoots(workspacePath: string): { dir: string; source: AgentSource }[] {
   const roots: { dir: string; source: AgentSource }[] = [];
-  const home = process.env.HOME;
+  const home = os.homedir();
 
-  // 1. Plugin agents
+  // 1. Plugin agents — walk at most 3 levels deep (e.g. _direct/vendor/plugin/agents/)
   if (home) {
     const pluginsDir = path.join(home, '.copilot', 'installed-plugins');
     if (fs.existsSync(pluginsDir)) {
-      const walk = (dir: string) => {
+      const walk = (dir: string, depth: number) => {
+        if (depth > 3) return;
         try {
           for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
             if (!entry.isDirectory()) continue;
             const full = path.join(dir, entry.name);
-            const agentsDir = path.join(full, 'agents');
-            if (fs.existsSync(agentsDir)) roots.push({ dir: agentsDir, source: 'plugin' });
-            walk(full);
+            if (entry.name === 'agents') {
+              roots.push({ dir: full, source: 'plugin' });
+            } else {
+              walk(full, depth + 1);
+            }
           }
         } catch { /* permission errors */ }
       };
-      walk(pluginsDir);
+      walk(pluginsDir, 0);
     }
 
     // 2. User-level agents
