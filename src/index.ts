@@ -1120,6 +1120,7 @@ async function handleInboundMessage(
 
       case 'skills': {
         const skills = sessionManager.getSkillInfo(msg.channelId);
+        const mcpInfo = sessionManager.getMcpServerInfo(msg.channelId);
         const lines: string[] = ['🧰 **Skills & Tools**', ''];
 
         if (skills.length > 0) {
@@ -1132,50 +1133,27 @@ async function handleInboundMessage(
           lines.push('');
         }
 
-        // Fetch live tools from SDK session
-        const sdkTools = await sessionManager.listSessionTools(msg.channelId);
-        const mcpTools: Map<string, string[]> = new Map(); // server → tool names
-        const builtinTools: string[] = [];
-        for (const t of sdkTools) {
-          if (t.namespacedName && t.namespacedName.includes('/')) {
-            const server = t.namespacedName.split('/')[0];
-            if (!mcpTools.has(server)) mcpTools.set(server, []);
-            mcpTools.get(server)!.push(t.name);
-          } else {
-            builtinTools.push(t.name);
-          }
-        }
-
-        if (mcpTools.size > 0) {
-          lines.push('**MCP Servers** _(live from session)_');
-          for (const [server, tools] of [...mcpTools.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-            lines.push(`• \`${server}\` — ${tools.length} tool(s): ${tools.map(t => `\`${t}\``).join(', ')}`);
-          }
-          lines.push('');
-        }
-
-        // Show configured servers that didn't surface any tools
-        const mcpInfo = sessionManager.getMcpServerInfo(msg.channelId);
-        const missingServers = mcpInfo.filter(s => !mcpTools.has(s.name));
-        if (missingServers.length > 0) {
-          lines.push('**MCP Servers** _(configured but no tools loaded)_');
-          for (const s of missingServers) {
+        if (mcpInfo.length > 0) {
+          lines.push('**MCP Servers**');
+          for (const s of mcpInfo) {
             const flag = s.pending ? ' ⏳ _reload to activate_' : '';
-            lines.push(`• \`${s.name}\` _(${s.source})_${flag} ⚠️`);
+            lines.push(`• \`${s.name}\` _(${s.source})_${flag}`);
           }
           lines.push('');
         }
 
-        if (builtinTools.length > 0) {
-          lines.push(`**Built-in Tools** (${builtinTools.length})`);
-          lines.push(builtinTools.map(t => `\`${t}\``).join(', '));
+        // Fetch built-in tools from SDK
+        const sdkTools = await sessionManager.listSessionTools(msg.channelId);
+        if (sdkTools.length > 0) {
+          lines.push(`**Built-in Tools** (${sdkTools.length})`);
+          lines.push(sdkTools.map(t => `\`${t.name}\``).join(', '));
           lines.push('');
         }
 
         lines.push('**Copilot Bridge Tools**');
         for (const t of BRIDGE_CUSTOM_TOOLS) lines.push(`• \`${t}\``);
 
-        if (skills.length === 0 && mcpTools.size === 0 && missingServers.length === 0) {
+        if (skills.length === 0 && mcpInfo.length === 0) {
           lines.push('', '_No skills or MCP servers configured. Add skills to `~/.copilot/skills/` or MCP servers to `~/.copilot/mcp-config.json`._');
         }
 
@@ -1185,47 +1163,39 @@ async function handleInboundMessage(
 
       case 'mcp': {
         const mcpInfo = sessionManager.getMcpServerInfo(msg.channelId);
-        const sdkTools = await sessionManager.listSessionTools(msg.channelId);
-
-        // Group SDK tools by MCP server namespace
-        const sdkMcpTools: Map<string, string[]> = new Map();
-        for (const t of sdkTools) {
-          if (t.namespacedName && t.namespacedName.includes('/')) {
-            const server = t.namespacedName.split('/')[0];
-            if (!sdkMcpTools.has(server)) sdkMcpTools.set(server, []);
-            sdkMcpTools.get(server)!.push(t.name);
-          }
-        }
-
-        if (mcpInfo.length === 0 && sdkMcpTools.size === 0) {
+        if (mcpInfo.length === 0) {
           await adapter.sendMessage(msg.channelId, '🔌 No MCP servers configured.', { threadRootId: threadRoot });
           break;
         }
-
+        const userServers = mcpInfo.filter(s => s.source === 'user');
+        const workspaceServers = mcpInfo.filter(s => s.source === 'workspace');
+        const overrideServers = mcpInfo.filter(s => s.source === 'workspace (override)');
         const lines = ['🔌 **MCP Servers**', ''];
-
-        // Show each configured server with its live tool count
-        for (const s of mcpInfo) {
-          const tools = sdkMcpTools.get(s.name);
-          const flag = s.pending ? ' ⏳ _reload to activate_' : '';
-          if (tools) {
-            lines.push(`• \`${s.name}\` _(${s.source})_ — ✅ ${tools.length} tool(s)${flag}`);
-          } else {
-            lines.push(`• \`${s.name}\` _(${s.source})_ — ⚠️ no tools loaded${flag}`);
+        if (userServers.length > 0) {
+          lines.push('**User** (plugin + user config)');
+          for (const s of userServers) {
+            const flag = s.pending ? ' ⏳ _reload to activate_' : '';
+            lines.push(`• \`${s.name}\`${flag}`);
           }
+          lines.push('');
         }
-
-        // Show any SDK-discovered servers not in our config (plugins, etc.)
-        const configNames = new Set(mcpInfo.map(s => s.name));
-        for (const [server, tools] of sdkMcpTools) {
-          if (!configNames.has(server)) {
-            lines.push(`• \`${server}\` _(plugin)_ — ✅ ${tools.length} tool(s)`);
+        if (workspaceServers.length > 0) {
+          lines.push('**Workspace**');
+          for (const s of workspaceServers) {
+            const flag = s.pending ? ' ⏳ _reload to activate_' : '';
+            lines.push(`• \`${s.name}\`${flag}`);
           }
+          lines.push('');
         }
-
-        const totalConfigured = mcpInfo.length;
-        const totalActive = mcpInfo.filter(s => sdkMcpTools.has(s.name)).length;
-        lines.push('', `Total: ${totalConfigured} configured, ${totalActive} active`);
+        if (overrideServers.length > 0) {
+          lines.push('**Workspace (overriding user)**');
+          for (const s of overrideServers) {
+            const flag = s.pending ? ' ⏳ _reload to activate_' : '';
+            lines.push(`• \`${s.name}\`${flag}`);
+          }
+          lines.push('');
+        }
+        lines.push(`Total: ${mcpInfo.length} server(s)`);
 
         await adapter.sendMessage(msg.channelId, lines.join('\n'), { threadRootId: threadRoot });
         break;
