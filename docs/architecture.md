@@ -100,7 +100,7 @@ Use `createLogger(tag)` from `src/logger.ts`. Tags identify the subsystem (e.g.,
 The log *destination* depends on how you launch the bridge:
 - **launchd**: Configured via `StandardOutPath`/`StandardErrorPath` in the plist (default: `~/.copilot-bridge/bridge.log`)
 - **Direct**: Logs go to your terminal
-- **Redirect**: `npx tsx src/index.ts >> ~/.copilot-bridge/bridge.log 2>&1`
+- **Redirect**: `umask 077 && npx tsx src/index.ts >> ~/.copilot-bridge/bridge.log 2>&1`
 
 ## Running as a macOS service
 

@@ -51,7 +51,8 @@ function main() {
 
     // Ensure log directory exists (launchd needs it before starting the process)
     const logDir = path.join(homePath, '.copilot-bridge');
-    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(logDir, 0o700); } catch { /* best effort */ }
 
     const installPath = getLaunchdInstallPath();
     if (fs.existsSync(installPath)) {

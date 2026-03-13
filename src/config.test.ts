@@ -773,3 +773,41 @@ describe('access config validation', () => {
     expect(() => loadConfig(configFile)).toThrow(/access must be an object/);
   });
 });
+
+describe('logLevel config validation', () => {
+  let tmpDir: string;
+  let configFile: string;
+
+  beforeEach(() => {
+    _resetConfigForTest();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loglevel-test-'));
+    configFile = path.join(tmpDir, 'config.json');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('accepts valid logLevel values', () => {
+    for (const level of ['debug', 'info', 'warn', 'error']) {
+      _resetConfigForTest();
+      const cfg = makeConfig({ logLevel: level });
+      fs.writeFileSync(configFile, JSON.stringify(cfg));
+      const config = loadConfig(configFile);
+      expect2(config.logLevel).toBe(level);
+    }
+  });
+
+  it('rejects invalid logLevel', () => {
+    const cfg = makeConfig({ logLevel: 'verbose' });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    expect2(() => loadConfig(configFile)).toThrow(/logLevel must be one of/);
+  });
+
+  it('allows omitting logLevel', () => {
+    const cfg = makeConfig();
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    const config = loadConfig(configFile);
+    expect2(config.logLevel).toBeUndefined();
+  });
+});
