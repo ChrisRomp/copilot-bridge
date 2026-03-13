@@ -1146,7 +1146,7 @@ async function handleInboundMessage(
         const sdkTools = await sessionManager.listSessionTools(msg.channelId);
         if (sdkTools.length > 0) {
           lines.push(`**Built-in Tools** (${sdkTools.length})`);
-          lines.push(sdkTools.map(t => `\`${t.name}\``).join(', '));
+          lines.push(sdkTools.map(t => `\`${t.name}\``).sort().join(', '));
           lines.push('');
         }
 
