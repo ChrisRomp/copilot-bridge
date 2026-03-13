@@ -40,7 +40,7 @@ export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'reload_session' | 'reload_config' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills';
+           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills' | 'mcp';
   payload?: any;
 }
 
@@ -416,32 +416,8 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       return { handled: true, action: 'remember' };
     }
 
-    case 'mcp': {
-      if (!mcpInfo || mcpInfo.length === 0) {
-        return { handled: true, response: '🔌 No MCP servers configured.' };
-      }
-      const userServers = mcpInfo.filter(s => s.source === 'user');
-      const workspaceServers = mcpInfo.filter(s => s.source === 'workspace');
-      const overrideServers = mcpInfo.filter(s => s.source === 'workspace (override)');
-      const lines = ['🔌 **MCP Servers**', ''];
-      if (userServers.length > 0) {
-        lines.push('**User** (plugin + user config)');
-        for (const s of userServers) lines.push(`• \`${s.name}\``);
-        lines.push('');
-      }
-      if (workspaceServers.length > 0) {
-        lines.push('**Workspace**');
-        for (const s of workspaceServers) lines.push(`• \`${s.name}\``);
-        lines.push('');
-      }
-      if (overrideServers.length > 0) {
-        lines.push('**Workspace (overriding user)**');
-        for (const s of overrideServers) lines.push(`• \`${s.name}\``);
-        lines.push('');
-      }
-      lines.push(`Total: ${mcpInfo.length} server(s)`);
-      return { handled: true, response: lines.join('\n') };
-    }
+    case 'mcp':
+      return { handled: true, action: 'mcp' };
 
     case 'streamer-mode':
     case 'on-air': {

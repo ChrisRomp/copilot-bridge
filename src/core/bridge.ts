@@ -220,4 +220,10 @@ export class CopilotBridge {
     if (!session) throw new Error(`Session ${id} not active`);
     return (session as any).rpc.agent.deselect();
   }
+
+  async listTools(model?: string): Promise<{ name: string; namespacedName?: string; description: string }[]> {
+    await this.start();
+    const result = await this.client.rpc.tools.list({ model });
+    return result.tools;
+  }
 }

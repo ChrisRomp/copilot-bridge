@@ -662,7 +662,7 @@ async function handleMidTurnMessage(
       if (['model', 'models', 'status', 'reasoning'].includes(parsed.command)) {
         try { models = await sessionManager.listModels(); } catch { models = undefined; }
       }
-      const mcpInfo = parsed.command === 'mcp' ? sessionManager.getMcpServerInfo(msg.channelId) : undefined;
+      const mcpInfo = undefined;
       const contextUsage = sessionManager.getContextUsage(msg.channelId);
 
       const cmdResult = handleCommand(
@@ -815,9 +815,6 @@ async function handleInboundMessage(
     }
   }
 
-  // Fetch MCP info for /mcp command
-  const mcpInfo = parsed?.command === 'mcp' ? sessionManager.getMcpServerInfo(msg.channelId) : undefined;
-
   // Get cached context usage for /context and /status
   const contextUsage = sessionManager.getContextUsage(msg.channelId);
 
@@ -826,7 +823,7 @@ async function handleInboundMessage(
     { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort },
     { workingDirectory: channelConfig.workingDirectory, bot: channelConfig.bot },
     models,
-    mcpInfo,
+    undefined,
     contextUsage,
   );
 
@@ -1123,7 +1120,6 @@ async function handleInboundMessage(
 
       case 'skills': {
         const skills = sessionManager.getSkillInfo(msg.channelId);
-        const mcpInfo = sessionManager.getMcpServerInfo(msg.channelId);
         const lines: string[] = ['🧰 **Skills & Tools**', ''];
 
         if (skills.length > 0) {
@@ -1136,21 +1132,100 @@ async function handleInboundMessage(
           lines.push('');
         }
 
-        if (mcpInfo.length > 0) {
-          lines.push('**MCP Servers**');
-          for (const s of mcpInfo) {
-            const flag = s.pending ? ' ⏳ _reload to activate_' : '';
-            lines.push(`• \`${s.name}\` _(${s.source})_${flag}`);
+        // Fetch live tools from SDK session
+        const sdkTools = await sessionManager.listSessionTools(msg.channelId);
+        const mcpTools: Map<string, string[]> = new Map(); // server → tool names
+        const builtinTools: string[] = [];
+        for (const t of sdkTools) {
+          if (t.namespacedName && t.namespacedName.includes('/')) {
+            const server = t.namespacedName.split('/')[0];
+            if (!mcpTools.has(server)) mcpTools.set(server, []);
+            mcpTools.get(server)!.push(t.name);
+          } else {
+            builtinTools.push(t.name);
           }
+        }
+
+        if (mcpTools.size > 0) {
+          lines.push('**MCP Servers** _(live from session)_');
+          for (const [server, tools] of [...mcpTools.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+            lines.push(`• \`${server}\` — ${tools.length} tool(s): ${tools.map(t => `\`${t}\``).join(', ')}`);
+          }
+          lines.push('');
+        }
+
+        // Show configured servers that didn't surface any tools
+        const mcpInfo = sessionManager.getMcpServerInfo(msg.channelId);
+        const missingServers = mcpInfo.filter(s => !mcpTools.has(s.name));
+        if (missingServers.length > 0) {
+          lines.push('**MCP Servers** _(configured but no tools loaded)_');
+          for (const s of missingServers) {
+            const flag = s.pending ? ' ⏳ _reload to activate_' : '';
+            lines.push(`• \`${s.name}\` _(${s.source})_${flag} ⚠️`);
+          }
+          lines.push('');
+        }
+
+        if (builtinTools.length > 0) {
+          lines.push(`**Built-in Tools** (${builtinTools.length})`);
+          lines.push(builtinTools.map(t => `\`${t}\``).join(', '));
           lines.push('');
         }
 
         lines.push('**Copilot Bridge Tools**');
         for (const t of BRIDGE_CUSTOM_TOOLS) lines.push(`• \`${t}\``);
 
-        if (skills.length === 0 && mcpInfo.length === 0) {
+        if (skills.length === 0 && mcpTools.size === 0 && missingServers.length === 0) {
           lines.push('', '_No skills or MCP servers configured. Add skills to `~/.copilot/skills/` or MCP servers to `~/.copilot/mcp-config.json`._');
         }
+
+        await adapter.sendMessage(msg.channelId, lines.join('\n'), { threadRootId: threadRoot });
+        break;
+      }
+
+      case 'mcp': {
+        const mcpInfo = sessionManager.getMcpServerInfo(msg.channelId);
+        const sdkTools = await sessionManager.listSessionTools(msg.channelId);
+
+        // Group SDK tools by MCP server namespace
+        const sdkMcpTools: Map<string, string[]> = new Map();
+        for (const t of sdkTools) {
+          if (t.namespacedName && t.namespacedName.includes('/')) {
+            const server = t.namespacedName.split('/')[0];
+            if (!sdkMcpTools.has(server)) sdkMcpTools.set(server, []);
+            sdkMcpTools.get(server)!.push(t.name);
+          }
+        }
+
+        if (mcpInfo.length === 0 && sdkMcpTools.size === 0) {
+          await adapter.sendMessage(msg.channelId, '🔌 No MCP servers configured.', { threadRootId: threadRoot });
+          break;
+        }
+
+        const lines = ['🔌 **MCP Servers**', ''];
+
+        // Show each configured server with its live tool count
+        for (const s of mcpInfo) {
+          const tools = sdkMcpTools.get(s.name);
+          const flag = s.pending ? ' ⏳ _reload to activate_' : '';
+          if (tools) {
+            lines.push(`• \`${s.name}\` _(${s.source})_ — ✅ ${tools.length} tool(s)${flag}`);
+          } else {
+            lines.push(`• \`${s.name}\` _(${s.source})_ — ⚠️ no tools loaded${flag}`);
+          }
+        }
+
+        // Show any SDK-discovered servers not in our config (plugins, etc.)
+        const configNames = new Set(mcpInfo.map(s => s.name));
+        for (const [server, tools] of sdkMcpTools) {
+          if (!configNames.has(server)) {
+            lines.push(`• \`${server}\` _(plugin)_ — ✅ ${tools.length} tool(s)`);
+          }
+        }
+
+        const totalConfigured = mcpInfo.length;
+        const totalActive = mcpInfo.filter(s => sdkMcpTools.has(s.name)).length;
+        lines.push('', `Total: ${totalConfigured} configured, ${totalActive} active`);
 
         await adapter.sendMessage(msg.channelId, lines.join('\n'), { threadRootId: threadRoot });
         break;

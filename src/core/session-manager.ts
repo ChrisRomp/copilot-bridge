@@ -427,6 +427,19 @@ export class SessionManager {
     return skills.sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  /** List tools the SDK CLI process has available (via server RPC). */
+  async listSessionTools(channelId: string): Promise<{ name: string; namespacedName?: string; description: string }[]> {
+    // Ensure there's an active session so the CLI process is running
+    const sessionId = this.channelSessions.get(channelId);
+    if (!sessionId) return [];
+    try {
+      return await this.bridge.listTools();
+    } catch (err) {
+      log.warn(`Failed to list tools for channel ${channelId}:`, err);
+      return [];
+    }
+  }
+
   /** Get or create a session for a channel. */
   async ensureSession(channelId: string): Promise<{ sessionId: string; isNew: boolean }> {
     // Check in-memory cache first
