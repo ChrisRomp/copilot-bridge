@@ -304,6 +304,29 @@ describe('discoverAgentDefinitions', () => {
     const defs = discoverAgentDefinitions(tmpDir);
     expect(defs.get('shared')!.content).toContain('Workspace version');
   });
+
+  it('discovers agents from .github/agents/', () => {
+    const ghAgents = path.join(tmpDir, '.github', 'agents');
+    fs.mkdirSync(ghAgents, { recursive: true });
+    fs.writeFileSync(path.join(ghAgents, 'bob.agent.md'), '# Bob\nA GitHub convention agent.');
+
+    const defs = discoverAgentDefinitions(tmpDir);
+    expect(defs.has('bob')).toBe(true);
+    expect(defs.get('bob')!.content).toContain('GitHub convention agent');
+  });
+
+  it('workspace agents/ overrides .github/agents/ of same name', () => {
+    const ghAgents = path.join(tmpDir, '.github', 'agents');
+    fs.mkdirSync(ghAgents, { recursive: true });
+    fs.writeFileSync(path.join(ghAgents, 'shared.agent.md'), '# .github version');
+
+    const wsAgents = path.join(tmpDir, 'agents');
+    fs.mkdirSync(wsAgents);
+    fs.writeFileSync(path.join(wsAgents, 'shared.agent.md'), '# agents/ version');
+
+    const defs = discoverAgentDefinitions(tmpDir);
+    expect(defs.get('shared')!.content).toContain('agents/ version');
+  });
 });
 
 describe('discoverAgentNames', () => {

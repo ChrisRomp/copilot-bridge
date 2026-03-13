@@ -261,15 +261,19 @@ export function extractCommandPatterns(input: unknown): string[] {
 /**
  * Discover skill directories following Copilot CLI conventions:
  * - ~/.copilot/skills/ (user-level)
+ * - ~/.agents/skills/ (user-level)
  * - <workspace>/.github/skills/ (project-level)
- * - <workspace>/.agents/skills/ (project-level, legacy)
+ * - <workspace>/.agents/skills/ (project-level)
  */
 function discoverSkillDirectories(workingDirectory: string): string[] {
   const home = process.env.HOME;
   const roots: string[] = [];
 
   // User-level skills
-  if (home) roots.push(path.join(home, '.copilot', 'skills'));
+  if (home) {
+    roots.push(path.join(home, '.copilot', 'skills'));
+    roots.push(path.join(home, '.agents', 'skills'));
+  }
   // Project-level skills (standard)
   roots.push(path.join(workingDirectory, '.github', 'skills'));
   // Project-level skills (legacy)
@@ -393,6 +397,7 @@ export class SessionManager {
     const dirs = discoverSkillDirectories(workingDirectory);
     const sessionDirs = this.sessionSkillDirs.get(channelId);
     const skills: { name: string; description: string; source: string; pending?: boolean }[] = [];
+    const home = process.env.HOME;
 
     for (const dir of dirs) {
       const name = path.basename(dir);
@@ -403,6 +408,7 @@ export class SessionManager {
       // Determine source from path (normalize separators for cross-platform)
       const normalized = dir.split(path.sep).join('/');
       if (normalized.includes('.copilot/skills')) source = 'user';
+      else if (home && normalized.startsWith(home.split(path.sep).join('/') + '/.agents/skills')) source = 'user';
       else if (normalized.includes('.github/skills')) source = 'workspace';
       else if (normalized.includes('.agents/skills')) source = 'workspace';
 
@@ -693,17 +699,15 @@ export class SessionManager {
 
   /** Switch the agent for a channel's session. */
   async switchAgent(channelId: string, agent: string | null): Promise<void> {
-    const sessionId = this.channelSessions.get(channelId);
-    if (sessionId) {
-      try {
-        if (agent) {
-          await this.bridge.selectAgent(sessionId, agent);
-        } else {
-          await this.bridge.deselectAgent(sessionId);
-        }
-      } catch (err) {
-        log.warn(`RPC agent switch failed:`, err);
+    const { sessionId } = await this.ensureSession(channelId);
+    try {
+      if (agent) {
+        await this.bridge.selectAgent(sessionId, agent);
+      } else {
+        await this.bridge.deselectAgent(sessionId);
       }
+    } catch (err) {
+      log.warn(`RPC agent switch failed:`, err);
     }
     setChannelPrefs(channelId, { agent });
   }

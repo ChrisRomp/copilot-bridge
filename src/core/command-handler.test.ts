@@ -189,4 +189,21 @@ describe('/agents command', () => {
       fs.rmSync(fmDir, { recursive: true, force: true });
     }
   });
+
+  it('parses YAML block scalar descriptions', () => {
+    const fmDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cmd-block-'));
+    const savedHome = process.env.HOME;
+    process.env.HOME = fmDir;
+    try {
+      const agentsDir = path.join(fmDir, 'agents');
+      fs.mkdirSync(agentsDir);
+      fs.writeFileSync(path.join(agentsDir, 'bob.agent.md'),
+        '---\nname: Bob\ndescription: >-\n  Use this agent for work prioritization\n  and meeting prep.\n---\n# Bob');
+      const result = handleCommand('ch-1', '/agents', undefined, undefined, { workingDirectory: fmDir });
+      expect(result.response).toContain('Use this agent for work prioritization and meeting prep.');
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+      fs.rmSync(fmDir, { recursive: true, force: true });
+    }
+  });
 });

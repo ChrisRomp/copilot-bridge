@@ -123,7 +123,24 @@ function extractAgentDescription(content: string): string {
     for (let i = 1; i < lines.length; i++) {
       if (lines[i].trim() === '---') break; // end of frontmatter
       const match = lines[i].match(/^description:\s*(.+)/i);
-      if (match) return ` — ${match[1].trim().slice(0, 80)}`;
+      if (match) {
+        const value = match[1].trim();
+        // YAML block scalars (>-, |-, >, |): collect indented continuation lines
+        if (value === '>' || value === '>-' || value === '|' || value === '|-') {
+          const parts: string[] = [];
+          for (let j = i + 1; j < lines.length; j++) {
+            const line = lines[j];
+            if (line.trim() === '---') break; // end of frontmatter
+            if (line.match(/^\S/) && line.trim() !== '') break; // new YAML key
+            if (line.trim() === '') break; // blank line ends first paragraph
+            parts.push(line.trim());
+          }
+          if (parts.length > 0) return ` — ${parts.join(' ').slice(0, 120)}`;
+          return '';
+        }
+        // Inline or quoted value
+        return ` — ${value.replace(/^["']|["']$/g, '').slice(0, 120)}`;
+      }
     }
   }
   // Fallback: first non-heading, non-empty, non-frontmatter line
@@ -134,7 +151,7 @@ function extractAgentDescription(content: string): string {
       if (trimmed === '---' && i > 0) inFrontmatter = false;
       continue;
     }
-    if (trimmed && !trimmed.startsWith('#')) return ` — ${trimmed.slice(0, 80)}`;
+    if (trimmed && !trimmed.startsWith('#')) return ` — ${trimmed.slice(0, 120)}`;
   }
   return '';
 }
@@ -276,7 +293,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       }
       const agents = discoverAgentDefinitions(agentsWorkDir);
       if (agents.size === 0) {
-        return { handled: true, response: 'No agent definitions found.\nPlace `*.agent.md` files in `<workspace>/agents/`, `~/.copilot/agents/`, or install a plugin with agents.' };
+        return { handled: true, response: 'No agent definitions found.\nPlace `*.agent.md` files in `<workspace>/agents/`, `<workspace>/.github/agents/`, `~/.copilot/agents/`, or install a plugin with agents.' };
       }
       const currentAgent = sessionInfo?.agent ?? null;
       const lines = ['**Available Agents**', ''];

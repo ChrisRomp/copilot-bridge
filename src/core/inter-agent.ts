@@ -189,7 +189,8 @@ export function buildCallerPrompt(context: InterAgentContext): string {
  * Sources (later entries win on name conflicts):
  *   1. Installed plugins: ~/.copilot/installed-plugins/<vendor>/<plugin>/agents/
  *   2. User profile:      ~/.copilot/agents/
- *   3. Workspace:          <workspacePath>/agents/
+ *   3. Workspace .github:  <workspacePath>/.github/agents/
+ *   4. Workspace:          <workspacePath>/agents/
  */
 function getAgentRoots(workspacePath: string): { dir: string; source: AgentSource }[] {
   const roots: { dir: string; source: AgentSource }[] = [];
@@ -221,7 +222,11 @@ function getAgentRoots(workspacePath: string): { dir: string; source: AgentSourc
     if (fs.existsSync(userAgents)) roots.push({ dir: userAgents, source: 'user' });
   }
 
-  // 3. Workspace agents (highest priority — overrides earlier sources)
+  // 3. Workspace .github/agents/ (GitHub Copilot convention)
+  const ghAgents = path.join(workspacePath, '.github', 'agents');
+  if (fs.existsSync(ghAgents)) roots.push({ dir: ghAgents, source: 'workspace' });
+
+  // 4. Workspace agents/ (highest priority — overrides earlier sources)
   const wsAgents = path.join(workspacePath, 'agents');
   if (fs.existsSync(wsAgents)) roots.push({ dir: wsAgents, source: 'workspace' });
 
