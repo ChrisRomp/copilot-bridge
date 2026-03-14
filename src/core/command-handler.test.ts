@@ -207,3 +207,102 @@ describe('/agents command', () => {
     }
   });
 });
+
+// --- Mode commands ---
+
+describe('mode commands', () => {
+  it('/plan returns action plan with no payload when bare', () => {
+    const result = handleCommand('ch-mode-1', '/plan');
+    expect(result.handled).toBe(true);
+    expect(result.action).toBe('plan');
+    expect(result.payload).toBeUndefined();
+  });
+
+  it('/plan show returns action plan with show payload', () => {
+    const result = handleCommand('ch-mode-1', '/plan show');
+    expect(result.handled).toBe(true);
+    expect(result.action).toBe('plan');
+    expect(result.payload).toBe('show');
+  });
+
+  it('/plan clear returns action plan with clear payload', () => {
+    const result = handleCommand('ch-mode-1', '/plan clear');
+    expect(result.handled).toBe(true);
+    expect(result.action).toBe('plan');
+    expect(result.payload).toBe('clear');
+  });
+
+  it('/plan on returns action plan with on payload', () => {
+    const result = handleCommand('ch-mode-1', '/plan on');
+    expect(result.handled).toBe(true);
+    expect(result.action).toBe('plan');
+    expect(result.payload).toBe('on');
+  });
+
+  it('/plan off returns action plan with off payload', () => {
+    const result = handleCommand('ch-mode-1', '/plan off');
+    expect(result.handled).toBe(true);
+    expect(result.action).toBe('plan');
+    expect(result.payload).toBe('off');
+  });
+
+  it('/autopilot returns action toggle_autopilot', () => {
+    const result = handleCommand('ch-mode-1', '/autopilot');
+    expect(result.handled).toBe(true);
+    expect(result.action).toBe('toggle_autopilot');
+  });
+
+  it('/yolo toggles permissionMode to autopilot', () => {
+    const result = handleCommand('ch-mode-yolo', '/yolo', undefined, { verbose: false, permissionMode: 'interactive', reasoningEffort: null });
+    expect(result.handled).toBe(true);
+    expect(result.response).toContain('Yolo enabled');
+  });
+
+  it('/yolo toggles permissionMode back to interactive', () => {
+    const result = handleCommand('ch-mode-yolo', '/yolo', undefined, { verbose: false, permissionMode: 'autopilot', reasoningEffort: null });
+    expect(result.handled).toBe(true);
+    expect(result.response).toContain('Yolo disabled');
+  });
+});
+
+// --- /status mode display ---
+
+describe('/status command', () => {
+  it('shows interactive mode by default', () => {
+    const result = handleCommand('ch-status-1', '/status',
+      { sessionId: 'abc-123', model: 'claude-sonnet-4.5', agent: null },
+      { verbose: false, permissionMode: 'interactive', reasoningEffort: null },
+    );
+    expect(result.response).toContain('Mode: 🛡️ Interactive');
+    expect(result.response).toContain('Yolo: 🛡️ Off');
+  });
+
+  it('shows plan mode when sessionMode is plan', async () => {
+    const { setChannelPrefs } = await import('../state/store.js');
+    setChannelPrefs('ch-status-plan', { sessionMode: 'plan', permissionMode: 'autopilot' });
+
+    const result = handleCommand('ch-status-plan', '/status',
+      { sessionId: 'abc-123', model: 'claude-sonnet-4.5', agent: null },
+      { verbose: false, permissionMode: 'autopilot', reasoningEffort: null },
+    );
+    expect(result.response).toContain('Mode: 📋 Plan');
+    expect(result.response).toContain('Yolo: 🤠 On');
+  });
+
+  it('shows autopilot mode when sessionMode is autopilot', async () => {
+    const { setChannelPrefs } = await import('../state/store.js');
+    setChannelPrefs('ch-status-auto', { sessionMode: 'autopilot' });
+
+    const result = handleCommand('ch-status-auto', '/status',
+      { sessionId: 'abc-123', model: 'claude-sonnet-4.5', agent: null },
+      { verbose: false, permissionMode: 'interactive', reasoningEffort: null },
+    );
+    expect(result.response).toContain('Mode: 🤖 Autopilot');
+    expect(result.response).toContain('Yolo: 🛡️ Off');
+  });
+
+  it('shows no active session when no sessionInfo', () => {
+    const result = handleCommand('ch-status-none', '/status');
+    expect(result.response).toContain('No active session');
+  });
+});
