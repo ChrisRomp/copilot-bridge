@@ -755,16 +755,17 @@ export class SessionManager {
     return this.bridge.listModels();
   }
 
-  /** Get the current session mode (interactive, plan, autopilot). */
-  async getSessionMode(channelId: string): Promise<string | null> {
+  /** Get the current session mode (interactive, plan, autopilot). Falls back to persisted prefs after restart. */
+  async getSessionMode(channelId: string): Promise<string> {
     const sessionId = this.channelSessions.get(channelId);
-    if (!sessionId) return null;
-    try {
-      const result = await this.bridge.getSessionMode(sessionId);
-      return result.mode;
-    } catch {
-      return null;
+    if (sessionId) {
+      try {
+        const result = await this.bridge.getSessionMode(sessionId);
+        return result.mode;
+      } catch { /* fall through to prefs */ }
     }
+    const prefs = getChannelPrefs(channelId);
+    return prefs?.sessionMode ?? 'interactive';
   }
 
   /** Set the session mode (interactive, plan, autopilot). Persists to channel prefs. Does not change yolo/permission state. */

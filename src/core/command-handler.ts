@@ -496,7 +496,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/rules` — Show all permission rules',
           '`/rules clear [spec]` — Clear rules (all or specific)',
           '`/yolo` — Toggle auto-approve permissions (no SDK mode change)',
-          '`/autopilot` — Toggle autopilot mode (autonomous agentic loop, implies yolo)',
+          '`/autopilot` — Toggle autopilot mode (autonomous agentic loop)',
           '',
           '**Scheduling**',
           '`/schedule list` — List scheduled tasks (aliases: `/schedules`, `/tasks`)',

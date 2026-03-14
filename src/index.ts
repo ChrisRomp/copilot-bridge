@@ -1241,7 +1241,7 @@ async function handleInboundMessage(
             await adapter.sendMessage(msg.channelId, '⚠️ Usage: `/plan` (toggle), `/plan show`, `/plan clear`, `/plan on`, `/plan off`', { threadRootId: threadRoot });
           }
         } catch (err: any) {
-          log.error(`Failed to handle /plan on ${msg.channelId.slice(0, 8)}...:`, err);
+          log.error(`Failed to handle /plan ${subcommand ?? '(toggle)'} on ${msg.channelId.slice(0, 8)}...:`, err);
           await adapter.sendMessage(msg.channelId, `❌ Failed: ${err?.message ?? 'unknown error'}`, { threadRootId: threadRoot });
         }
         break;
