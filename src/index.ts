@@ -649,7 +649,7 @@ async function handleMidTurnMessage(
     // Only commands where handleCommand returns a complete response (no separate action rendering).
     // Commands with complex action handlers (skills, schedule, rules) defer to serialized path.
     const SAFE_MID_TURN = new Set([
-      'context', 'status', 'help', 'verbose',
+      'context', 'status', 'help', 'verbose', 'yolo',
       'model', 'models', 'reasoning', 'agents',
       'streamer-mode', 'on-air',
     ]);
@@ -680,7 +680,7 @@ async function handleMidTurnMessage(
         if (cmdResult.response) {
           await adapter.sendMessage(msg.channelId, cmdResult.response, { threadRootId: threadRoot });
         }
-        // handleCommand already persists some prefs (verbose, reasoning) via setChannelPrefs
+        // handleCommand already persists some prefs (verbose, yolo, reasoning) via setChannelPrefs
         return;
       }
     }
@@ -1252,10 +1252,14 @@ async function handleInboundMessage(
           const current = await sessionManager.getSessionMode(msg.channelId);
           if (current === 'autopilot') {
             await sessionManager.setSessionMode(msg.channelId, 'interactive');
-            await adapter.sendMessage(msg.channelId, '🛡️ **Interactive mode** — permissions will require approval.', { threadRootId: threadRoot });
+            await adapter.sendMessage(msg.channelId,
+              '🛡️ **Autopilot off** — back to interactive mode. Yolo (auto-approve) is still active; use `/yolo` to disable.',
+              { threadRootId: threadRoot });
           } else {
             await sessionManager.setSessionMode(msg.channelId, 'autopilot');
-            await adapter.sendMessage(msg.channelId, '🤖 **Autopilot enabled** — all permissions auto-approved.', { threadRootId: threadRoot });
+            await adapter.sendMessage(msg.channelId,
+              '🤖 **Autopilot enabled** — autonomous agentic loop with auto-approved permissions. Use `/autopilot` to toggle off.',
+              { threadRootId: threadRoot });
           }
         } catch (err: any) {
           log.error(`Failed to toggle autopilot on ${msg.channelId.slice(0, 8)}...:`, err);

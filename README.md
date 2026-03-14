@@ -75,7 +75,8 @@ See the [Setup Guide — Running as a Service](docs/setup.md#running-as-a-servic
 | `/remember` | | Approve + persist the permission rule |
 | `/rules` | `/rule` | List saved permission rules |
 | `/rules clear [spec]` | | Clear rules (all, or by spec) |
-| `/autopilot` | `/yolo` | Toggle autopilot mode (auto-approve + autonomous agent) |
+| `/yolo` | | Toggle auto-approve permissions |
+| `/autopilot` | | Toggle autopilot mode (autonomous loop, implies yolo) |
 | **Planning** | | |
 | `/plan` | | Toggle plan mode (structured planning before implementation) |
 | `/plan show` | | Display the current plan |

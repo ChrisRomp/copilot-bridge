@@ -365,6 +365,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         `• Model: **${modelDisplay}**`,
         `• Agent: ${sessionInfo.agent ? `**${sessionInfo.agent}**` : 'Default (Copilot)'}`,
         `• Mode: ${modeDisplay}`,
+        `• Yolo: ${(effectivePrefs?.permissionMode ?? prefs?.permissionMode) === 'autopilot' ? '🤠 On' : '🛡️ Off'}`,
         `• Workspace: \`${channelMeta?.workingDirectory ?? 'unknown'}\``,
         `• Bot: ${channelMeta?.bot ? `@${channelMeta.bot}` : 'default'}`,
         `• Verbose: ${(effectivePrefs?.verbose ?? prefs?.verbose) ? '🔊 On' : '🔇 Off'}`,
@@ -394,8 +395,20 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       return { handled: true, action: 'deny', response: '❌ Denied.' };
 
     case 'autopilot':
-    case 'yolo':
       return { handled: true, action: 'toggle_autopilot' };
+
+    case 'yolo': {
+      const prefs = getChannelPrefs(channelId);
+      const current = effectivePrefs?.permissionMode ?? prefs?.permissionMode ?? 'interactive';
+      const newMode = current === 'autopilot' ? 'interactive' : 'autopilot';
+      setChannelPrefs(channelId, { permissionMode: newMode });
+      return {
+        handled: true,
+        response: newMode === 'autopilot'
+          ? '🤠 **Yolo enabled** — all permissions auto-approved.'
+          : '🛡️ **Yolo disabled** — permissions will require approval.',
+      };
+    }
 
     case 'remember':
     case 'rule':
@@ -449,7 +462,8 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         '`/status` — Show session info',
         '`/context` — Show context window usage',
         '`/verbose` — Toggle tool call visibility',
-        '`/autopilot` — Toggle auto-approve mode',
+        '`/autopilot` — Toggle autopilot mode',
+        '`/yolo` — Toggle auto-approve permissions',
         '`/schedule list` — List scheduled tasks',
         '`/skills` — Show available skills and MCP tools',
         '`/plan` — Toggle plan mode',
@@ -480,7 +494,8 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/remember` — Approve + save permission rule',
           '`/rules` — Show all permission rules',
           '`/rules clear [spec]` — Clear rules (all or specific)',
-          '`/autopilot` — Toggle auto-approve mode (alias: `/yolo`)',
+          '`/yolo` — Toggle auto-approve permissions (no SDK mode change)',
+          '`/autopilot` — Toggle autopilot mode (autonomous agentic loop, implies yolo)',
           '',
           '**Scheduling**',
           '`/schedule list` — List scheduled tasks (aliases: `/schedules`, `/tasks`)',
