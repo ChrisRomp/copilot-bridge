@@ -40,7 +40,7 @@ export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'reload_session' | 'reload_config' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills' | 'mcp';
+           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills' | 'mcp' | 'plan';
   payload?: any;
 }
 
@@ -419,6 +419,9 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
     case 'mcp':
       return { handled: true, action: 'mcp' };
 
+    case 'plan':
+      return { handled: true, action: 'plan', payload: parsed.args?.trim() || undefined };
+
     case 'streamer-mode':
     case 'on-air': {
       const current = isStreamerMode();
@@ -454,6 +457,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         '`/autopilot` — Toggle auto-approve mode',
         '`/schedule list` — List scheduled tasks',
         '`/skills` — Show available skills and MCP tools',
+        '`/plan` — Toggle plan mode',
         '`/help all` — Show all commands',
       ];
       if (!showAll) return { handled: true, response: common.join('\n') };
@@ -492,6 +496,9 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '**Tools & Info**',
           '`/skills` — Show available skills and MCP tools',
           '`/mcp` — Show MCP servers and their source',
+          '`/plan` — Toggle plan mode (on/off)',
+          '`/plan show` — Show current plan',
+          '`/plan clear` — Delete the plan',
           '`/streamer-mode [on|off]` — Toggle streamer mode',
           '`/help` — Show common commands',
         ].join('\n'),

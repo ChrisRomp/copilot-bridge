@@ -191,6 +191,24 @@ export class CopilotBridge {
     return (session as any).rpc.mode.set({ mode });
   }
 
+  async readPlan(id: string): Promise<{ exists: boolean; content: string | null; path: string | null }> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`Session ${id} not active`);
+    return session.rpc.plan.read();
+  }
+
+  async updatePlan(id: string, content: string): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`Session ${id} not active`);
+    await session.rpc.plan.update({ content });
+  }
+
+  async deletePlan(id: string): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`Session ${id} not active`);
+    await session.rpc.plan.delete();
+  }
+
   async getSessionModel(id: string): Promise<{ modelId: string }> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Session ${id} not active`);

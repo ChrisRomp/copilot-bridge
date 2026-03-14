@@ -755,6 +755,49 @@ export class SessionManager {
     return this.bridge.listModels();
   }
 
+  /** Get the current session mode (interactive, plan, autopilot). */
+  async getSessionMode(channelId: string): Promise<string | null> {
+    const sessionId = this.channelSessions.get(channelId);
+    if (!sessionId) return null;
+    try {
+      const result = await this.bridge.getSessionMode(sessionId);
+      return result.mode;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Set the session mode (interactive, plan, autopilot). */
+  async setSessionMode(channelId: string, mode: 'interactive' | 'plan' | 'autopilot'): Promise<string> {
+    const { sessionId } = await this.ensureSession(channelId);
+    const result = await this.bridge.setSessionMode(sessionId, mode);
+    return result.mode;
+  }
+
+  /** Read the plan.md file from the session workspace. */
+  async readPlan(channelId: string): Promise<{ exists: boolean; content: string | null }> {
+    const sessionId = this.channelSessions.get(channelId);
+    if (!sessionId) return { exists: false, content: null };
+    try {
+      const result = await this.bridge.readPlan(sessionId);
+      return { exists: result.exists, content: result.content };
+    } catch {
+      return { exists: false, content: null };
+    }
+  }
+
+  /** Clear the plan.md file from the session workspace. */
+  async deletePlan(channelId: string): Promise<boolean> {
+    const sessionId = this.channelSessions.get(channelId);
+    if (!sessionId) return false;
+    try {
+      await this.bridge.deletePlan(sessionId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** Check if the Copilot CLI is authenticated. */
   async getAuthStatus(): Promise<{ isAuthenticated: boolean; statusMessage?: string; login?: string }> {
     try {
