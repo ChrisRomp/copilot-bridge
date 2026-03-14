@@ -182,19 +182,37 @@ export class CopilotBridge {
   async getSessionMode(id: string): Promise<{ mode: string }> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Session ${id} not active`);
-    return (session as any).rpc.mode.get();
+    return session.rpc.mode.get();
   }
 
-  async setSessionMode(id: string, mode: string): Promise<{ mode: string }> {
+  async setSessionMode(id: string, mode: 'interactive' | 'plan' | 'autopilot'): Promise<{ mode: string }> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Session ${id} not active`);
-    return (session as any).rpc.mode.set({ mode });
+    return session.rpc.mode.set({ mode });
   }
 
-  async getSessionModel(id: string): Promise<{ modelId: string }> {
+  async readPlan(id: string): Promise<{ exists: boolean; content: string | null; path: string | null }> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Session ${id} not active`);
-    return (session as any).rpc.model.getCurrent();
+    return session.rpc.plan.read();
+  }
+
+  async updatePlan(id: string, content: string): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`Session ${id} not active`);
+    await session.rpc.plan.update({ content });
+  }
+
+  async deletePlan(id: string): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`Session ${id} not active`);
+    await session.rpc.plan.delete();
+  }
+
+  async getSessionModel(id: string): Promise<{ modelId?: string }> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`Session ${id} not active`);
+    return session.rpc.model.getCurrent();
   }
 
   async switchSessionModel(id: string, modelId: string): Promise<void> {
@@ -203,22 +221,22 @@ export class CopilotBridge {
     await session.setModel(modelId);
   }
 
-  async listAgents(id: string): Promise<any[]> {
+  async listAgents(id: string): Promise<any> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Session ${id} not active`);
-    return (session as any).rpc.agent.list();
+    return session.rpc.agent.list();
   }
 
-  async selectAgent(id: string, agentName: string): Promise<void> {
+  async selectAgent(id: string, agentName: string): Promise<any> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Session ${id} not active`);
-    return (session as any).rpc.agent.select({ name: agentName });
+    return session.rpc.agent.select({ name: agentName });
   }
 
-  async deselectAgent(id: string): Promise<void> {
+  async deselectAgent(id: string): Promise<any> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Session ${id} not active`);
-    return (session as any).rpc.agent.deselect();
+    return session.rpc.agent.deselect();
   }
 
   async listTools(model?: string): Promise<{ name: string; namespacedName?: string; description: string }[]> {

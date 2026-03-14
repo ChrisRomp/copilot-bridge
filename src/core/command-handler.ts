@@ -40,7 +40,7 @@ export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'reload_session' | 'reload_config' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills' | 'mcp';
+           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills' | 'mcp' | 'plan';
   payload?: any;
 }
 
@@ -353,15 +353,22 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       const modelDisplay = (streamerStatus && currentModelInfo && isHiddenModel(currentModelInfo))
         ? 'Hidden Model'
         : sessionInfo.model;
+      const modeLabels: Record<string, string> = {
+        'plan': '📋 Plan',
+        'autopilot': '🤖 Autopilot',
+      };
+      const sessionMode = prefs?.sessionMode ?? 'interactive';
+      const modeDisplay = modeLabels[sessionMode] ?? '🛡️ Interactive';
       const lines = [
         '📊 **Session Status**',
         `• Session: \`${sessionInfo.sessionId.slice(0, 8)}...\``,
         `• Model: **${modelDisplay}**`,
         `• Agent: ${sessionInfo.agent ? `**${sessionInfo.agent}**` : 'Default (Copilot)'}`,
+        `• Mode: ${modeDisplay}`,
+        `• Yolo: ${(effectivePrefs?.permissionMode ?? prefs?.permissionMode) === 'autopilot' ? '🤠 On' : '🛡️ Off'}`,
         `• Workspace: \`${channelMeta?.workingDirectory ?? 'unknown'}\``,
         `• Bot: ${channelMeta?.bot ? `@${channelMeta.bot}` : 'default'}`,
         `• Verbose: ${(effectivePrefs?.verbose ?? prefs?.verbose) ? '🔊 On' : '🔇 Off'}`,
-        `• Permission mode: ${(effectivePrefs?.permissionMode ?? prefs?.permissionMode) === 'autopilot' ? '🤖 Autopilot' : '🛡️ Interactive'}`,
       ];
       // Only show reasoning effort for models that support it
       if (currentModelInfo?.supportedReasoningEfforts && currentModelInfo.supportedReasoningEfforts.length > 0) {
@@ -387,7 +394,10 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
     case 'deny':
       return { handled: true, action: 'deny', response: '❌ Denied.' };
 
+    case 'auto':
     case 'autopilot':
+      return { handled: true, action: 'toggle_autopilot' };
+
     case 'yolo': {
       const prefs = getChannelPrefs(channelId);
       const current = effectivePrefs?.permissionMode ?? prefs?.permissionMode ?? 'interactive';
@@ -395,10 +405,9 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       setChannelPrefs(channelId, { permissionMode: newMode });
       return {
         handled: true,
-        action: 'toggle_autopilot',
         response: newMode === 'autopilot'
-          ? '🤖 **Autopilot enabled** — all permissions auto-approved.'
-          : '🛡️ **Interactive mode** — permissions will require approval.',
+          ? '🤠 **Yolo enabled** — all permissions auto-approved.'
+          : '🛡️ **Yolo disabled** — permissions will require approval.',
       };
     }
 
@@ -418,6 +427,9 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
 
     case 'mcp':
       return { handled: true, action: 'mcp' };
+
+    case 'plan':
+      return { handled: true, action: 'plan', payload: parsed.args?.trim() || undefined };
 
     case 'streamer-mode':
     case 'on-air': {
@@ -451,9 +463,11 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         '`/status` — Show session info',
         '`/context` — Show context window usage',
         '`/verbose` — Toggle tool call visibility',
-        '`/autopilot` — Toggle auto-approve mode',
+        '`/autopilot` — Toggle autopilot mode',
+        '`/yolo` — Toggle auto-approve permissions',
         '`/schedule list` — List scheduled tasks',
         '`/skills` — Show available skills and MCP tools',
+        '`/plan` — Toggle plan mode',
         '`/help all` — Show all commands',
       ];
       if (!showAll) return { handled: true, response: common.join('\n') };
@@ -481,7 +495,8 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/remember` — Approve + save permission rule',
           '`/rules` — Show all permission rules',
           '`/rules clear [spec]` — Clear rules (all or specific)',
-          '`/autopilot` — Toggle auto-approve mode (alias: `/yolo`)',
+          '`/yolo` — Toggle auto-approve permissions (no SDK mode change)',
+          '`/autopilot` — Toggle autopilot mode (autonomous agentic loop)',
           '',
           '**Scheduling**',
           '`/schedule list` — List scheduled tasks (aliases: `/schedules`, `/tasks`)',
@@ -492,6 +507,9 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '**Tools & Info**',
           '`/skills` — Show available skills and MCP tools',
           '`/mcp` — Show MCP servers and their source',
+          '`/plan` — Toggle plan mode (on/off)',
+          '`/plan show` — Show current plan',
+          '`/plan clear` — Delete the plan',
           '`/streamer-mode [on|off]` — Toggle streamer mode',
           '`/help` — Show common commands',
         ].join('\n'),

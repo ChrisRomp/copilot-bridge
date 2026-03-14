@@ -649,7 +649,7 @@ async function handleMidTurnMessage(
     // Only commands where handleCommand returns a complete response (no separate action rendering).
     // Commands with complex action handlers (skills, schedule, rules) defer to serialized path.
     const SAFE_MID_TURN = new Set([
-      'context', 'status', 'help', 'verbose', 'autopilot', 'yolo',
+      'context', 'status', 'help', 'verbose', 'yolo',
       'model', 'models', 'reasoning', 'agents',
       'streamer-mode', 'on-air',
     ]);
@@ -680,7 +680,7 @@ async function handleMidTurnMessage(
         if (cmdResult.response) {
           await adapter.sendMessage(msg.channelId, cmdResult.response, { threadRootId: threadRoot });
         }
-        // handleCommand already persists prefs (verbose, autopilot, reasoning) via setChannelPrefs
+        // handleCommand already persists some prefs (verbose, yolo, reasoning) via setChannelPrefs
         return;
       }
     }
@@ -1198,6 +1198,77 @@ async function handleInboundMessage(
         lines.push(`Total: ${mcpInfo.length} server(s)`);
 
         await adapter.sendMessage(msg.channelId, lines.join('\n'), { threadRootId: threadRoot });
+        break;
+      }
+
+      case 'plan': {
+        const subcommand = cmdResult.payload?.toLowerCase();
+        try {
+          if (subcommand === 'show' || subcommand === 'view') {
+            const plan = await sessionManager.readPlan(msg.channelId);
+            if (!plan.exists || !plan.content) {
+              await adapter.sendMessage(msg.channelId, '📋 No plan exists for this session.', { threadRootId: threadRoot });
+            } else {
+              const truncated = plan.content.length > 3500 ? plan.content.slice(0, 3500) + '\n\n_…truncated_' : plan.content;
+              await adapter.sendMessage(msg.channelId, `📋 **Current Plan**\n\n${truncated}`, { threadRootId: threadRoot });
+            }
+          } else if (subcommand === 'clear' || subcommand === 'delete') {
+            const deleted = await sessionManager.deletePlan(msg.channelId);
+            await adapter.sendMessage(msg.channelId,
+              deleted ? '📋 Plan cleared.' : '📋 No plan to clear.',
+              { threadRootId: threadRoot });
+          } else if (subcommand === 'off') {
+            await sessionManager.setSessionMode(msg.channelId, 'interactive');
+            await adapter.sendMessage(msg.channelId, '📋 **Plan mode off** — back to interactive mode.', { threadRootId: threadRoot });
+          } else if (subcommand === 'on') {
+            await sessionManager.setSessionMode(msg.channelId, 'plan');
+            await adapter.sendMessage(msg.channelId,
+              '📋 **Plan mode on** — messages will be handled as planning requests. The agent will create and update a plan before implementing.\n\nUse `/plan show` to view the plan, `/plan` to toggle off.',
+              { threadRootId: threadRoot });
+          } else if (!subcommand) {
+            // Toggle: check current mode and flip
+            const current = await sessionManager.getSessionMode(msg.channelId);
+            if (current === 'plan') {
+              await sessionManager.setSessionMode(msg.channelId, 'interactive');
+              await adapter.sendMessage(msg.channelId, '📋 **Plan mode off** — back to interactive mode.', { threadRootId: threadRoot });
+            } else {
+              await sessionManager.setSessionMode(msg.channelId, 'plan');
+              await adapter.sendMessage(msg.channelId,
+                '📋 **Plan mode on** — messages will be handled as planning requests. The agent will create and update a plan before implementing.\n\nUse `/plan show` to view the plan, `/plan` to toggle off.',
+                { threadRootId: threadRoot });
+            }
+          } else {
+            await adapter.sendMessage(msg.channelId, '⚠️ Usage: `/plan` (toggle), `/plan show`, `/plan clear`, `/plan on`, `/plan off`', { threadRootId: threadRoot });
+          }
+        } catch (err: any) {
+          log.error(`Failed to handle /plan ${subcommand ?? '(toggle)'} on ${msg.channelId.slice(0, 8)}...:`, err);
+          await adapter.sendMessage(msg.channelId, `❌ Failed: ${err?.message ?? 'unknown error'}`, { threadRootId: threadRoot });
+        }
+        break;
+      }
+
+      case 'toggle_autopilot': {
+        try {
+          const current = await sessionManager.getSessionMode(msg.channelId);
+          if (current === 'autopilot') {
+            await sessionManager.setSessionMode(msg.channelId, 'interactive');
+            await adapter.sendMessage(msg.channelId,
+              '🛡️ **Autopilot off** — back to interactive mode.',
+              { threadRootId: threadRoot });
+          } else {
+            await sessionManager.setSessionMode(msg.channelId, 'autopilot');
+            const prefs = sessionManager.getEffectivePrefs(msg.channelId);
+            const yoloWarning = prefs.permissionMode !== 'autopilot'
+              ? '\n\n⚠️ Yolo is off — you\'ll still be prompted for tool permissions. Use `/yolo` to auto-approve.'
+              : '';
+            await adapter.sendMessage(msg.channelId,
+              `🤖 **Autopilot enabled** — autonomous agentic loop. Use \`/autopilot\` to toggle off.${yoloWarning}`,
+              { threadRootId: threadRoot });
+          }
+        } catch (err: any) {
+          log.error(`Failed to toggle autopilot on ${msg.channelId.slice(0, 8)}...:`, err);
+          await adapter.sendMessage(msg.channelId, `❌ Failed: ${err?.message ?? 'unknown error'}`, { threadRootId: threadRoot });
+        }
         break;
       }
     }

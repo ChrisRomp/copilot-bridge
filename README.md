@@ -23,7 +23,7 @@ Mattermost Channel → copilot-bridge → @github/copilot-sdk → Copilot CLI
 - **Streaming responses** — Edit-in-place message updates with throttling
 - **MCP & skills** — Auto-loads MCP servers and skill directories from Copilot config
 - **Fuzzy model matching** — `/model opus` resolves to `claude-opus-4.6` (mobile-friendly)
-- **Interactive permissions** — Approve/deny tool use via chat, or `/autopilot` to auto-approve
+- **Interactive permissions** — Approve/deny tool use via chat, or `/autopilot` for full autonomous mode
 - **Model fallback** — Automatic fallback to alternative models on capacity/availability errors
 - **Loop detection** — Detects and breaks tool call loops with user notification
 - **Session management** — `/reload` to refresh config, `/resume` to switch between sessions (prefix matching supported)
@@ -75,7 +75,12 @@ See the [Setup Guide — Running as a Service](docs/setup.md#running-as-a-servic
 | `/remember` | | Approve + persist the permission rule |
 | `/rules` | `/rule` | List saved permission rules |
 | `/rules clear [spec]` | | Clear rules (all, or by spec) |
-| `/autopilot` | `/yolo` | Toggle auto-approve mode |
+| `/yolo` | | Toggle auto-approve permissions |
+| `/autopilot` | | Toggle autopilot mode (autonomous loop, implies yolo) |
+| **Planning** | | |
+| `/plan` | | Toggle plan mode (structured planning before implementation) |
+| `/plan show` | | Display the current plan |
+| `/plan clear` | | Delete the plan |
 | **Scheduling** | | |
 | `/schedule` | `/schedules`, `/tasks` | Manage scheduled tasks (list, cancel, pause, resume, history) |
 | **Tools & Info** | | |
