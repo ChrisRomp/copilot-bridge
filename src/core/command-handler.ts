@@ -394,6 +394,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
     case 'deny':
       return { handled: true, action: 'deny', response: '❌ Denied.' };
 
+    case 'auto':
     case 'autopilot':
       return { handled: true, action: 'toggle_autopilot' };
 
