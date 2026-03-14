@@ -1220,7 +1220,12 @@ async function handleInboundMessage(
           } else if (subcommand === 'off') {
             await sessionManager.setSessionMode(msg.channelId, 'interactive');
             await adapter.sendMessage(msg.channelId, '📋 **Plan mode off** — back to interactive mode.', { threadRootId: threadRoot });
-          } else if (subcommand === 'on' || !subcommand) {
+          } else if (subcommand === 'on') {
+            await sessionManager.setSessionMode(msg.channelId, 'plan');
+            await adapter.sendMessage(msg.channelId,
+              '📋 **Plan mode on** — messages will be handled as planning requests. The agent will create and update a plan before implementing.\n\nUse `/plan show` to view the plan, `/plan` to toggle off.',
+              { threadRootId: threadRoot });
+          } else if (!subcommand) {
             // Toggle: check current mode and flip
             const current = await sessionManager.getSessionMode(msg.channelId);
             if (current === 'plan') {
