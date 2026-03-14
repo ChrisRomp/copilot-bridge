@@ -767,10 +767,15 @@ export class SessionManager {
     }
   }
 
-  /** Set the session mode (interactive, plan, autopilot). */
+  /** Set the session mode (interactive, plan, autopilot). Also persists to channel prefs. */
   async setSessionMode(channelId: string, mode: 'interactive' | 'plan' | 'autopilot'): Promise<string> {
     const { sessionId } = await this.ensureSession(channelId);
     const result = await this.bridge.setSessionMode(sessionId, mode);
+    // Persist mode and sync permission bypass
+    setChannelPrefs(channelId, {
+      sessionMode: result.mode,
+      permissionMode: result.mode === 'autopilot' ? 'autopilot' : 'interactive',
+    });
     return result.mode;
   }
 

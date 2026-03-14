@@ -353,15 +353,21 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       const modelDisplay = (streamerStatus && currentModelInfo && isHiddenModel(currentModelInfo))
         ? 'Hidden Model'
         : sessionInfo.model;
+      const modeLabels: Record<string, string> = {
+        'plan': '📋 Plan',
+        'autopilot': '🤖 Autopilot',
+      };
+      const sessionMode = prefs?.sessionMode ?? 'interactive';
+      const modeDisplay = modeLabels[sessionMode] ?? '🛡️ Interactive';
       const lines = [
         '📊 **Session Status**',
         `• Session: \`${sessionInfo.sessionId.slice(0, 8)}...\``,
         `• Model: **${modelDisplay}**`,
         `• Agent: ${sessionInfo.agent ? `**${sessionInfo.agent}**` : 'Default (Copilot)'}`,
+        `• Mode: ${modeDisplay}`,
         `• Workspace: \`${channelMeta?.workingDirectory ?? 'unknown'}\``,
         `• Bot: ${channelMeta?.bot ? `@${channelMeta.bot}` : 'default'}`,
         `• Verbose: ${(effectivePrefs?.verbose ?? prefs?.verbose) ? '🔊 On' : '🔇 Off'}`,
-        `• Permission mode: ${(effectivePrefs?.permissionMode ?? prefs?.permissionMode) === 'autopilot' ? '🤖 Autopilot' : '🛡️ Interactive'}`,
       ];
       // Only show reasoning effort for models that support it
       if (currentModelInfo?.supportedReasoningEfforts && currentModelInfo.supportedReasoningEfforts.length > 0) {
@@ -388,19 +394,8 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       return { handled: true, action: 'deny', response: '❌ Denied.' };
 
     case 'autopilot':
-    case 'yolo': {
-      const prefs = getChannelPrefs(channelId);
-      const current = effectivePrefs?.permissionMode ?? prefs?.permissionMode ?? 'interactive';
-      const newMode = current === 'autopilot' ? 'interactive' : 'autopilot';
-      setChannelPrefs(channelId, { permissionMode: newMode });
-      return {
-        handled: true,
-        action: 'toggle_autopilot',
-        response: newMode === 'autopilot'
-          ? '🤖 **Autopilot enabled** — all permissions auto-approved.'
-          : '🛡️ **Interactive mode** — permissions will require approval.',
-      };
-    }
+    case 'yolo':
+      return { handled: true, action: 'toggle_autopilot' };
 
     case 'remember':
     case 'rule':
