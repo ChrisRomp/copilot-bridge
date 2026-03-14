@@ -767,15 +767,11 @@ export class SessionManager {
     }
   }
 
-  /** Set the session mode (interactive, plan, autopilot). Also persists to channel prefs. */
+  /** Set the session mode (interactive, plan, autopilot). Persists to channel prefs. Does not change yolo/permission state. */
   async setSessionMode(channelId: string, mode: 'interactive' | 'plan' | 'autopilot'): Promise<string> {
     const { sessionId } = await this.ensureSession(channelId);
     const result = await this.bridge.setSessionMode(sessionId, mode);
-    // Persist mode and sync permission bypass
-    setChannelPrefs(channelId, {
-      sessionMode: result.mode,
-      permissionMode: result.mode === 'autopilot' ? 'autopilot' : 'interactive',
-    });
+    setChannelPrefs(channelId, { sessionMode: result.mode });
     return result.mode;
   }
 

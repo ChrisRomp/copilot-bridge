@@ -1253,12 +1253,16 @@ async function handleInboundMessage(
           if (current === 'autopilot') {
             await sessionManager.setSessionMode(msg.channelId, 'interactive');
             await adapter.sendMessage(msg.channelId,
-              '🛡️ **Autopilot off** — back to interactive mode. Yolo (auto-approve) is still active; use `/yolo` to disable.',
+              '🛡️ **Autopilot off** — back to interactive mode.',
               { threadRootId: threadRoot });
           } else {
             await sessionManager.setSessionMode(msg.channelId, 'autopilot');
+            const prefs = sessionManager.getEffectivePrefs(msg.channelId);
+            const yoloWarning = prefs.permissionMode !== 'autopilot'
+              ? '\n\n⚠️ Yolo is off — you\'ll still be prompted for tool permissions. Use `/yolo` to auto-approve.'
+              : '';
             await adapter.sendMessage(msg.channelId,
-              '🤖 **Autopilot enabled** — autonomous agentic loop with auto-approved permissions. Use `/autopilot` to toggle off.',
+              `🤖 **Autopilot enabled** — autonomous agentic loop. Use \`/autopilot\` to toggle off.${yoloWarning}`,
               { threadRootId: threadRoot });
           }
         } catch (err: any) {
