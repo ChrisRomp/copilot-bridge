@@ -340,7 +340,6 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         handled: true,
         action: 'set_reasoning',
         payload: level,
-        response: `🧠 Reasoning effort set to **${level}**. Takes effect on next session (\`/new\`).`,
       };
     }
 
