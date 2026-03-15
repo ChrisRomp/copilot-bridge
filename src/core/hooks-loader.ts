@@ -1,29 +1,28 @@
 /**
  * hooks-loader.ts — Discover and load session hooks from plugins, user config, and workspace.
  *
- * Hooks are declared in hooks.json files that map hook types to JS/TS handler modules.
- * Multiple hooks.json files are merged: later sources can override earlier ones.
- *
- * Discovery order (lowest → highest priority):
- *   1. Plugin hooks:    ~/.copilot/installed-plugins/.../hooks.json
- *   2. User hooks:      ~/.copilot/hooks.json
- *   3. Workspace hooks: <workspace>/.github/hooks.json, <workspace>/hooks.json
- *
- * hooks.json format:
+ * Uses the official CLI hooks.json format:
  * {
+ *   "version": 1,
  *   "hooks": {
- *     "onPreToolUse": "./hooks/audit.js",
- *     "onPostToolUse": "./hooks/redact.js",
- *     "onSessionStart": "./hooks/init.js"
+ *     "preToolUse": [
+ *       { "type": "command", "bash": "./scripts/guard.sh", "cwd": ".", "timeoutSec": 10 }
+ *     ]
  *   }
  * }
  *
- * Each handler module must export a default function matching the SDK hook signature.
+ * Hooks are shell commands. Input is piped as JSON to stdin, output read from stdout.
+ * Multiple hooks per type run in sequence; for preToolUse, first "deny" wins.
+ *
+ * Discovery order (lowest → highest priority, later entries append):
+ *   1. Plugin hooks:    ~/.copilot/installed-plugins/.../hooks.json
+ *   2. User hooks:      ~/.copilot/hooks.json
+ *   3. Workspace hooks: <workspace>/.github/hooks/hooks.json, <workspace>/hooks.json
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('hooks');
@@ -38,14 +37,27 @@ export interface SessionHooks {
   onErrorOccurred?: (input: any, invocation: { sessionId: string }) => Promise<any> | any;
 }
 
-const VALID_HOOK_TYPES = new Set<keyof SessionHooks>([
-  'onPreToolUse',
-  'onPostToolUse',
-  'onUserPromptSubmitted',
-  'onSessionStart',
-  'onSessionEnd',
-  'onErrorOccurred',
-]);
+/** CLI hook type names → SDK SessionHooks keys */
+const HOOK_TYPE_MAP: Record<string, keyof SessionHooks> = {
+  preToolUse: 'onPreToolUse',
+  postToolUse: 'onPostToolUse',
+  userPromptSubmitted: 'onUserPromptSubmitted',
+  sessionStart: 'onSessionStart',
+  sessionEnd: 'onSessionEnd',
+  errorOccurred: 'onErrorOccurred',
+};
+
+const VALID_HOOK_TYPES = new Set(Object.keys(HOOK_TYPE_MAP));
+
+/** A single hook command entry from hooks.json */
+export interface HookCommand {
+  type: 'command';
+  bash?: string;
+  powershell?: string;
+  cwd?: string;
+  timeoutSec?: number;
+  env?: Record<string, string>;
+}
 
 export interface LoadHooksOptions {
   /** Include hooks from workspace hooks.json files (default: false for security) */
@@ -90,6 +102,10 @@ function discoverHooksFiles(workingDirectory: string, options?: LoadHooksOptions
 
   // 3. Workspace hooks (only if explicitly allowed — executes arbitrary code)
   if (options?.allowWorkspaceHooks) {
+    const wsGithubHooks = path.join(workingDirectory, '.github', 'hooks', 'hooks.json');
+    if (fs.existsSync(wsGithubHooks)) {
+      results.push({ file: wsGithubHooks, baseDir: path.join(workingDirectory, '.github', 'hooks') });
+    }
     const wsGithub = path.join(workingDirectory, '.github', 'hooks.json');
     if (fs.existsSync(wsGithub)) {
       results.push({ file: wsGithub, baseDir: path.join(workingDirectory, '.github') });
@@ -104,93 +120,142 @@ function discoverHooksFiles(workingDirectory: string, options?: LoadHooksOptions
 }
 
 /**
- * Parse a hooks.json file and return validated hook type → module path mappings.
+ * Parse a hooks.json file and return validated hook commands per type.
  */
-function parseHooksConfig(filePath: string, baseDir: string): Map<keyof SessionHooks, string> {
-  const mappings = new Map<keyof SessionHooks, string>();
+function parseHooksConfig(filePath: string): Map<string, HookCommand[]> {
+  const result = new Map<string, HookCommand[]>();
   try {
     const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    const hooks = raw.hooks ?? raw;
+    const hooks = raw.hooks;
     if (typeof hooks !== 'object' || hooks === null) {
-      log.warn(`Invalid hooks.json format: ${filePath}`);
-      return mappings;
+      log.warn(`Invalid hooks.json format (missing "hooks" key): ${filePath}`);
+      return result;
     }
 
-    for (const [hookType, modulePath] of Object.entries(hooks)) {
-      if (!VALID_HOOK_TYPES.has(hookType as keyof SessionHooks)) {
+    for (const [hookType, commands] of Object.entries(hooks)) {
+      if (!VALID_HOOK_TYPES.has(hookType)) {
         log.warn(`Unknown hook type "${hookType}" in ${filePath}, skipping`);
         continue;
       }
-      if (typeof modulePath !== 'string') {
-        log.warn(`Invalid module path for "${hookType}" in ${filePath}, skipping`);
+      if (!Array.isArray(commands)) {
+        log.warn(`Hook type "${hookType}" must be an array in ${filePath}, skipping`);
         continue;
       }
-      const resolved = path.resolve(baseDir, modulePath);
-      if (!resolved.startsWith(baseDir + path.sep) && resolved !== baseDir) {
-        log.warn(`Hook module path "${modulePath}" escapes base directory in ${filePath}, skipping`);
-        continue;
+      const valid: HookCommand[] = [];
+      for (const cmd of commands) {
+        if (cmd.type !== 'command' || (!cmd.bash && !cmd.powershell)) {
+          log.warn(`Invalid hook command for "${hookType}" in ${filePath}, skipping`);
+          continue;
+        }
+        valid.push(cmd);
       }
-      mappings.set(hookType as keyof SessionHooks, resolved);
+      if (valid.length > 0) {
+        result.set(hookType, valid);
+      }
     }
   } catch (err) {
     log.warn(`Failed to parse ${filePath}: ${err}`);
   }
-  return mappings;
+  return result;
 }
 
 /**
- * Dynamically import a hook handler module.
- * Expects the module to export a default function.
+ * Execute a hook command by spawning a shell process.
+ * Input is piped as JSON to stdin, output parsed from stdout.
  */
-async function loadHookHandler(modulePath: string, hookType: string): Promise<((...args: any[]) => any) | null> {
+function executeHookCommand(cmd: HookCommand, input: any, baseDir: string): any | undefined {
+  const shell = cmd.bash ? 'bash' : 'powershell';
+  const script = cmd.bash ?? cmd.powershell!;
+  const cwd = cmd.cwd ? path.resolve(baseDir, cmd.cwd) : baseDir;
+  const timeoutMs = (cmd.timeoutSec ?? 30) * 1000;
+
   try {
-    if (!fs.existsSync(modulePath)) {
-      log.warn(`Hook module not found: ${modulePath} (${hookType})`);
-      return null;
+    const stdout = execFileSync(shell, ['-c', script], {
+      input: JSON.stringify(input),
+      cwd,
+      timeout: timeoutMs,
+      encoding: 'utf8',
+      env: { ...process.env, ...cmd.env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    const trimmed = stdout.trim();
+    if (!trimmed) return undefined;
+
+    return JSON.parse(trimmed);
+  } catch (err: any) {
+    if (err.killed) {
+      log.warn(`Hook command timed out after ${cmd.timeoutSec ?? 30}s: ${script}`);
+    } else {
+      log.warn(`Hook command failed: ${script} — ${err.message ?? err}`);
     }
-    const mod = await import(pathToFileURL(modulePath).href);
-    const handler = mod.default ?? mod[hookType];
-    if (typeof handler !== 'function') {
-      log.warn(`Hook module ${modulePath} does not export a function for ${hookType}`);
-      return null;
-    }
-    return handler;
-  } catch (err) {
-    log.warn(`Failed to load hook module ${modulePath}: ${err}`);
-    return null;
+    return undefined;
   }
 }
 
 /**
+ * Build a SessionHooks callback that runs all commands for a given hook type.
+ * For preToolUse, first "deny" decision short-circuits.
+ */
+function buildHookCallback(
+  hookType: string,
+  allCommands: { cmd: HookCommand; baseDir: string }[],
+): (input: any, invocation: { sessionId: string }) => any {
+  return (input: any, _invocation: { sessionId: string }) => {
+    let mergedResult: any = undefined;
+
+    for (const { cmd, baseDir } of allCommands) {
+      const result = executeHookCommand(cmd, input, baseDir);
+      if (!result) continue;
+
+      if (!mergedResult) {
+        mergedResult = result;
+      } else {
+        Object.assign(mergedResult, result);
+      }
+
+      // For preToolUse, a deny short-circuits
+      if (hookType === 'preToolUse' && result.permissionDecision === 'deny') {
+        return mergedResult;
+      }
+    }
+
+    return mergedResult;
+  };
+}
+
+/**
  * Discover and load all hooks for a given workspace.
- * Returns a merged SessionHooks object ready to pass to the SDK, or undefined if no hooks found.
+ * Returns a SessionHooks object ready to pass to the SDK, or undefined if no hooks found.
  */
 export async function loadHooks(workingDirectory: string, options?: LoadHooksOptions): Promise<SessionHooks | undefined> {
   const files = discoverHooksFiles(workingDirectory, options);
   if (files.length === 0) return undefined;
 
-  // Merge configs: later files override earlier (higher priority wins)
-  const merged = new Map<keyof SessionHooks, string>();
+  // Collect all commands per hook type across all files (all sources append)
+  const commandsByType = new Map<string, { cmd: HookCommand; baseDir: string }[]>();
+
   for (const { file, baseDir } of files) {
-    const config = parseHooksConfig(file, baseDir);
-    for (const [hookType, modulePath] of config) {
-      merged.set(hookType, modulePath);
+    const config = parseHooksConfig(file);
+    for (const [hookType, commands] of config) {
+      const existing = commandsByType.get(hookType) ?? [];
+      for (const cmd of commands) {
+        existing.push({ cmd, baseDir });
+      }
+      commandsByType.set(hookType, existing);
     }
-    log.debug(`Loaded hooks config from ${file} (${config.size} hook(s))`);
+    log.debug(`Loaded hooks config from ${file} (${config.size} hook type(s))`);
   }
 
-  if (merged.size === 0) return undefined;
+  if (commandsByType.size === 0) return undefined;
 
-  // Load all handler modules in parallel
   const hooks: SessionHooks = {};
-  const loadPromises = [...merged.entries()].map(async ([hookType, modulePath]) => {
-    const handler = await loadHookHandler(modulePath, hookType);
-    if (handler) {
-      (hooks as any)[hookType] = handler;
-      log.info(`Registered ${hookType} hook from ${modulePath}`);
-    }
-  });
-  await Promise.all(loadPromises);
+  for (const [hookType, commands] of commandsByType) {
+    const sdkKey = HOOK_TYPE_MAP[hookType];
+    if (!sdkKey) continue;
+    (hooks as any)[sdkKey] = buildHookCallback(hookType, commands);
+    log.info(`Registered ${hookType} hook (${commands.length} command(s))`);
+  }
 
   return Object.keys(hooks).length > 0 ? hooks : undefined;
 }
@@ -198,11 +263,11 @@ export async function loadHooks(workingDirectory: string, options?: LoadHooksOpt
 export interface HookInfo {
   hookType: string;
   source: 'plugin' | 'user' | 'workspace';
-  modulePath: string;
+  commandCount: number;
 }
 
 /**
- * Return metadata about configured hooks without loading handler modules.
+ * Return metadata about configured hooks without executing them.
  * Used by /tools to show which hooks are active.
  */
 export function getHooksInfo(workingDirectory: string, options?: LoadHooksOptions): HookInfo[] {
@@ -210,23 +275,31 @@ export function getHooksInfo(workingDirectory: string, options?: LoadHooksOption
   if (files.length === 0) return [];
 
   const home = process.env.HOME ?? '';
-  const merged = new Map<string, { modulePath: string; source: 'plugin' | 'user' | 'workspace' }>();
+  // Accumulate command counts per hook type per source
+  const info = new Map<string, { source: 'plugin' | 'user' | 'workspace'; commandCount: number }>();
 
-  for (const { file, baseDir } of files) {
-    const config = parseHooksConfig(file, baseDir);
+  for (const { file } of files) {
+    const config = parseHooksConfig(file);
     const normalized = file.split(path.sep).join('/');
     let source: 'plugin' | 'user' | 'workspace' = 'user';
     if (normalized.includes('installed-plugins')) source = 'plugin';
-    else if (home && normalized.startsWith(home.split(path.sep).join('/') + '/.copilot/hooks.json')) source = 'user';
+    else if (home && normalized.includes(home.split(path.sep).join('/') + '/.copilot/')) source = 'user';
     else source = 'workspace';
 
-    for (const [hookType, modulePath] of config) {
-      merged.set(hookType, { modulePath, source });
+    for (const [hookType, commands] of config) {
+      const existing = info.get(hookType);
+      if (existing) {
+        existing.commandCount += commands.length;
+        // Higher-priority source wins for display
+        existing.source = source;
+      } else {
+        info.set(hookType, { source, commandCount: commands.length });
+      }
     }
   }
 
-  return [...merged.entries()]
-    .map(([hookType, { source, modulePath }]) => ({ hookType, source, modulePath }))
+  return [...info.entries()]
+    .map(([hookType, { source, commandCount }]) => ({ hookType, source, commandCount }))
     .sort((a, b) => a.hookType.localeCompare(b.hookType));
 }
 

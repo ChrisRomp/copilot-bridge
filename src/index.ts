@@ -1174,7 +1174,8 @@ async function handleInboundMessage(
         if (hooksInfo.length > 0) {
           lines.push('**Hooks**');
           for (const h of hooksInfo) {
-            lines.push(`• \`${h.hookType}\` _(${h.source})_`);
+            const count = h.commandCount > 1 ? ` (${h.commandCount} commands)` : '';
+            lines.push(`• \`${h.hookType}\`${count} _(${h.source})_`);
           }
           lines.push('');
         }
