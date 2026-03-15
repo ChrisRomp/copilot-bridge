@@ -429,6 +429,9 @@ export class MattermostAdapter implements ChannelAdapter {
     const cached = this.userCache.get(userId);
     if (cached && Date.now() - cached.ts < MattermostAdapter.USER_CACHE_TTL_MS) return cached.username;
 
+    // Evict expired entries opportunistically
+    if (cached) this.userCache.delete(userId);
+
     try {
       const baseUrl = this.client.getBaseRoute();
       const resp = await fetch(`${baseUrl}/users/${userId}`, {
