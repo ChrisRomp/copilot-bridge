@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatEvent } from './stream-formatter.js';
+import { formatEvent, formatPermissionRequest } from './stream-formatter.js';
 
 describe('formatEvent', () => {
   describe('thinking/reasoning suppression', () => {
@@ -76,8 +76,6 @@ describe('formatEvent', () => {
     });
   });
 });
-
-import { formatPermissionRequest } from './stream-formatter.js';
 
 describe('formatPermissionRequest', () => {
   it('includes /always approve and /always deny in prompt', () => {
