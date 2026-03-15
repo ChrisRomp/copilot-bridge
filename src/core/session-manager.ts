@@ -433,7 +433,8 @@ export class SessionManager {
 
       // Determine source from path (normalize separators for cross-platform)
       const normalized = dir.split(path.sep).join('/');
-      if (normalized.includes('.copilot/skills')) source = 'user';
+      if (normalized.includes('installed-plugins') && normalized.includes('/skills')) source = 'plugin';
+      else if (normalized.includes('.copilot/skills')) source = 'user';
       else if (home && normalized.startsWith(home.split(path.sep).join('/') + '/.agents/skills')) source = 'user';
       else if (normalized.includes('.github/skills')) source = 'workspace';
       else if (normalized.includes('.agents/skills')) source = 'workspace';
