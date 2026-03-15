@@ -23,7 +23,7 @@ import {
 import { createLogger } from '../logger.js';
 import { tryWithFallback, isModelError, buildFallbackChain } from './model-fallback.js';
 import type { McpServerInfo } from './command-handler.js';
-import { loadHooks, type SessionHooks } from './hooks-loader.js';
+import { loadHooks, getHooksInfo, type SessionHooks, type HookInfo } from './hooks-loader.js';
 import type {
   ChannelAdapter, InboundMessage, PendingPermission, PendingUserInput,
 } from '../types.js';
@@ -465,6 +465,13 @@ export class SessionManager {
     }
 
     return skills.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** Get info about configured hooks for a channel's workspace. */
+  getHooksInfo(channelId: string): HookInfo[] {
+    const workingDirectory = this.resolveWorkingDirectory(channelId);
+    const allowWorkspaceHooks = getConfig().defaults.allowWorkspaceHooks ?? false;
+    return getHooksInfo(workingDirectory, { allowWorkspaceHooks });
   }
 
   /** List tools the SDK CLI process has available (via server RPC). */

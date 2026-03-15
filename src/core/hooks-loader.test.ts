@@ -161,3 +161,73 @@ describe('mergeHooks', () => {
     expect(result!.onSessionEnd).toBe(baseFn);
   });
 });
+
+describe('getHooksInfo', () => {
+  let getHooksInfo: typeof import('./hooks-loader.js').getHooksInfo;
+
+  beforeEach(async () => {
+    const mod = await import('./hooks-loader.js');
+    getHooksInfo = mod.getHooksInfo;
+  });
+
+  it('returns empty array when no hooks.json files exist', () => {
+    const result = getHooksInfo(testDir);
+    expect(result).toEqual([]);
+  });
+
+  it('returns hook info from user hooks.json', () => {
+    const copilotDir = path.join(testDir, '.copilot');
+    fs.mkdirSync(copilotDir, { recursive: true });
+    fs.writeFileSync(path.join(copilotDir, 'hooks.json'), JSON.stringify({
+      hooks: {
+        onPreToolUse: './audit.js',
+        onSessionStart: './init.js',
+      },
+    }));
+    fs.writeFileSync(path.join(copilotDir, 'audit.js'), '');
+    fs.writeFileSync(path.join(copilotDir, 'init.js'), '');
+
+    const result = getHooksInfo(testDir);
+    expect(result).toHaveLength(2);
+    expect(result[0].hookType).toBe('onPreToolUse');
+    expect(result[0].source).toBe('user');
+    expect(result[1].hookType).toBe('onSessionStart');
+    expect(result[1].source).toBe('user');
+  });
+
+  it('returns workspace source for workspace hooks', () => {
+    fs.writeFileSync(path.join(testDir, 'hooks.json'), JSON.stringify({
+      hooks: { onPostToolUse: './redact.js' },
+    }));
+    fs.writeFileSync(path.join(testDir, 'redact.js'), '');
+
+    const result = getHooksInfo(testDir, { allowWorkspaceHooks: true });
+    expect(result).toHaveLength(1);
+    expect(result[0].hookType).toBe('onPostToolUse');
+    expect(result[0].source).toBe('workspace');
+  });
+
+  it('excludes workspace hooks when not allowed', () => {
+    fs.writeFileSync(path.join(testDir, 'hooks.json'), JSON.stringify({
+      hooks: { onPostToolUse: './redact.js' },
+    }));
+    fs.writeFileSync(path.join(testDir, 'redact.js'), '');
+
+    const result = getHooksInfo(testDir, { allowWorkspaceHooks: false });
+    expect(result).toEqual([]);
+  });
+
+  it('returns plugin source for plugin hooks', () => {
+    const pluginDir = path.join(testDir, '.copilot', 'installed-plugins', 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, 'hooks.json'), JSON.stringify({
+      hooks: { onErrorOccurred: './handler.js' },
+    }));
+    fs.writeFileSync(path.join(pluginDir, 'handler.js'), '');
+
+    const result = getHooksInfo(testDir);
+    expect(result).toHaveLength(1);
+    expect(result[0].hookType).toBe('onErrorOccurred');
+    expect(result[0].source).toBe('plugin');
+  });
+});

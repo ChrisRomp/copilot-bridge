@@ -195,6 +195,41 @@ export async function loadHooks(workingDirectory: string, options?: LoadHooksOpt
   return Object.keys(hooks).length > 0 ? hooks : undefined;
 }
 
+export interface HookInfo {
+  hookType: string;
+  source: 'plugin' | 'user' | 'workspace';
+  modulePath: string;
+}
+
+/**
+ * Return metadata about configured hooks without loading handler modules.
+ * Used by /tools to show which hooks are active.
+ */
+export function getHooksInfo(workingDirectory: string, options?: LoadHooksOptions): HookInfo[] {
+  const files = discoverHooksFiles(workingDirectory, options);
+  if (files.length === 0) return [];
+
+  const home = process.env.HOME ?? '';
+  const merged = new Map<string, { modulePath: string; source: 'plugin' | 'user' | 'workspace' }>();
+
+  for (const { file, baseDir } of files) {
+    const config = parseHooksConfig(file, baseDir);
+    const normalized = file.split(path.sep).join('/');
+    let source: 'plugin' | 'user' | 'workspace' = 'user';
+    if (normalized.includes('installed-plugins')) source = 'plugin';
+    else if (home && normalized.startsWith(home.split(path.sep).join('/') + '/.copilot/hooks.json')) source = 'user';
+    else source = 'workspace';
+
+    for (const [hookType, modulePath] of config) {
+      merged.set(hookType, { modulePath, source });
+    }
+  }
+
+  return [...merged.entries()]
+    .map(([hookType, { source, modulePath }]) => ({ hookType, source, modulePath }))
+    .sort((a, b) => a.hookType.localeCompare(b.hookType));
+}
+
 /**
  * Merge two SessionHooks objects. The override hooks take precedence.
  */

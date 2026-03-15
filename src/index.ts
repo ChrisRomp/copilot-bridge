@@ -1149,6 +1149,7 @@ async function handleInboundMessage(
       case 'skills': {
         const skills = sessionManager.getSkillInfo(msg.channelId);
         const mcpInfo = sessionManager.getMcpServerInfo(msg.channelId);
+        const hooksInfo = sessionManager.getHooksInfo(msg.channelId);
         const lines: string[] = ['🧰 **Skills & Tools**', ''];
 
         if (skills.length > 0) {
@@ -1166,6 +1167,14 @@ async function handleInboundMessage(
           for (const s of mcpInfo) {
             const flag = s.pending ? ' ⏳ _reload to activate_' : '';
             lines.push(`• \`${s.name}\` _(${s.source})_${flag}`);
+          }
+          lines.push('');
+        }
+
+        if (hooksInfo.length > 0) {
+          lines.push('**Hooks**');
+          for (const h of hooksInfo) {
+            lines.push(`• \`${h.hookType}\` _(${h.source})_`);
           }
           lines.push('');
         }
