@@ -76,3 +76,26 @@ describe('formatEvent', () => {
     });
   });
 });
+
+import { formatPermissionRequest } from './stream-formatter.js';
+
+describe('formatPermissionRequest', () => {
+  it('includes /always approve and /always deny in prompt', () => {
+    const result = formatPermissionRequest('bash', { command: 'ls' }, ['ls']);
+    expect(result).toContain('`/always approve`');
+    expect(result).toContain('`/always deny`');
+    expect(result).not.toContain('add `/remember`');
+  });
+
+  it('includes reaction instructions with all four options', () => {
+    const result = formatPermissionRequest('bash', { command: 'ls' }, ['ls']);
+    expect(result).toContain('💾 always approve');
+    expect(result).toContain('🚫 always deny');
+  });
+
+  it('mentions server name for MCP permissions', () => {
+    const result = formatPermissionRequest('mcp-tool', {}, [], 'my-server');
+    expect(result).toContain('`/always approve`');
+    expect(result).toContain('**my-server** tools');
+  });
+});
