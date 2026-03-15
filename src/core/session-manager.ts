@@ -365,6 +365,67 @@ export class SessionManager {
     return hooks;
   }
 
+  /**
+   * Wrap loaded hooks so that preToolUse "ask" decisions trigger the bridge's
+   * interactive permission prompt instead of being ignored by the CLI.
+   */
+  private wrapHooksWithAsk(hooks: SessionHooks | undefined, channelId: string): SessionHooks | undefined {
+    if (!hooks?.onPreToolUse) return hooks;
+    const originalPreToolUse = hooks.onPreToolUse;
+
+    const wrappedPreToolUse = async (input: any, invocation: { sessionId: string }) => {
+      const result = await originalPreToolUse(input, invocation);
+      if (!result || result.permissionDecision !== 'ask') return result;
+
+      // Convert "ask" into an interactive permission prompt
+      const reason = result.permissionDecisionReason ?? 'Hook requires confirmation';
+      const toolName = input.toolName ?? 'unknown';
+
+      return new Promise<any>((resolve) => {
+        const entry: PendingPermission = {
+          sessionId: invocation.sessionId,
+          channelId,
+          toolName: `hook:${toolName}`,
+          serverName: undefined,
+          fromHook: true,
+          toolInput: input.toolArgs,
+          commands: [],
+          resolve: (decision: any) => {
+            if (decision.kind === 'approved') {
+              resolve({ ...result, permissionDecision: 'allow' });
+            } else {
+              resolve({ ...result, permissionDecision: 'deny', permissionDecisionReason: reason });
+            }
+          },
+          createdAt: Date.now(),
+        };
+
+        let queue = this.pendingPermissions.get(channelId);
+        if (!queue) {
+          queue = [];
+          this.pendingPermissions.set(channelId, queue);
+        }
+        queue.push(entry);
+
+        if (queue.length === 1) {
+          this.eventHandler?.(invocation.sessionId, channelId, {
+            type: 'bridge.permission_request',
+            data: {
+              toolName: `hook:${toolName}`,
+              serverName: undefined,
+              input: input.toolArgs,
+              commands: [],
+              hookReason: reason,
+              fromHook: true,
+            },
+          });
+        }
+      });
+    };
+
+    return { ...hooks, onPreToolUse: wrappedPreToolUse };
+  }
+
   /** Register a handler for session events (streaming, tool calls, etc.) */
   onSessionEvent(handler: SessionEventHandler): void {
     this.eventHandler = handler;
@@ -863,7 +924,7 @@ export class SessionManager {
 
     const pending = queue.shift()!;
 
-    if (remember) {
+    if (remember && !pending.fromHook) {
       const action = allow ? 'allow' : 'deny';
       if (pending.serverName) {
         // MCP tool: save at server level so all tools on this server are covered
@@ -894,6 +955,7 @@ export class SessionManager {
           serverName: next.serverName,
           input: next.toolInput,
           commands: next.commands,
+          fromHook: next.fromHook,
         },
       });
     }
@@ -931,6 +993,12 @@ export class SessionManager {
   hasPendingPermission(channelId: string): boolean {
     const queue = this.pendingPermissions.get(channelId);
     return !!queue && queue.length > 0;
+  }
+
+  /** Check if the current pending permission is from a hook (no remember allowed). */
+  isHookPermission(channelId: string): boolean {
+    const queue = this.pendingPermissions.get(channelId);
+    return !!queue && queue.length > 0 && !!queue[0].fromHook;
   }
 
   /** Get the current session ID for a channel (if any). */
@@ -1029,7 +1097,11 @@ export class SessionManager {
     }
 
     const resolvedMcpServers = this.resolveMcpServers(workingDirectory);
-    const hooks = await this.resolveHooks(workingDirectory);
+    const rawHooks = await this.resolveHooks(workingDirectory);
+    const hooks = this.wrapHooksWithAsk(rawHooks, channelId);
+    if (hooks) {
+      log.debug(`Hooks resolved for session create: ${Object.keys(hooks).join(', ')}`);
+    }
 
     const createWithModel = async (model: string) => {
       return withWorkspaceEnv(workingDirectory, () =>
@@ -1091,7 +1163,11 @@ export class SessionManager {
     const customTools = this.buildCustomTools(channelId);
 
     const mcpServers = this.resolveMcpServers(workingDirectory);
-    const hooks = await this.resolveHooks(workingDirectory);
+    const rawHooks = await this.resolveHooks(workingDirectory);
+    const hooks = this.wrapHooksWithAsk(rawHooks, channelId);
+    if (hooks) {
+      log.debug(`Hooks resolved for session resume: ${Object.keys(hooks).join(', ')}`);
+    }
 
     const session = await withWorkspaceEnv(workingDirectory, () =>
       this.bridge.resumeSession(sessionId, {

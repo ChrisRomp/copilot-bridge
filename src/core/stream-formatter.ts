@@ -108,8 +108,12 @@ export function formatEvent(event: any): FormattedEvent | null {
 /**
  * Format a permission request for display in chat.
  */
-export function formatPermissionRequest(toolName: string, input: unknown, commands: string[], serverName?: string): string {
+export function formatPermissionRequest(toolName: string, input: unknown, commands: string[], serverName?: string, hookReason?: string, fromHook?: boolean): string {
   const lines = ['🔐 **Permission Required**', ''];
+  if (hookReason) {
+    lines.push(hookReason);
+    lines.push('');
+  }
   lines.push(`Tool: **${toolName}**`);
 
   if (input && typeof input === 'object') {
@@ -152,12 +156,16 @@ export function formatPermissionRequest(toolName: string, input: unknown, comman
   }
 
   lines.push('');
-  if (serverName) {
+  if (fromHook) {
+    lines.push('Reply `/approve` or `/deny`');
+    lines.push('React: 👍 approve · 👎 deny');
+  } else if (serverName) {
     lines.push(`Reply \`/approve\` or \`/deny\` (\`/always approve\` or \`/always deny\` to persist for all **${serverName}** tools)`);
+    lines.push('React: 👍 approve · 👎 deny · 💾 always approve · 🚫 always deny');
   } else {
     lines.push('Reply `/approve` or `/deny` (`/always approve` or `/always deny` to persist)');
+    lines.push('React: 👍 approve · 👎 deny · 💾 always approve · 🚫 always deny');
   }
-  lines.push('React: 👍 approve · 👎 deny · 💾 always approve · 🚫 always deny');
 
   return lines.join('\n');
 }

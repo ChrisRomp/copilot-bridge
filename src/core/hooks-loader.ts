@@ -202,6 +202,7 @@ function buildHookCallback(
   allCommands: { cmd: HookCommand; baseDir: string }[],
 ): (input: any, invocation: { sessionId: string }) => any {
   return (input: any, _invocation: { sessionId: string }) => {
+    log.debug(`Hook callback invoked: ${hookType} (${allCommands.length} command(s)), tool=${input.toolName ?? 'n/a'}`);
     let mergedResult: any = undefined;
 
     for (const { cmd, baseDir } of allCommands) {

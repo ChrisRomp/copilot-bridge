@@ -201,6 +201,7 @@ export interface PendingPermission {
   messageId?: string; // chat message ID for the permission prompt
   toolName: string;
   serverName?: string; // MCP server name (for server-level /remember)
+  fromHook?: boolean; // true when triggered by a hook "ask" decision (never remember)
   toolInput: unknown;
   commands: string[]; // extracted individual commands
   resolve: (result: { kind: 'approved' | 'denied-by-rules' | 'denied-interactively-by-user' | 'denied-no-approval-rule-and-could-not-request-from-user' }) => void;

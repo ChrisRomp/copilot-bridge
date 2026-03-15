@@ -594,11 +594,19 @@ async function handleMidTurnMessage(
       return;
     }
     if (lower === '/remember' || lower === '/always approve') {
-      sessionManager.resolvePermission(msg.channelId, true, true);
+      if (sessionManager.isHookPermission(msg.channelId)) {
+        sessionManager.resolvePermission(msg.channelId, true);
+      } else {
+        sessionManager.resolvePermission(msg.channelId, true, true);
+      }
       return;
     }
     if (lower === '/always deny') {
-      sessionManager.resolvePermission(msg.channelId, false, true);
+      if (sessionManager.isHookPermission(msg.channelId)) {
+        sessionManager.resolvePermission(msg.channelId, false);
+      } else {
+        sessionManager.resolvePermission(msg.channelId, false, true);
+      }
       return;
     }
     // Unrecognized text or slash commands — auto-deny the permission and
@@ -1437,12 +1445,14 @@ async function handleReaction(
       await adapter.sendMessage(reaction.channelId, '❌ Denied via reaction.');
     }
   } else if (reaction.emoji === 'floppy_disk') {
-    if (sessionManager.resolvePermission(reaction.channelId, true, true)) {
-      await adapter.sendMessage(reaction.channelId, '💾 Approved + remembered via reaction.');
+    const isHook = sessionManager.isHookPermission(reaction.channelId);
+    if (sessionManager.resolvePermission(reaction.channelId, true, !isHook)) {
+      await adapter.sendMessage(reaction.channelId, isHook ? '✅ Approved via reaction.' : '💾 Approved + remembered via reaction.');
     }
   } else if (reaction.emoji === 'no_entry_sign') {
-    if (sessionManager.resolvePermission(reaction.channelId, false, true)) {
-      await adapter.sendMessage(reaction.channelId, '🚫 Denied + remembered via reaction.');
+    const isHook = sessionManager.isHookPermission(reaction.channelId);
+    if (sessionManager.resolvePermission(reaction.channelId, false, !isHook)) {
+      await adapter.sendMessage(reaction.channelId, isHook ? '❌ Denied via reaction.' : '🚫 Denied + remembered via reaction.');
     }
   }
 }
@@ -1494,8 +1504,8 @@ async function handleSessionEvent(
       activeStreams.delete(channelId);
     }
     await finalizeActivityFeed(channelId, adapter);
-    const { toolName, serverName, input, commands } = event.data;
-    const formatted = formatPermissionRequest(toolName, input, commands, serverName);
+    const { toolName, serverName, input, commands, hookReason, fromHook } = event.data;
+    const formatted = formatPermissionRequest(toolName, input, commands, serverName, hookReason, fromHook);
     await adapter.sendMessage(channelId, formatted, { threadRootId });
     return;
   }
