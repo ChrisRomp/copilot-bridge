@@ -593,8 +593,12 @@ async function handleMidTurnMessage(
       sessionManager.resolvePermission(msg.channelId, false);
       return;
     }
-    if (lower === '/remember') {
+    if (lower === '/remember' || lower === '/always approve') {
       sessionManager.resolvePermission(msg.channelId, true, true);
+      return;
+    }
+    if (lower === '/always deny') {
+      sessionManager.resolvePermission(msg.channelId, false, true);
       return;
     }
     // Unrecognized text or slash commands — auto-deny the permission and
