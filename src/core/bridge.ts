@@ -15,6 +15,7 @@ import {
   type SessionLifecycleHandler,
   type Tool,
 } from '@github/copilot-sdk';
+import type { SessionHooks } from './hooks-loader.js';
 
 // SDK types not re-exported from package root
 type UserInputHandler = (
@@ -70,6 +71,7 @@ export class CopilotBridge {
     systemMessage?: SystemMessageConfig;
     customAgents?: CustomAgentConfig[];
     tools?: Tool[];
+    hooks?: SessionHooks;
   }): Promise<CopilotSession> {
     await this.start();
     const session = await this.client.createSession({
@@ -86,6 +88,7 @@ export class CopilotBridge {
       systemMessage: opts.systemMessage,
       customAgents: opts.customAgents,
       tools: opts.tools,
+      hooks: opts.hooks,
     });
     this.sessions.set(session.sessionId, session);
     return session;
@@ -104,6 +107,7 @@ export class CopilotBridge {
       mcpServers?: Record<string, MCPServerConfig>;
       skillDirectories?: string[];
       tools?: Tool[];
+      hooks?: SessionHooks;
     },
   ): Promise<CopilotSession> {
     await this.start();
@@ -123,6 +127,7 @@ export class CopilotBridge {
       mcpServers: opts?.mcpServers,
       skillDirectories: opts?.skillDirectories,
       tools: opts?.tools,
+      hooks: opts?.hooks,
     });
     this.sessions.set(session.sessionId, session);
     return session;

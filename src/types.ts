@@ -58,6 +58,7 @@ export interface AppConfig {
     verbose: boolean;
     permissionMode: 'interactive' | 'autopilot';
     fallbackModels?: string[];
+    allowWorkspaceHooks?: boolean;
   };
   logLevel?: 'debug' | 'info' | 'warn' | 'error';
   permissions?: PermissionsConfig;
