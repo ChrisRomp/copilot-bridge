@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatEvent } from './stream-formatter.js';
+import { formatEvent, formatPermissionRequest } from './stream-formatter.js';
 
 describe('formatEvent', () => {
   describe('thinking/reasoning suppression', () => {
@@ -74,5 +74,26 @@ describe('formatEvent', () => {
     it('returns null for unrecognized event types', () => {
       expect(formatEvent({ type: 'unknown.event' })).toBeNull();
     });
+  });
+});
+
+describe('formatPermissionRequest', () => {
+  it('includes /always approve and /always deny in prompt', () => {
+    const result = formatPermissionRequest('bash', { command: 'ls' }, ['ls']);
+    expect(result).toContain('`/always approve`');
+    expect(result).toContain('`/always deny`');
+    expect(result).not.toContain('add `/remember`');
+  });
+
+  it('includes reaction instructions with all four options', () => {
+    const result = formatPermissionRequest('bash', { command: 'ls' }, ['ls']);
+    expect(result).toContain('💾 always approve');
+    expect(result).toContain('🚫 always deny');
+  });
+
+  it('mentions server name for MCP permissions', () => {
+    const result = formatPermissionRequest('mcp-tool', {}, [], 'my-server');
+    expect(result).toContain('`/always approve`');
+    expect(result).toContain('**my-server** tools');
   });
 });

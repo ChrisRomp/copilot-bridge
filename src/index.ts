@@ -593,8 +593,12 @@ async function handleMidTurnMessage(
       sessionManager.resolvePermission(msg.channelId, false);
       return;
     }
-    if (lower === '/remember') {
+    if (lower === '/remember' || lower === '/always approve') {
       sessionManager.resolvePermission(msg.channelId, true, true);
+      return;
+    }
+    if (lower === '/always deny') {
+      sessionManager.resolvePermission(msg.channelId, false, true);
       return;
     }
     // Unrecognized text or slash commands — auto-deny the permission and
@@ -1011,6 +1015,11 @@ async function handleInboundMessage(
           await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
         }
         break;
+      case 'remember_deny':
+        if (!sessionManager.resolvePermission(msg.channelId, false, true)) {
+          await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
+        }
+        break;
       case 'remember_list': {
         try {
           const sections: string[] = [];
@@ -1420,6 +1429,10 @@ async function handleReaction(
   } else if (reaction.emoji === 'floppy_disk') {
     if (sessionManager.resolvePermission(reaction.channelId, true, true)) {
       await adapter.sendMessage(reaction.channelId, '💾 Approved + remembered via reaction.');
+    }
+  } else if (reaction.emoji === 'no_entry_sign') {
+    if (sessionManager.resolvePermission(reaction.channelId, false, true)) {
+      await adapter.sendMessage(reaction.channelId, '🚫 Denied + remembered via reaction.');
     }
   }
 }

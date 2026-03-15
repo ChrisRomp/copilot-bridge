@@ -40,7 +40,7 @@ export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'reload_session' | 'reload_config' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills' | 'mcp' | 'plan';
+           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_deny' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills' | 'mcp' | 'plan';
   payload?: any;
 }
 
@@ -410,6 +410,17 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       };
     }
 
+    case 'always': {
+      const sub = parsed.args.trim().toLowerCase();
+      if (sub === 'approve') {
+        return { handled: true, action: 'remember' };
+      }
+      if (sub === 'deny') {
+        return { handled: true, action: 'remember_deny' };
+      }
+      return { handled: true, response: '⚠️ Usage: `/always approve` or `/always deny`' };
+    }
+
     case 'remember':
     case 'rule':
     case 'rules': {
@@ -491,7 +502,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '',
           '**Permissions**',
           '`/approve` / `/deny` — Handle pending permission',
-          '`/remember` — Approve + save permission rule',
+          '`/always approve` / `/always deny` — Approve or deny + save rule',
           '`/rules` — Show all permission rules',
           '`/rules clear [spec]` — Clear rules (all or specific)',
           '`/yolo` — Toggle auto-approve permissions (no SDK mode change)',

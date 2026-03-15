@@ -341,3 +341,35 @@ describe('/reasoning command', () => {
     expect(result.response).toContain('Current reasoning effort: **high**');
   });
 });
+
+describe('/always command', () => {
+  it('/always approve returns remember action', () => {
+    const result = handleCommand('ch-always-1', '/always approve');
+    expect(result.handled).toBe(true);
+    expect(result.action).toBe('remember');
+  });
+
+  it('/always deny returns remember_deny action', () => {
+    const result = handleCommand('ch-always-2', '/always deny');
+    expect(result.handled).toBe(true);
+    expect(result.action).toBe('remember_deny');
+  });
+
+  it('/always with no args shows usage', () => {
+    const result = handleCommand('ch-always-3', '/always');
+    expect(result.handled).toBe(true);
+    expect(result.response).toContain('Usage');
+  });
+
+  it('/always with invalid arg shows usage', () => {
+    const result = handleCommand('ch-always-4', '/always banana');
+    expect(result.handled).toBe(true);
+    expect(result.response).toContain('Usage');
+  });
+
+  it('/remember still works as alias for approve+persist', () => {
+    const result = handleCommand('ch-always-5', '/remember');
+    expect(result.handled).toBe(true);
+    expect(result.action).toBe('remember');
+  });
+});

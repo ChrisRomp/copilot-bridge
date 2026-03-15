@@ -72,7 +72,8 @@ See the [Setup Guide — Running as a Service](docs/setup.md#running-as-a-servic
 | `/status` | | Show session info |
 | **Permissions** | | |
 | `/approve` / `/deny` | | Handle pending permission request |
-| `/remember` | | Approve + persist the permission rule |
+| `/always approve` | `/remember` | Approve + persist the permission rule |
+| `/always deny` | | Deny + persist the permission rule |
 | `/rules` | `/rule` | List saved permission rules |
 | `/rules clear [spec]` | | Clear rules (all, or by spec) |
 | `/yolo` | | Toggle auto-approve permissions |

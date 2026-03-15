@@ -254,12 +254,12 @@ Config-level permission rules use Copilot CLI-compatible syntax:
 2. **Autopilot mode** — if enabled, auto-approves everything else (skip steps 3–5)
 3. **Config deny rules** — checked first among config rules, always wins
 4. **Config allow rules** — if matched, auto-approved
-5. **SQLite stored rules** — from `/remember` in chat (MCP rules save at server level)
+5. **SQLite stored rules** — from `/always approve` or `/always deny` in chat (MCP rules save at server level)
 6. **Interactive prompt** — asks the user in chat with approve/deny reactions
 
 Use `/yolo` in chat to auto-approve all permissions (hardcoded safety denies still apply). Use `/autopilot` to enable the SDK's autonomous agentic loop — the agent works continuously until the task is done. Use `/plan` to toggle plan mode for structured planning before implementation. These are independent: `/yolo` controls permissions, `/autopilot` and `/plan` control agent behavior.
 
-Use `/rules` to see all permission rules (hardcoded, config, and stored).
+Use `/always approve` or `/always deny` during a permission prompt to persist the rule. Use `/rules` to see all permission rules (hardcoded, config, and stored).
 
 ## Inter-Agent Communication
 

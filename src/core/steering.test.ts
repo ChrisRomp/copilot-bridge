@@ -101,7 +101,7 @@ function handlePermissionDuringMidTurn(
   hasPending: boolean,
   text: string,
   resolvePermission: (allow: boolean, remember?: boolean) => void,
-): { action: 'approve' | 'deny' | 'remember' | 'deny-and-continue'; text?: string } | null {
+): { action: 'approve' | 'deny' | 'remember' | 'remember_deny' | 'deny-and-continue'; text?: string } | null {
   if (!hasPending) return null;
   const lower = text.toLowerCase();
   if (lower === '/approve' || lower === 'yes' || lower === 'y' || lower === 'approve') {
@@ -112,9 +112,13 @@ function handlePermissionDuringMidTurn(
     resolvePermission(false);
     return { action: 'deny' };
   }
-  if (lower === '/remember') {
+  if (lower === '/remember' || lower === '/always approve') {
     resolvePermission(true, true);
     return { action: 'remember' };
+  }
+  if (lower === '/always deny') {
+    resolvePermission(false, true);
+    return { action: 'remember_deny' };
   }
   // Unrecognized text — auto-deny and fall through
   resolvePermission(false);
@@ -145,6 +149,20 @@ describe('permission handling during mid-turn', () => {
     const result = handlePermissionDuringMidTurn(true, '/remember', resolve);
     expect(result?.action).toBe('remember');
     expect(resolve).toHaveBeenCalledWith(true, true);
+  });
+
+  it('always approves on /always approve', () => {
+    const resolve = vi.fn();
+    const result = handlePermissionDuringMidTurn(true, '/always approve', resolve);
+    expect(result?.action).toBe('remember');
+    expect(resolve).toHaveBeenCalledWith(true, true);
+  });
+
+  it('always denies on /always deny', () => {
+    const resolve = vi.fn();
+    const result = handlePermissionDuringMidTurn(true, '/always deny', resolve);
+    expect(result?.action).toBe('remember_deny');
+    expect(resolve).toHaveBeenCalledWith(false, true);
   });
 
   it('auto-denies on unrecognized text and signals continue', () => {

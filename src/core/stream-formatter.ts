@@ -153,11 +153,11 @@ export function formatPermissionRequest(toolName: string, input: unknown, comman
 
   lines.push('');
   if (serverName) {
-    lines.push(`Reply \`/approve\` or \`/deny\` (add \`/remember\` to persist for all **${serverName}** tools)`);
+    lines.push(`Reply \`/approve\` or \`/deny\` (\`/always approve\` or \`/always deny\` to persist for all **${serverName}** tools)`);
   } else {
-    lines.push('Reply `/approve` or `/deny` (add `/remember` to persist)');
+    lines.push('Reply `/approve` or `/deny` (`/always approve` or `/always deny` to persist)');
   }
-  lines.push('React with 👍 to approve or 👎 to deny');
+  lines.push('React: 👍 approve · 👎 deny · 💾 always approve · 🚫 always deny');
 
   return lines.join('\n');
 }
