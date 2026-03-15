@@ -978,10 +978,18 @@ async function handleInboundMessage(
         break;
       }
       case 'set_reasoning': {
+        const reasoningSessionId = sessionManager.getSessionId(msg.channelId);
+        if (!reasoningSessionId) {
+          // No active session — pref is saved, will apply on next session creation
+          await adapter.sendMessage(msg.channelId, `🧠 Reasoning effort set to **${cmdResult.payload}**. Will apply when a session starts.`, { threadRootId: threadRoot });
+          break;
+        }
         const ackId = await adapter.sendMessage(msg.channelId, `🧠 Setting reasoning effort to **${cmdResult.payload}**...`, { threadRootId: threadRoot });
         try {
-          await sessionManager.reloadSession(msg.channelId);
-          await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort set to **${cmdResult.payload}**.`);
+          const newId = await sessionManager.reloadSession(msg.channelId);
+          const wasNew = newId !== reasoningSessionId;
+          const suffix = wasNew ? ' (previous session expired — new session created)' : '';
+          await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort set to **${cmdResult.payload}**.${suffix}`);
         } catch (err: any) {
           log.error(`Failed to reload session for reasoning on ${msg.channelId.slice(0, 8)}...:`, err);
           await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort saved as **${cmdResult.payload}** but session reload failed. Use \`/reload\` to apply.`);
