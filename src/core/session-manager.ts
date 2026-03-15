@@ -359,7 +359,8 @@ export class SessionManager {
   private async resolveHooks(workingDirectory: string): Promise<SessionHooks | undefined> {
     const cached = this.workspaceHooks.get(workingDirectory);
     if (cached !== undefined || this.workspaceHooks.has(workingDirectory)) return cached;
-    const hooks = await loadHooks(workingDirectory);
+    const allowWorkspaceHooks = getConfig().defaults.allowWorkspaceHooks ?? false;
+    const hooks = await loadHooks(workingDirectory, { allowWorkspaceHooks });
     this.workspaceHooks.set(workingDirectory, hooks);
     return hooks;
   }

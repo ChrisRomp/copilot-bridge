@@ -1,16 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { loadHooks, mergeHooks } from './hooks-loader.js';
 
-// Use a temp dir for test fixtures
-const testDir = path.join(process.cwd(), '.test-hooks-tmp');
+let testDir: string;
+let originalHome: string | undefined;
 
 beforeEach(() => {
-  fs.mkdirSync(testDir, { recursive: true });
+  testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hooks-test-'));
+  originalHome = process.env.HOME;
+  // Isolate from real user hooks/plugins
+  process.env.HOME = testDir;
 });
 
 afterEach(() => {
+  process.env.HOME = originalHome;
   fs.rmSync(testDir, { recursive: true, force: true });
 });
 

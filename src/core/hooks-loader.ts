@@ -23,6 +23,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('hooks');
@@ -45,10 +46,6 @@ const VALID_HOOK_TYPES = new Set<keyof SessionHooks>([
   'onSessionEnd',
   'onErrorOccurred',
 ]);
-
-interface HooksConfig {
-  hooks: Partial<Record<keyof SessionHooks, string>>;
-}
 
 export interface LoadHooksOptions {
   /** Include hooks from workspace hooks.json files (default: false for security) */
@@ -151,7 +148,7 @@ async function loadHookHandler(modulePath: string, hookType: string): Promise<((
       log.warn(`Hook module not found: ${modulePath} (${hookType})`);
       return null;
     }
-    const mod = await import(modulePath);
+    const mod = await import(pathToFileURL(modulePath).href);
     const handler = mod.default ?? mod[hookType];
     if (typeof handler !== 'function') {
       log.warn(`Hook module ${modulePath} does not export a function for ${hookType}`);

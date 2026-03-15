@@ -380,4 +380,4 @@ Hooks are loaded from multiple locations. Later sources override earlier ones (h
 2. **User hooks** — `~/.copilot/hooks.json`
 3. **Workspace hooks** — `<workspace>/.github/hooks.json` or `<workspace>/hooks.json` (highest priority, **disabled by default**)
 
-> **Security note:** Workspace hooks execute arbitrary code on session creation. They are disabled by default to prevent untrusted repositories from running code automatically. To enable workspace hooks, the bridge config or caller must explicitly opt in.
+> **Security note:** Workspace hooks execute arbitrary code on session creation. They are disabled by default to prevent untrusted repositories from running code automatically. To enable, set `"allowWorkspaceHooks": true` in the `defaults` section of your bridge config.
