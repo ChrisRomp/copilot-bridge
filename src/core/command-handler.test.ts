@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { handleCommand, parseCommand } from './command-handler.js';
+import { handleCommand, parseCommand, type ModelInfo } from './command-handler.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -304,5 +304,42 @@ describe('/status command', () => {
   it('shows no active session when no sessionInfo', () => {
     const result = handleCommand('ch-status-none', '/status');
     expect(result.response).toContain('No active session');
+  });
+});
+
+describe('/reasoning command', () => {
+  const SESSION_INFO = { sessionId: 'sess-123', model: 'claude-opus-4.6', agent: null };
+  const REASONING_MODEL: ModelInfo = {
+    id: 'claude-opus-4.6',
+    name: 'Claude Opus 4.6',
+    supportedReasoningEfforts: ['low', 'medium', 'high'],
+    defaultReasoningEffort: 'medium',
+  };
+
+  it('returns set_reasoning action with valid level', () => {
+    const result = handleCommand('ch-reason-1', '/reasoning high', SESSION_INFO,
+      { verbose: false, permissionMode: 'interactive', reasoningEffort: null },
+      undefined, [REASONING_MODEL]);
+    expect(result.handled).toBe(true);
+    expect(result.action).toBe('set_reasoning');
+    expect(result.payload).toBe('high');
+    expect(result.response).toContain('Creating new session');
+    expect(result.response).not.toContain('next session');
+  });
+
+  it('rejects invalid reasoning level', () => {
+    const result = handleCommand('ch-reason-2', '/reasoning banana', SESSION_INFO,
+      { verbose: false, permissionMode: 'interactive', reasoningEffort: null },
+      undefined, [REASONING_MODEL]);
+    expect(result.handled).toBe(true);
+    expect(result.action).toBeUndefined();
+    expect(result.response).toContain('Invalid reasoning effort');
+  });
+
+  it('shows current level when no args', () => {
+    const result = handleCommand('ch-reason-3', '/reasoning', SESSION_INFO,
+      { verbose: false, permissionMode: 'interactive', reasoningEffort: 'high' });
+    expect(result.handled).toBe(true);
+    expect(result.response).toContain('Current reasoning effort: **high**');
   });
 });

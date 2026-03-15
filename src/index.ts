@@ -650,7 +650,7 @@ async function handleMidTurnMessage(
     // Commands with complex action handlers (skills, schedule, rules) defer to serialized path.
     const SAFE_MID_TURN = new Set([
       'context', 'status', 'help', 'verbose', 'yolo',
-      'model', 'models', 'reasoning', 'agents',
+      'model', 'models', 'agents',
       'streamer-mode', 'on-air',
     ]);
 
@@ -659,7 +659,7 @@ async function handleMidTurnMessage(
       const sessionInfo = sessionManager.getSessionInfo(msg.channelId);
       const effPrefs = sessionManager.getEffectivePrefs(msg.channelId);
       let models: any[] | undefined;
-      if (['model', 'models', 'status', 'reasoning'].includes(parsed.command)) {
+      if (['model', 'models', 'status'].includes(parsed.command)) {
         try { models = await sessionManager.listModels(); } catch { models = undefined; }
       }
       const mcpInfo = undefined;
@@ -831,7 +831,7 @@ async function handleInboundMessage(
     const threadRoot = resolveThreadRoot(msg, threadRequested, channelConfig);
 
     // Send response before action, except for actions that send their own ack after completing
-    const deferResponse = cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent';
+    const deferResponse = cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent' || cmdResult.action === 'set_reasoning';
     if (cmdResult.response && !deferResponse) {
       await adapter.sendMessage(msg.channelId, cmdResult.response, { threadRootId: threadRoot });
     }
@@ -974,6 +974,25 @@ async function handleInboundMessage(
         } catch (err: any) {
           log.error(`Failed to switch agent on ${msg.channelId.slice(0, 8)}...:`, err);
           await adapter.updateMessage(msg.channelId, ackId, '❌ Failed to switch agent. Check logs for details.');
+        }
+        break;
+      }
+      case 'set_reasoning': {
+        const ackId = await adapter.sendMessage(msg.channelId, `🧠 Reasoning effort set to **${cmdResult.payload}**. Creating new session...`, { threadRootId: threadRoot });
+        try {
+          markIdleImmediate(msg.channelId);
+          const oldStreamKey = activeStreams.get(msg.channelId);
+          if (oldStreamKey) {
+            await streaming.cancelStream(oldStreamKey);
+            activeStreams.delete(msg.channelId);
+          }
+          await finalizeActivityFeed(msg.channelId, adapter);
+          loopDetector.reset(msg.channelId);
+          await sessionManager.newSession(msg.channelId);
+          await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort set to **${cmdResult.payload}**. New session created.`);
+        } catch (err: any) {
+          log.error(`Failed to apply reasoning effort on ${msg.channelId.slice(0, 8)}...:`, err);
+          await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort saved to **${cmdResult.payload}** but session recreation failed. Use \`/new\` to apply.`);
         }
         break;
       }
