@@ -264,6 +264,10 @@ export function extractCommandPatterns(input: unknown): string[] {
  * - ~/.agents/skills/ (user-level)
  * - <workspace>/.github/skills/ (project-level)
  * - <workspace>/.agents/skills/ (project-level)
+ * - Plugin skills from ~/.copilot/installed-plugins/ (lowest priority)
+ *
+ * Per CLI spec, skills use first-found-wins dedup by name.
+ * Plugin skills are appended last so user/workspace skills take precedence.
  */
 function discoverSkillDirectories(workingDirectory: string): string[] {
   const home = process.env.HOME;
@@ -278,6 +282,28 @@ function discoverSkillDirectories(workingDirectory: string): string[] {
   roots.push(path.join(workingDirectory, '.github', 'skills'));
   // Project-level skills (legacy)
   roots.push(path.join(workingDirectory, '.agents', 'skills'));
+
+  // Plugin skills (lowest priority — appended last so earlier sources win)
+  if (home) {
+    const pluginsDir = path.join(home, '.copilot', 'installed-plugins');
+    if (fs.existsSync(pluginsDir)) {
+      const walk = (dir: string, depth: number) => {
+        if (depth > 3) return;
+        try {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (!entry.isDirectory()) continue;
+            const full = path.join(dir, entry.name);
+            if (entry.name === 'skills') {
+              roots.push(full);
+            } else {
+              walk(full, depth + 1);
+            }
+          }
+        } catch { /* permission errors etc */ }
+      };
+      walk(pluginsDir, 0);
+    }
+  }
 
   const dirs: string[] = [];
   for (const skillsRoot of roots) {
