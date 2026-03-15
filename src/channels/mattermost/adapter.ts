@@ -425,7 +425,7 @@ export class MattermostAdapter implements ChannelAdapter {
   }
 
   /** Resolve a Mattermost user ID to a username, with TTL-based caching. */
-  private async resolveUsername(userId: string): Promise<string> {
+  private async resolveUsername(userId: string): Promise<string | undefined> {
     const cached = this.userCache.get(userId);
     if (cached && Date.now() - cached.ts < MattermostAdapter.USER_CACHE_TTL_MS) return cached.username;
 
@@ -445,7 +445,7 @@ export class MattermostAdapter implements ChannelAdapter {
     } catch (err) {
       log.debug(`Failed to resolve username for ${userId}:`, err);
     }
-    return '';
+    return undefined;
   }
 
   /** Track a post ID and its channel for deduplication and replay targeting. */

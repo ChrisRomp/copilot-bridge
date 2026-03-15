@@ -161,13 +161,11 @@ describe('checkUserAccess', () => {
   // When username is resolved, it should match username-based allowlists.
   it('allows reaction when resolved username matches allowlist', () => {
     const access: AccessConfig = { mode: 'allowlist', users: ['alex'] };
-    // Simulates reaction with resolved username
-    expect(checkUserAccess('6uttfx9yc3buuuuu', 'alex', access)).toBe(true);
+    expect(checkUserAccess('mm-user-id-abc123', 'alex', access)).toBe(true);
   });
 
   it('denies reaction when only userId is available and allowlist has usernames', () => {
     const access: AccessConfig = { mode: 'allowlist', users: ['alex'] };
-    // Simulates old behavior: userId passed as both params
-    expect(checkUserAccess('6uttfx9yc3buuuuu', '6uttfx9yc3buuuuu', access)).toBe(false);
+    expect(checkUserAccess('mm-user-id-abc123', 'mm-user-id-abc123', access)).toBe(false);
   });
 });
