@@ -1379,13 +1379,10 @@ async function handleReaction(
   if (!isConfiguredChannel(reaction.channelId)) return;
   if (reaction.action !== 'added') return;
 
-  // Check user-level access control.
-  // Reactions only carry userId (no username), so this matches against userId only.
-  // For Slack (UIDs stored in config), this is exact. For Mattermost (usernames in config),
-  // this is best-effort — admin bots should use both username and user ID in allowlists.
+  // Check user-level access control
   const botInfo = getPlatformBots(platformName).get(botName);
-  if (!checkUserAccess(reaction.userId, reaction.userId, botInfo?.access, getPlatformAccess(platformName))) {
-    log.debug(`User ${reaction.userId} denied reaction access to bot "${botName}"`);
+  if (!checkUserAccess(reaction.userId, reaction.username ?? reaction.userId, botInfo?.access, getPlatformAccess(platformName))) {
+    log.debug(`User ${reaction.username ?? reaction.userId} denied reaction access to bot "${botName}"`);
     return;
   }
 

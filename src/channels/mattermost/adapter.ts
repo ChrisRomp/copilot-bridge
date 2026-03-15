@@ -38,6 +38,8 @@ export class MattermostAdapter implements ChannelAdapter {
   private recentPostIds = new Set<string>();
   private isReplaying = false;
   private pendingReplay: { sinceTimestamp: number; gapMs: number } | null = null;
+  private userCache = new Map<string, { username: string; ts: number }>(); // userId → {username, timestamp}
+  private static readonly USER_CACHE_TTL_MS = 300_000; // 5 minutes
   private static readonly MAX_RECENT_POSTS = 500;
   private static readonly MAX_REPLAY_WINDOW_MS = 60_000;
   private static readonly CHANNEL_STALENESS_MS = 3_600_000; // 1 hour
@@ -100,7 +102,7 @@ export class MattermostAdapter implements ChannelAdapter {
       if (msg.event === 'posted') {
         this.handlePosted(msg);
       } else if (msg.event === 'reaction_added' || msg.event === 'reaction_removed') {
-        this.handleReaction(msg);
+        this.handleReaction(msg).catch(err => log.error('Unhandled reaction error:', err));
       }
     });
 
@@ -390,14 +392,18 @@ export class MattermostAdapter implements ChannelAdapter {
     }
   }
 
-  private handleReaction(msg: any): void {
+  private async handleReaction(msg: any): Promise<void> {
     try {
       const reaction = JSON.parse(msg.data.reaction);
+
+      // Resolve username from userId (cached)
+      const username = await this.resolveUsername(reaction.user_id);
 
       const inbound: InboundReaction = {
         platform: this.platform,
         channelId: msg.broadcast?.channel_id ?? '',
         userId: reaction.user_id,
+        username,
         postId: reaction.post_id,
         emoji: reaction.emoji_name,
         action: msg.event === 'reaction_added' ? 'added' : 'removed',
@@ -416,6 +422,27 @@ export class MattermostAdapter implements ChannelAdapter {
     } catch (err) {
       log.error('Failed to parse reaction event:', err);
     }
+  }
+
+  /** Resolve a Mattermost user ID to a username, with TTL-based caching. */
+  private async resolveUsername(userId: string): Promise<string> {
+    const cached = this.userCache.get(userId);
+    if (cached && Date.now() - cached.ts < MattermostAdapter.USER_CACHE_TTL_MS) return cached.username;
+
+    try {
+      const baseUrl = this.client.getBaseRoute();
+      const resp = await fetch(`${baseUrl}/users/${userId}`, {
+        headers: { Authorization: `Bearer ${this.token}` },
+      });
+      if (resp.ok) {
+        const user = await resp.json() as { username: string };
+        this.userCache.set(userId, { username: user.username, ts: Date.now() });
+        return user.username;
+      }
+    } catch (err) {
+      log.debug(`Failed to resolve username for ${userId}:`, err);
+    }
+    return '';
   }
 
   /** Track a post ID and its channel for deduplication and replay targeting. */

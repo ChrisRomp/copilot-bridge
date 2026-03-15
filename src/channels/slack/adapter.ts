@@ -334,6 +334,7 @@ export class SlackAdapter implements ChannelAdapter {
         platform: this.platform,
         channelId: event.item?.channel ?? '',
         userId: event.user,
+        username: event.user,
         postId: `${event.item?.channel ?? ''}:${event.item?.ts ?? ''}`,
         emoji: event.reaction,
         action,
