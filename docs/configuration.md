@@ -342,3 +342,42 @@ Ephemeral sessions use merged permissions: the target bot's own rules plus the c
 ### Audit
 
 All inter-agent calls are logged to SQLite (`agent_calls` table) with caller, target, duration, success/failure, and call chain metadata.
+
+## Hooks
+
+Session hooks allow you to intercept and customize agent behavior at key lifecycle points. Hooks are declared in `hooks.json` files that map hook types to JavaScript/TypeScript handler modules.
+
+### hooks.json Format
+
+```json
+{
+  "hooks": {
+    "onPreToolUse": "./hooks/audit-tools.js",
+    "onPostToolUse": "./hooks/redact-secrets.js",
+    "onSessionStart": "./hooks/init.js"
+  }
+}
+```
+
+Each handler module must export a default function matching the SDK hook signature.
+
+### Available Hook Types
+
+| Hook | When it fires | Can modify |
+|------|--------------|------------|
+| `onPreToolUse` | Before tool execution | Permission decision, tool args, context |
+| `onPostToolUse` | After tool execution | Tool result, context |
+| `onUserPromptSubmitted` | When user sends a message | Prompt text, context |
+| `onSessionStart` | Session created or resumed | Context, config |
+| `onSessionEnd` | Session ends | Cleanup actions |
+| `onErrorOccurred` | Error occurs | Retry/skip/abort |
+
+### Discovery Order
+
+Hooks are loaded from multiple locations. Later sources override earlier ones (highest priority wins):
+
+1. **Plugin hooks** — `~/.copilot/installed-plugins/.../hooks.json` (lowest priority)
+2. **User hooks** — `~/.copilot/hooks.json`
+3. **Workspace hooks** — `<workspace>/.github/hooks.json` or `<workspace>/hooks.json` (highest priority, **disabled by default**)
+
+> **Security note:** Workspace hooks execute arbitrary code on session creation. They are disabled by default to prevent untrusted repositories from running code automatically. To enable workspace hooks, the bridge config or caller must explicitly opt in.

@@ -23,6 +23,7 @@ import {
 import { createLogger } from '../logger.js';
 import { tryWithFallback, isModelError, buildFallbackChain } from './model-fallback.js';
 import type { McpServerInfo } from './command-handler.js';
+import { loadHooks, type SessionHooks } from './hooks-loader.js';
 import type {
   ChannelAdapter, InboundMessage, PendingPermission, PendingUserInput,
 } from '../types.js';
@@ -342,6 +343,8 @@ export class SessionManager {
   private sessionMcpServers = new Map<string, Set<string>>(); // channelId → server names
   // Skill directories that were passed to the session at creation/resume time
   private sessionSkillDirs = new Map<string, Set<string>>(); // channelId → skill dir paths
+  // Loaded session hooks per workspace (cached after first load)
+  private workspaceHooks = new Map<string, SessionHooks | undefined>();
   // Handler for send_file tool (set by index.ts, calls adapter.sendFile)
   private sendFileHandler: ((channelId: string, filePath: string, message?: string) => Promise<string>) | null = null;
   private getAdapterForChannel: ((channelId: string) => ChannelAdapter | null) | null = null;
@@ -350,6 +353,15 @@ export class SessionManager {
     this.bridge = bridge;
     this.mcpServers = loadMcpServers();
     ensureWorkspacesDir();
+  }
+
+  /** Resolve hooks for a workspace, caching the result. */
+  private async resolveHooks(workingDirectory: string): Promise<SessionHooks | undefined> {
+    const cached = this.workspaceHooks.get(workingDirectory);
+    if (cached !== undefined || this.workspaceHooks.has(workingDirectory)) return cached;
+    const hooks = await loadHooks(workingDirectory);
+    this.workspaceHooks.set(workingDirectory, hooks);
+    return hooks;
   }
 
   /** Register a handler for session events (streaming, tool calls, etc.) */
@@ -1009,6 +1021,7 @@ export class SessionManager {
     }
 
     const resolvedMcpServers = this.resolveMcpServers(workingDirectory);
+    const hooks = await this.resolveHooks(workingDirectory);
 
     const createWithModel = async (model: string) => {
       return withWorkspaceEnv(workingDirectory, () =>
@@ -1022,6 +1035,7 @@ export class SessionManager {
           onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
           onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
           tools: customTools.length > 0 ? customTools : undefined,
+          hooks,
         })
       );
     };
@@ -1069,6 +1083,7 @@ export class SessionManager {
     const customTools = this.buildCustomTools(channelId);
 
     const mcpServers = this.resolveMcpServers(workingDirectory);
+    const hooks = await this.resolveHooks(workingDirectory);
 
     const session = await withWorkspaceEnv(workingDirectory, () =>
       this.bridge.resumeSession(sessionId, {
@@ -1080,6 +1095,7 @@ export class SessionManager {
         mcpServers,
         skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
         tools: customTools.length > 0 ? customTools : undefined,
+        hooks,
       })
     );
 
@@ -1145,6 +1161,7 @@ export class SessionManager {
 
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
     const skillDirectories = discoverSkillDirectories(targetWorkspace);
+    const hooks = await this.resolveHooks(targetWorkspace);
 
     // Build ephemeral permission handler
     const ephemeralPermissionHandler = this.buildEphemeralPermissionHandler(opts);
@@ -1164,6 +1181,7 @@ export class SessionManager {
           onPermissionRequest: ephemeralPermissionHandler,
           systemMessage: { content: systemParts.filter(Boolean).join('\n\n') },
           tools: ephemeralTools.length > 0 ? ephemeralTools : undefined,
+          hooks,
         })
       );
 
