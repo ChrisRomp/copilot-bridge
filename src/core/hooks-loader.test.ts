@@ -95,7 +95,7 @@ describe('loadHooks', () => {
     const result = await loadHooks(testDir, { allowWorkspaceHooks: true });
     expect(result).toBeDefined();
 
-    const output = result!.onPreToolUse!(
+    const output = await result!.onPreToolUse!(
       { toolName: 'bash', toolArgs: '{"command":"ls"}', timestamp: Date.now(), cwd: testDir },
       { sessionId: 'test' },
     );
@@ -115,7 +115,7 @@ describe('loadHooks', () => {
     });
 
     const result = await loadHooks(testDir, { allowWorkspaceHooks: true });
-    const output = result!.onPreToolUse!(
+    const output = await result!.onPreToolUse!(
       { toolName: 'bash', toolArgs: '{}', timestamp: Date.now(), cwd: testDir },
       { sessionId: 'test' },
     );
@@ -124,18 +124,18 @@ describe('loadHooks', () => {
   });
 
   it('handles hook command timeout gracefully', async () => {
-    writeScript(path.join(testDir, 'hooks', 'slow.sh'), 'sleep 60');
+    writeScript(path.join(testDir, 'hooks', 'slow.sh'), 'cat > /dev/null\nsleep 60');
     writeHooksJson(testDir, {
       preToolUse: [{ type: 'command', bash: './hooks/slow.sh', timeoutSec: 1 }],
     });
 
     const result = await loadHooks(testDir, { allowWorkspaceHooks: true });
-    const output = result!.onPreToolUse!(
+    const output = await result!.onPreToolUse!(
       { toolName: 'bash', toolArgs: '{}', timestamp: Date.now(), cwd: testDir },
       { sessionId: 'test' },
     );
     expect(output).toBeUndefined();
-  });
+  }, 10_000);
 
   it('loads from .github/hooks/hooks.json when allowed', async () => {
     const hooksDir = path.join(testDir, '.github', 'hooks');
@@ -181,7 +181,7 @@ describe('loadHooks', () => {
     });
 
     const result = await loadHooks(testDir, { allowWorkspaceHooks: true });
-    const output = result!.onPreToolUse!(
+    const output = await result!.onPreToolUse!(
       { toolName: 'bash', toolArgs: '{}', timestamp: Date.now(), cwd: testDir },
       { sessionId: 'test' },
     );

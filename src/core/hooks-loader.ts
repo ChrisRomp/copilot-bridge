@@ -22,7 +22,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('hooks');
@@ -160,53 +160,85 @@ function parseHooksConfig(filePath: string): Map<string, HookCommand[]> {
 }
 
 /**
- * Execute a hook command by spawning a shell process.
+ * Execute a hook command by spawning a shell process (async, non-blocking).
  * Input is piped as JSON to stdin, output parsed from stdout.
  */
-function executeHookCommand(cmd: HookCommand, input: any, baseDir: string): any | undefined {
+async function executeHookCommand(cmd: HookCommand, input: any, baseDir: string): Promise<any | undefined> {
   const shell = cmd.bash ? 'bash' : 'powershell';
   const script = cmd.bash ?? cmd.powershell!;
   const cwd = cmd.cwd ? path.resolve(baseDir, cmd.cwd) : baseDir;
   const timeoutMs = (cmd.timeoutSec ?? 30) * 1000;
 
-  try {
-    const stdout = execFileSync(shell, ['-c', script], {
-      input: JSON.stringify(input),
+  return new Promise<any | undefined>((resolve) => {
+    let resolved = false;
+    const done = (value: any | undefined) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    const child = spawn(shell, ['-c', script], {
       cwd,
-      timeout: timeoutMs,
-      encoding: 'utf8',
       env: { ...process.env, ...cmd.env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    const trimmed = stdout.trim();
-    if (!trimmed) return undefined;
-
-    return JSON.parse(trimmed);
-  } catch (err: any) {
-    if (err.killed) {
+    const timer = setTimeout(() => {
       log.warn(`Hook command timed out after ${cmd.timeoutSec ?? 30}s: ${script}`);
-    } else {
-      log.warn(`Hook command failed: ${script} — ${err.message ?? err}`);
-    }
-    return undefined;
-  }
+      child.kill('SIGKILL');
+      done(undefined);
+    }, timeoutMs);
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
+    child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+
+    child.on('close', (code: number | null, signal: string | null) => {
+      if (signal) {
+        done(undefined);
+        return;
+      }
+      if (code !== 0) {
+        log.warn(`Hook command failed (exit ${code}): ${script}${stderr ? ' — ' + stderr.trim() : ''}`);
+        done(undefined);
+        return;
+      }
+      const trimmed = stdout.trim();
+      if (!trimmed) { done(undefined); return; }
+      try {
+        done(JSON.parse(trimmed));
+      } catch {
+        log.warn(`Hook command returned invalid JSON: ${script}`);
+        done(undefined);
+      }
+    });
+
+    child.on('error', (err: Error) => {
+      log.warn(`Hook command failed: ${script} — ${err.message}`);
+      done(undefined);
+    });
+
+    child.stdin.write(JSON.stringify(input));
+    child.stdin.end();
+  });
 }
 
 /**
  * Build a SessionHooks callback that runs all commands for a given hook type.
- * For preToolUse, first "deny" decision short-circuits.
+ * For preToolUse: deny > ask > allow precedence. First "deny" or "ask" short-circuits.
  */
 function buildHookCallback(
   hookType: string,
   allCommands: { cmd: HookCommand; baseDir: string }[],
-): (input: any, invocation: { sessionId: string }) => any {
-  return (input: any, _invocation: { sessionId: string }) => {
+): (input: any, invocation: { sessionId: string }) => Promise<any> {
+  return async (input: any, _invocation: { sessionId: string }) => {
     log.debug(`Hook callback invoked: ${hookType} (${allCommands.length} command(s)), tool=${input.toolName ?? 'n/a'}`);
     let mergedResult: any = undefined;
 
     for (const { cmd, baseDir } of allCommands) {
-      const result = executeHookCommand(cmd, input, baseDir);
+      const result = await executeHookCommand(cmd, input, baseDir);
       if (!result) continue;
 
       if (!mergedResult) {
@@ -215,9 +247,11 @@ function buildHookCallback(
         Object.assign(mergedResult, result);
       }
 
-      // For preToolUse, a deny short-circuits
-      if (hookType === 'preToolUse' && result.permissionDecision === 'deny') {
-        return mergedResult;
+      // For preToolUse, deny and ask short-circuit (deny > ask > allow)
+      if (hookType === 'preToolUse') {
+        if (result.permissionDecision === 'deny' || result.permissionDecision === 'ask') {
+          return mergedResult;
+        }
       }
     }
 

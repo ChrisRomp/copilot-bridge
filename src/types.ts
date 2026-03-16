@@ -202,6 +202,7 @@ export interface PendingPermission {
   toolName: string;
   serverName?: string; // MCP server name (for server-level /remember)
   fromHook?: boolean; // true when triggered by a hook "ask" decision (never remember)
+  hookReason?: string; // reason from hook for display in permission prompt
   toolInput: unknown;
   commands: string[]; // extracted individual commands
   resolve: (result: { kind: 'approved' | 'denied-by-rules' | 'denied-interactively-by-user' | 'denied-no-approval-rule-and-could-not-request-from-user' }) => void;

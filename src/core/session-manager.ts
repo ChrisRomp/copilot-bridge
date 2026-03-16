@@ -388,6 +388,7 @@ export class SessionManager {
           toolName: `hook:${toolName}`,
           serverName: undefined,
           fromHook: true,
+          hookReason: reason,
           toolInput: input.toolArgs,
           commands: [],
           resolve: (decision: any) => {
@@ -956,6 +957,7 @@ export class SessionManager {
           input: next.toolInput,
           commands: next.commands,
           fromHook: next.fromHook,
+          hookReason: next.hookReason,
         },
       });
     }
