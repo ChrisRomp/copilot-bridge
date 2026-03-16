@@ -641,6 +641,7 @@ async function handleMidTurnMessage(
         await resolved.streaming.cancelStream(stopStreamKey);
         activeStreams.delete(msg.channelId);
       }
+      channelThreadRoots.delete(msg.channelId);
       await finalizeActivityFeed(msg.channelId, adapter);
       await sessionManager.abortSession(msg.channelId);
       markIdleImmediate(msg.channelId);
@@ -653,6 +654,7 @@ async function handleMidTurnMessage(
         await resolved.streaming.cancelStream(oldStreamKey);
         activeStreams.delete(msg.channelId);
       }
+      channelThreadRoots.delete(msg.channelId);
       await finalizeActivityFeed(msg.channelId, adapter);
       loopDetector.reset(msg.channelId);
       await sessionManager.newSession(msg.channelId);
