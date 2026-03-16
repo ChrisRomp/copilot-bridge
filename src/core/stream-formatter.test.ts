@@ -96,4 +96,15 @@ describe('formatPermissionRequest', () => {
     expect(result).toContain('`/always approve`');
     expect(result).toContain('**my-server** tools');
   });
+
+  it('includes hookReason and omits always/remember for hook permissions', () => {
+    const result = formatPermissionRequest('hook:bash', { command: 'ls' }, [], undefined, 'Hook requires confirmation', true);
+    expect(result).toContain('Hook requires confirmation');
+    expect(result).not.toContain('`/always approve`');
+    expect(result).not.toContain('`/always deny`');
+    expect(result).not.toContain('💾');
+    expect(result).not.toContain('🚫');
+    expect(result).toContain('`/approve`');
+    expect(result).toContain('`/deny`');
+  });
 });

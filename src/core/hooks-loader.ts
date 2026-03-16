@@ -17,7 +17,7 @@
  * Discovery order (lowest → highest priority, later entries append):
  *   1. Plugin hooks:    ~/.copilot/installed-plugins/.../hooks.json
  *   2. User hooks:      ~/.copilot/hooks.json
- *   3. Workspace hooks: <workspace>/.github/hooks/hooks.json, <workspace>/hooks.json
+ *   3. Workspace hooks: <workspace>/.github/hooks/hooks.json, <workspace>/.github/hooks.json, <workspace>/hooks.json
  */
 
 import * as fs from 'node:fs';
@@ -143,7 +143,7 @@ function parseHooksConfig(filePath: string): Map<string, HookCommand[]> {
       }
       const valid: HookCommand[] = [];
       for (const cmd of commands) {
-        if (cmd.type !== 'command' || (!cmd.bash && !cmd.powershell)) {
+        if (!cmd || typeof cmd !== 'object' || cmd.type !== 'command' || (!cmd.bash && !cmd.powershell)) {
           log.warn(`Invalid hook command for "${hookType}" in ${filePath}, skipping`);
           continue;
         }

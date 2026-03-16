@@ -395,7 +395,7 @@ Hooks receive JSON on **stdin** describing the event (tool name, arguments, etc.
 - **`deny`** — tool is blocked; the reason is shown to the agent
 - **`ask`** — the bridge prompts the user for approval in chat (approve/deny only; "always" and "remember" are not offered for hook-triggered prompts)
 
-For `preToolUse`, if multiple commands are registered, the first `"deny"` short-circuits and blocks the tool.
+For `preToolUse`, if multiple commands are registered, the first `"deny"` or `"ask"` short-circuits (precedence: deny > ask > allow).
 
 ### Example Hook Script
 
