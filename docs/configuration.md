@@ -345,39 +345,95 @@ All inter-agent calls are logged to SQLite (`agent_calls` table) with caller, ta
 
 ## Hooks
 
-Session hooks allow you to intercept and customize agent behavior at key lifecycle points. Hooks are declared in `hooks.json` files that map hook types to JavaScript/TypeScript handler modules.
+Session hooks let you run shell commands at key lifecycle points — before/after tool calls, on user prompts, session start/end, and errors. Hooks use the [official GitHub Copilot CLI hooks format](https://docs.github.com/en/copilot/reference/hooks-configuration).
 
 ### hooks.json Format
 
 ```json
 {
+  "version": 1,
   "hooks": {
-    "onPreToolUse": "./hooks/audit-tools.js",
-    "onPostToolUse": "./hooks/redact-secrets.js",
-    "onSessionStart": "./hooks/init.js"
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "./scripts/guard.sh",
+        "cwd": ".",
+        "timeoutSec": 10
+      }
+    ]
   }
 }
 ```
 
-Each handler module must export a default function matching the SDK hook signature.
+Each hook is an array of command objects. Multiple commands per hook type run in sequence.
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `type` | Yes | Must be `"command"` |
+| `bash` | Yes* | Shell command to run (use `powershell` on Windows) |
+| `cwd` | No | Working directory, relative to the hooks.json location |
+| `timeoutSec` | No | Max execution time (default: 30s) |
+| `env` | No | Extra environment variables |
+
+### Hook Input/Output
+
+Hooks receive JSON on **stdin** describing the event (tool name, arguments, etc.) and return JSON on **stdout**. For `preToolUse`, the output controls whether the tool runs:
+
+```json
+{ "permissionDecision": "allow" }
+```
+
+```json
+{ "permissionDecision": "deny", "permissionDecisionReason": "Blocked by policy" }
+```
+
+```json
+{ "permissionDecision": "ask", "permissionDecisionReason": "Confirm before running" }
+```
+
+- **`allow`** — tool proceeds normally (this is also the default if the hook returns nothing)
+- **`deny`** — tool is blocked; the reason is shown to the agent
+- **`ask`** — the bridge prompts the user for approval in chat (approve/deny only; "always" and "remember" are not offered for hook-triggered prompts)
+
+For `preToolUse`, if multiple commands are registered, the first `"deny"` short-circuits and blocks the tool.
+
+### Example Hook Script
+
+```bash
+#!/bin/bash
+# guard-main-push.sh — Block git push to main branch
+INPUT=$(cat)
+TOOL=$(echo "$INPUT" | jq -r '.toolName // empty')
+COMMAND=$(echo "$INPUT" | jq -r '.toolArgs.command // empty')
+
+if [ "$TOOL" = "bash" ] && echo "$COMMAND" | grep -q "git push.*main"; then
+  echo '{"permissionDecision":"deny","permissionDecisionReason":"Push to main blocked by hook"}'
+else
+  echo '{"permissionDecision":"allow"}'
+fi
+```
 
 ### Available Hook Types
 
-| Hook | When it fires | Can modify |
-|------|--------------|------------|
-| `onPreToolUse` | Before tool execution | Permission decision, tool args, context |
-| `onPostToolUse` | After tool execution | Tool result, context |
-| `onUserPromptSubmitted` | When user sends a message | Prompt text, context |
-| `onSessionStart` | Session created or resumed | Context, config |
-| `onSessionEnd` | Session ends | Cleanup actions |
-| `onErrorOccurred` | Error occurs | Retry/skip/abort |
+| Hook Type | When it Fires |
+|-----------|--------------|
+| `preToolUse` | Before tool execution (can allow/deny/ask) |
+| `postToolUse` | After tool execution |
+| `userPromptSubmitted` | When user sends a message |
+| `sessionStart` | Session created or resumed |
+| `sessionEnd` | Session ends |
+| `errorOccurred` | Error occurs |
 
 ### Discovery Order
 
-Hooks are loaded from multiple locations. Later sources override earlier ones (highest priority wins):
+Hooks are loaded from multiple locations (lowest to highest priority). Commands from all sources are appended, not overridden:
 
-1. **Plugin hooks** — `~/.copilot/installed-plugins/.../hooks.json` (lowest priority)
+1. **Plugin hooks** — `~/.copilot/installed-plugins/.../hooks.json`
 2. **User hooks** — `~/.copilot/hooks.json`
-3. **Workspace hooks** — `<workspace>/.github/hooks.json` or `<workspace>/hooks.json` (highest priority, **disabled by default**)
+3. **Workspace hooks** — `<workspace>/.github/hooks/hooks.json`, `<workspace>/.github/hooks.json`, or `<workspace>/hooks.json` (**disabled by default**)
 
-> **Security note:** Workspace hooks execute arbitrary code on session creation. They are disabled by default to prevent untrusted repositories from running code automatically. To enable, set `"allowWorkspaceHooks": true` in the `defaults` section of your bridge config.
+> **Security note:** Workspace hooks execute arbitrary code. They are disabled by default to prevent untrusted repositories from running code automatically. To enable, set `"allowWorkspaceHooks": true` in the `defaults` section of your bridge config.
+
+### Viewing Loaded Hooks
+
+Use `/tools` in chat to see which hooks are currently loaded and how many commands are registered per hook type.
