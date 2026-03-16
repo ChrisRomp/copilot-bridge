@@ -23,6 +23,10 @@ const log = createLogger('bridge');
 // Active streaming responses, keyed by channelId
 const activeStreams = new Map<string, string>(); // channelId → streamKey
 
+// Preserve thread context across turn_end stream finalization so auto-started
+// streams stay in the same thread.
+const channelThreadRoots = new Map<string, string>(); // channelId → threadRootId
+
 // Track channels where the initial "Working..." has been posted (reset on new user message)
 const initialStreamPosted = new Set<string>();
 
@@ -856,6 +860,7 @@ async function handleInboundMessage(
           await streaming.cancelStream(oldStreamKey);
           activeStreams.delete(msg.channelId);
         }
+        channelThreadRoots.delete(msg.channelId);
         await finalizeActivityFeed(msg.channelId, adapter);
         loopDetector.reset(msg.channelId);
         await sessionManager.newSession(msg.channelId);
@@ -869,6 +874,7 @@ async function handleInboundMessage(
           await streaming.cancelStream(stopStreamKey);
           activeStreams.delete(msg.channelId);
         }
+        channelThreadRoots.delete(msg.channelId);
         await finalizeActivityFeed(msg.channelId, adapter);
         await sessionManager.abortSession(msg.channelId);
         await adapter.sendMessage(msg.channelId, '🛑 Task stopped.', { threadRootId: threadRoot });
@@ -1499,6 +1505,7 @@ async function handleSessionEvent(
   if (event.type === 'bridge.permission_request') {
     const streamKey = activeStreams.get(channelId);
     const threadRootId = streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined;
+    if (threadRootId) channelThreadRoots.set(channelId, threadRootId);
     if (streamKey) {
       await streaming.finalizeStream(streamKey);
       activeStreams.delete(channelId);
@@ -1513,6 +1520,7 @@ async function handleSessionEvent(
   if (event.type === 'bridge.user_input_request') {
     const streamKey = activeStreams.get(channelId);
     const threadRootId = streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined;
+    if (threadRootId) channelThreadRoots.set(channelId, threadRootId);
     if (streamKey) {
       await streaming.finalizeStream(streamKey);
       activeStreams.delete(channelId);
@@ -1581,7 +1589,8 @@ async function handleSessionEvent(
         const initialContent = event.type === 'assistant.message'
           ? formatted.content
           : (formatted.content || undefined);
-        const newKey = await streaming.startStream(channelId, undefined, initialContent);
+        const savedThreadRoot = channelThreadRoots.get(channelId);
+        const newKey = await streaming.startStream(channelId, savedThreadRoot, initialContent);
         activeStreams.set(channelId, newKey);
       } else {
         if (event.type === 'assistant.message') {
@@ -1641,6 +1650,7 @@ async function handleSessionEvent(
     case 'error':
       markIdleImmediate(channelId);
       nudgePending.delete(channelId);
+      channelThreadRoots.delete(channelId);
       if (streamKey) {
         await streaming.cancelStream(streamKey, formatted.content);
         activeStreams.delete(channelId);
@@ -1658,14 +1668,30 @@ async function handleSessionEvent(
         }
         await adapter.sendMessage(channelId, formatted.content);
       }
+      // Finalize stream on turn_end if it has content — preserves multi-turn
+      // messages so each turn's text gets its own chat message instead of being
+      // overwritten by the next turn's replaceContent().
+      // Only finalize when the stream has real content to avoid "Working..." churn.
+      if (event.type === 'assistant.turn_end') {
+        if (streamKey && streaming.hasContent(streamKey)) {
+          // Preserve thread context for the next auto-started stream
+          const threadRootId = streaming.getStreamThreadRootId(streamKey);
+          if (threadRootId) {
+            channelThreadRoots.set(channelId, threadRootId);
+          } else {
+            channelThreadRoots.delete(channelId);
+          }
+          await streaming.finalizeStream(streamKey);
+          activeStreams.delete(channelId);
+        }
+      }
       // Finalize stream when the session goes idle (all turns complete).
-      // turn_end fires between tool cycles — DON'T finalize there or we get
-      // duplicate "Working..." messages from auto-starting new streams.
       if (event.type === 'session.idle') {
         markIdle(channelId);
         nudgePending.delete(channelId);
         await finalizeActivityFeed(channelId, adapter);
         initialStreamPosted.delete(channelId);
+        channelThreadRoots.delete(channelId);
         if (streamKey) {
           log.info(`Session idle, finalizing stream for ${channelId.slice(0, 8)}...`);
           await streaming.finalizeStream(streamKey);

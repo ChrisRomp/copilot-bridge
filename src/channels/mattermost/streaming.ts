@@ -130,6 +130,12 @@ export class StreamingHandler {
     return this.activeStreams.get(streamKey)?.content;
   }
 
+  /** Check if a stream has non-empty content (not just the initial placeholder). */
+  hasContent(streamKey: string): boolean {
+    const content = this.activeStreams.get(streamKey)?.content;
+    return !!content && content.length > 0;
+  }
+
   /** Get the thread root ID for a stream. */
   getStreamThreadRootId(streamKey: string): string | undefined {
     return this.activeStreams.get(streamKey)?.threadRootId;
