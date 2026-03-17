@@ -164,11 +164,14 @@ export class StreamingHandler {
 
   private async flushUpdate(streamKey: string): Promise<void> {
     const stream = this.activeStreams.get(streamKey);
-    if (!stream || !stream.pendingUpdate) return;
+    if (!stream) return;
+
+    stream.updateTimer = null;
+
+    if (!stream.pendingUpdate) return;
 
     const content = stream.pendingUpdate;
     stream.pendingUpdate = null;
-    stream.updateTimer = null;
 
     try {
       log.debug(`Flushing ${content.length} chars to ${stream.messageId.slice(0, 8)}...`);
