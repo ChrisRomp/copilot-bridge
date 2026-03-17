@@ -1662,6 +1662,20 @@ async function handleSessionEvent(
       break;
 
     case 'status':
+      // Finalize active stream on turn_start if it has content from a previous
+      // turn or between-turn events (e.g., subagent results arriving after
+      // turn_end). This complements turn_end finalization by catching content
+      // that arrives outside turn boundaries.
+      if (event.type === 'assistant.turn_start' && streamKey && streaming.hasContent(streamKey)) {
+        const threadRootId = streaming.getStreamThreadRootId(streamKey);
+        if (threadRootId) {
+          channelThreadRoots.set(channelId, threadRootId);
+        } else {
+          channelThreadRoots.delete(channelId);
+        }
+        await streaming.finalizeStream(streamKey);
+        activeStreams.delete(channelId);
+      }
       // Send subagent status messages to chat
       if (formatted.content) {
         if (streamKey) {

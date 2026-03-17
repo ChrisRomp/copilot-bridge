@@ -6,3 +6,4 @@ config.json
 .env
 .scratchpad-assets
 .playwright-cli
+.nano-banana-config.json

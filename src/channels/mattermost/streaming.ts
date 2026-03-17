@@ -64,6 +64,10 @@ export class StreamingHandler {
     const stream = this.activeStreams.get(streamKey);
     if (!stream) return;
 
+    // Don't wipe existing content with an empty replace — the CLI sends empty
+    // assistant.message events as a signal before tool calls, not as real content.
+    if (!content && stream.content) return;
+
     stream.content = content;
     stream.pendingUpdate = content;
 
@@ -160,11 +164,14 @@ export class StreamingHandler {
 
   private async flushUpdate(streamKey: string): Promise<void> {
     const stream = this.activeStreams.get(streamKey);
-    if (!stream || !stream.pendingUpdate) return;
+    if (!stream) return;
+
+    stream.updateTimer = null;
+
+    if (!stream.pendingUpdate) return;
 
     const content = stream.pendingUpdate;
     stream.pendingUpdate = null;
-    stream.updateTimer = null;
 
     try {
       log.debug(`Flushing ${content.length} chars to ${stream.messageId.slice(0, 8)}...`);
