@@ -7,3 +7,4 @@ config.json
 .scratchpad-assets
 .playwright-cli
 .nano-banana-config.json
+generated_imgs/

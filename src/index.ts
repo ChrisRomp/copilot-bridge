@@ -1250,18 +1250,25 @@ async function handleInboundMessage(
 
         const matched: string[] = [];
         const notFound: string[] = [];
+        const ambiguous: string[] = [];
 
         for (const target of targets) {
-          const exact = skills.find(s => s.name.toLowerCase() === target.toLowerCase());
-          const substring = !exact ? skills.find(s => s.name.toLowerCase().includes(target.toLowerCase())) : undefined;
-          const skill = exact ?? substring;
-          if (skill) {
-            if (toggleAction === 'disable') {
-              currentDisabled.add(skill.name);
-            } else {
-              currentDisabled.delete(skill.name);
-            }
+          const lower = target.toLowerCase();
+          const exact = skills.find(s => s.name.toLowerCase() === lower);
+          if (exact) {
+            if (toggleAction === 'disable') currentDisabled.add(exact.name);
+            else currentDisabled.delete(exact.name);
+            matched.push(exact.name);
+            continue;
+          }
+          const substringMatches = skills.filter(s => s.name.toLowerCase().includes(lower));
+          if (substringMatches.length === 1) {
+            const skill = substringMatches[0];
+            if (toggleAction === 'disable') currentDisabled.add(skill.name);
+            else currentDisabled.delete(skill.name);
             matched.push(skill.name);
+          } else if (substringMatches.length > 1) {
+            ambiguous.push(`"${target}" matches: ${substringMatches.map(s => `\`${s.name}\``).join(', ')}`);
           } else {
             notFound.push(target);
           }
@@ -1276,6 +1283,9 @@ async function handleInboundMessage(
           const verb = toggleAction === 'disable' ? '🔴 Disabled' : '🟢 Enabled';
           const names = matched.map(n => `\`${n}\``).join(', ');
           lines.push(`${verb} ${names}.`);
+        }
+        if (ambiguous.length > 0) {
+          lines.push(`⚠️ Ambiguous: ${ambiguous.join('; ')}`);
         }
         if (notFound.length > 0) {
           lines.push(`❌ No match: ${notFound.map(n => `"${n}"`).join(', ')}`);

@@ -848,6 +848,7 @@ export class SessionManager {
       threadedReplies: storedPrefs?.threadedReplies ?? configChannel.threadedReplies,
       permissionMode: storedPrefs?.permissionMode ?? configChannel.permissionMode,
       reasoningEffort: storedPrefs?.reasoningEffort ?? (configChannel as any).reasoningEffort ?? null,
+      disabledSkills: storedPrefs?.disabledSkills,
     };
   }
 

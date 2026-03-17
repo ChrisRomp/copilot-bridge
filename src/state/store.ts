@@ -5,6 +5,10 @@ import fs from 'node:fs';
 
 const DB_PATH = path.join(os.homedir(), '.copilot-bridge', 'state.db');
 
+function safeParseJson<T>(raw: string): T | undefined {
+  try { return JSON.parse(raw); } catch { return undefined; }
+}
+
 let _db: Database.Database | null = null;
 
 /** Migrate channel_prefs: drop NOT NULL on columns that should be nullable. */
@@ -264,7 +268,7 @@ export function getChannelPrefs(channelId: string): ChannelPrefs | null {
     permissionMode: row.permission_mode ?? undefined,
     reasoningEffort: row.reasoning_effort ?? null,
     sessionMode: row.session_mode ?? undefined,
-    disabledSkills: row.disabled_skills ? JSON.parse(row.disabled_skills) : undefined,
+    disabledSkills: row.disabled_skills ? safeParseJson(row.disabled_skills) : undefined,
   };
 }
 
