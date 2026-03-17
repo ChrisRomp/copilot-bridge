@@ -15,6 +15,12 @@ Mattermost Channel → copilot-bridge → @github/copilot-sdk → Copilot CLI
      └──────────── streaming response (edit-in-place) ←─────────┘
 ```
 
+## Screenshots
+
+![Copilot Bridge in Mattermost Desktop](docs/images/copilot-bridge-mattermost-desktop.png)
+
+More screenshots [here](docs/screenshots.md).
+
 ## Features
 
 - **Multi-bot support** — Run multiple bot identities on the same platform (e.g., `@copilot` for admin, `@alice` for tasks)
