@@ -141,6 +141,7 @@ function validateAndNormalize(raw: any): AppConfig {
     channels: raw.channels,
     defaults,
     logLevel: raw.logLevel,
+    infiniteSessions: raw.infiniteSessions ?? false,
     permissions: raw.permissions,
     interAgent: raw.interAgent,
   };

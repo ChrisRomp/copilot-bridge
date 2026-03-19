@@ -92,7 +92,7 @@ export class CopilotBridge {
       customAgents: opts.customAgents,
       tools: opts.tools,
       hooks: opts.hooks,
-      ...(opts.infiniteSessions ? { infiniteSessions: { enabled: true } } : {}),
+      ...(opts.infiniteSessions ? { infiniteSessions: { enabled: true } } : { infiniteSessions: { enabled: false } }),
     });
     this.sessions.set(session.sessionId, session);
     return session;
@@ -135,7 +135,7 @@ export class CopilotBridge {
       disabledSkills: opts?.disabledSkills,
       tools: opts?.tools,
       hooks: opts?.hooks,
-      ...(opts?.infiniteSessions ? { infiniteSessions: { enabled: true } } : {}),
+      ...(opts?.infiniteSessions ? { infiniteSessions: { enabled: true } } : { infiniteSessions: { enabled: false } }),
     });
     this.sessions.set(session.sessionId, session);
     return session;
