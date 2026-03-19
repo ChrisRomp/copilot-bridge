@@ -116,6 +116,24 @@ Priority: explicit `env` values in config override `.env` values for the same ke
 
 Non-conflicting server names from all layers are merged — a bot gets its workspace servers plus all global servers. If a workspace defines a server with the same name as a global one, the workspace version wins.
 
+### Working directory
+
+Local MCP server processes (type `stdio` or `local`) automatically run with `cwd` set to the bot's workspace directory. This ensures file-writing MCP tools create files in the workspace, not the bridge repo.
+
+To override, set an explicit `cwd` in the server config:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "node",
+      "args": ["server.js"],
+      "cwd": "/custom/path"
+    }
+  }
+}
+```
+
 Use cases:
 - Give an admin bot access to GitHub MCP while keeping coding bots sandboxed
 - Override global server settings (different args, env) per workspace

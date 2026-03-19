@@ -242,6 +242,43 @@ function loadWorkspaceMcpServers(workspacePath: string): { servers: Record<strin
 }
 
 /**
+ * Merge global and workspace MCP server configs, injecting cwd and env into local servers.
+ * Exported for testing — used internally by SessionManager.resolveMcpServers().
+ */
+export function mergeMcpServers(
+  globalServers: Record<string, any>,
+  workspaceServers: Record<string, any>,
+  workspaceEnv: Record<string, string>,
+  workingDirectory: string,
+): Record<string, any> {
+  const merged: Record<string, any> = {};
+  for (const [name, config] of Object.entries(globalServers)) {
+    const serverConfig = { ...(config as any) };
+    const isLocal = !serverConfig.type || serverConfig.type === 'local' || serverConfig.type === 'stdio';
+    if (isLocal) {
+      if (!serverConfig.cwd) {
+        serverConfig.cwd = workingDirectory;
+      }
+      if (Object.keys(workspaceEnv).length > 0) {
+        serverConfig.env = { ...workspaceEnv, ...(serverConfig.env || {}) };
+      }
+    }
+    merged[name] = serverConfig;
+  }
+
+  for (const [name, config] of Object.entries(workspaceServers)) {
+    const serverConfig = { ...(config as any) };
+    const isLocal = !serverConfig.type || serverConfig.type === 'local' || serverConfig.type === 'stdio';
+    if (isLocal && !serverConfig.cwd) {
+      serverConfig.cwd = workingDirectory;
+    }
+    merged[name] = serverConfig;
+  }
+
+  return merged;
+}
+
+/**
  * Extract individual command names from a shell command string.
  * Handles chained commands: "ls -la && grep -r foo . | head" → ["ls", "grep", "head"]
  */
@@ -450,20 +487,7 @@ export class SessionManager {
    */
   private resolveMcpServers(workingDirectory: string): Record<string, any> {
     const { servers: workspaceServers, env: workspaceEnv } = loadWorkspaceMcpServers(workingDirectory);
-
-    // Clone global servers and inject workspace .env into local ones
-    const merged: Record<string, any> = {};
-    for (const [name, config] of Object.entries(this.mcpServers)) {
-      const serverConfig = { ...(config as any) };
-      const isLocal = !serverConfig.type || serverConfig.type === 'local' || serverConfig.type === 'stdio';
-      if (isLocal && Object.keys(workspaceEnv).length > 0) {
-        serverConfig.env = { ...workspaceEnv, ...(serverConfig.env || {}) };
-      }
-      merged[name] = serverConfig;
-    }
-
-    if (Object.keys(workspaceServers).length === 0) return merged;
-    return { ...merged, ...workspaceServers };
+    return mergeMcpServers(this.mcpServers, workspaceServers, workspaceEnv, workingDirectory);
   }
 
   /** Get annotated MCP server info for a channel, showing which layer each server came from. */
