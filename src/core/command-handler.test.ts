@@ -307,6 +307,56 @@ describe('/status command', () => {
   });
 });
 
+// --- /context command ---
+
+describe('/context command', () => {
+  const SESSION_INFO = { sessionId: 'sess-ctx', model: 'claude-opus-4.6', agent: null };
+  const PREFS = { verbose: false, permissionMode: 'interactive' as const, reasoningEffort: null };
+
+  it('shows tokenLimit when contextWindowTokens is absent', () => {
+    const result = handleCommand('ch-ctx-1', '/context', SESSION_INFO, PREFS, undefined, undefined, undefined,
+      { currentTokens: 50000, tokenLimit: 168000 },
+    );
+    expect(result.handled).toBe(true);
+    expect(result.response).toContain('168k');
+    expect(result.response).toContain('50k');
+  });
+
+  it('prefers contextWindowTokens over tokenLimit', () => {
+    const result = handleCommand('ch-ctx-2', '/context', SESSION_INFO, PREFS, undefined, undefined, undefined,
+      { currentTokens: 50000, tokenLimit: 168000, contextWindowTokens: 200000 },
+    );
+    expect(result.handled).toBe(true);
+    expect(result.response).toContain('200k');
+    expect(result.response).not.toContain('168k');
+  });
+
+  it('calculates percentage against contextWindowTokens', () => {
+    const result = handleCommand('ch-ctx-3', '/context', SESSION_INFO, PREFS, undefined, undefined, undefined,
+      { currentTokens: 100000, tokenLimit: 168000, contextWindowTokens: 200000 },
+    );
+    // 100k / 200k = 50%
+    expect(result.response).toContain('50%');
+  });
+
+  it('falls back to tokenLimit when contextWindowTokens is undefined', () => {
+    const result = handleCommand('ch-ctx-4', '/context', SESSION_INFO, PREFS, undefined, undefined, undefined,
+      { currentTokens: 84000, tokenLimit: 168000, contextWindowTokens: undefined },
+    );
+    // 84k / 168k = 50%
+    expect(result.response).toContain('168k');
+    expect(result.response).toContain('50%');
+  });
+
+  it('shows context in /status when usage is available', () => {
+    const result = handleCommand('ch-ctx-5', '/status', SESSION_INFO, PREFS, undefined, undefined, undefined,
+      { currentTokens: 50000, tokenLimit: 168000, contextWindowTokens: 200000 },
+    );
+    expect(result.response).toContain('200k');
+    expect(result.response).toContain('Context');
+  });
+});
+
 describe('/reasoning command', () => {
   const SESSION_INFO = { sessionId: 'sess-123', model: 'claude-opus-4.6', agent: null };
   const REASONING_MODEL: ModelInfo = {
