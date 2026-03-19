@@ -272,11 +272,10 @@ export function mergeMcpServers(
     if (isLocal && !serverConfig.cwd) {
       serverConfig.cwd = workingDirectory;
     }
-    workspaceServers[name] = serverConfig;
+    merged[name] = serverConfig;
   }
 
-  if (Object.keys(workspaceServers).length === 0) return merged;
-  return { ...merged, ...workspaceServers };
+  return merged;
 }
 
 /**

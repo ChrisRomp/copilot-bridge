@@ -94,12 +94,10 @@ describe('mergeMcpServers', () => {
   });
 
   it('does not mutate original workspace config', () => {
-    const workspace = {
-      wsserver: { command: 'python3', args: ['mcp.py'], type: 'local' },
-    };
-    const original = { ...workspace.wsserver };
+    const wsserver = { command: 'python3', args: ['mcp.py'], type: 'local' };
+    const workspace = { wsserver };
     mergeMcpServers({}, workspace, {}, '/workspace/bot1');
-    expect(original).not.toHaveProperty('cwd');
+    expect(wsserver).not.toHaveProperty('cwd');
   });
 
   it('workspace servers override global servers with same name', () => {
