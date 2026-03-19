@@ -1588,7 +1588,9 @@ async function handleSessionEvent(
   } else if (event.type?.startsWith('tool.')) {
     log.info(`SDK ${event.type}: ${JSON.stringify(event.data).slice(0, 400)}`);
   } else if (event.type === 'session.usage_info') {
-    log.debug(`SDK ${event.type}: ${JSON.stringify(event.data)}`);
+    log.debug(`SDK ${event.type}: ${JSON.stringify(event.data).slice(0, 200)}`);
+  } else if (event.type === 'session.compaction_start' || event.type === 'session.compaction_complete') {
+    // Already logged above; skip duplicate debug line
   } else {
     log.debug(`SDK event: ${event.type}`);
   }
