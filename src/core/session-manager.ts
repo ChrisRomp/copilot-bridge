@@ -337,7 +337,7 @@ export class SessionManager {
   // Pending user input requests (queue per channel to avoid overwrites)
   private pendingUserInput = new Map<string, PendingUserInput[]>();
   // Cached context usage from session.usage_info events
-  private contextUsage = new Map<string, { currentTokens: number; tokenLimit: number }>();
+  private contextUsage = new Map<string, { currentTokens: number; tokenLimit: number; contextWindowTokens?: number }>();
   private lastMessageUserIds = new Map<string, string>(); // channelId → userId of last message sender
   // MCP server names that were passed to the session at creation/resume time
   private sessionMcpServers = new Map<string, Set<string>>(); // channelId → server names
@@ -819,6 +819,21 @@ export class SessionManager {
       }
     }
     setChannelPrefs(channelId, { model });
+
+    // Clear stale context window tokens so /context falls back to tokenLimit during transition
+    const existing = this.contextUsage.get(channelId);
+    if (existing) {
+      existing.contextWindowTokens = undefined;
+    }
+
+    // Update cached context window tokens for the new model (best-effort)
+    this.bridge.listModels().then(models => {
+      // Guard against rapid switches: only cache if the channel is still on this model
+      const currentPrefs = this.getEffectivePrefs(channelId);
+      if (currentPrefs.model === model) {
+        this.cacheContextWindowTokens(channelId, model, models);
+      }
+    }).catch(() => { /* best-effort */ });
   }
 
   /** Switch the agent for a channel's session. */
@@ -1034,8 +1049,21 @@ export class SessionManager {
   }
 
   /** Get cached context window usage for a channel. */
-  getContextUsage(channelId: string): { currentTokens: number; tokenLimit: number } | null {
+  getContextUsage(channelId: string): { currentTokens: number; tokenLimit: number; contextWindowTokens?: number } | null {
     return this.contextUsage.get(channelId) ?? null;
+  }
+
+  /** Cache the model's max_context_window_tokens for accurate /context display. */
+  private cacheContextWindowTokens(channelId: string, modelId: string, modelList: any[]): void {
+    const model = modelList.find((m: any) => m.id === modelId);
+    const ctxTokens = model?.capabilities?.limits?.max_context_window_tokens;
+    if (typeof ctxTokens === 'number' && ctxTokens > 0) {
+      const existing = this.contextUsage.get(channelId);
+      if (existing) {
+        existing.contextWindowTokens = ctxTokens;
+      }
+      // Don't create synthetic entries — wait for a real session.usage_info event
+    }
   }
 
   /**
@@ -1095,9 +1123,10 @@ export class SessionManager {
 
     // Fetch available models for fallback chain (best-effort — don't block on failure)
     let availableModels: string[] = [];
+    let modelList: any[] = [];
     try {
-      const models = await this.bridge.listModels();
-      availableModels = models.map(m => m.id);
+      modelList = await this.bridge.listModels();
+      availableModels = modelList.map(m => m.id);
     } catch {
       log.warn('Failed to fetch model list for fallback resolution');
     }
@@ -1137,6 +1166,7 @@ export class SessionManager {
 
     this.sessionMcpServers.set(channelId, new Set(Object.keys(resolvedMcpServers)));
     this.sessionSkillDirs.set(channelId, new Set(skillDirectories));
+    this.cacheContextWindowTokens(channelId, usedModel, modelList);
 
     if (didFallback) {
       log.info(`Model fallback: "${prefs.model}" → "${usedModel}" for channel ${channelId}`);
@@ -1199,6 +1229,16 @@ export class SessionManager {
     this.channelSessions.set(channelId, sessionId);
     this.sessionChannels.set(sessionId, channelId);
     this.attachSessionEvents(session, channelId);
+
+    // Cache context window tokens for /context display (best-effort, non-blocking)
+    const resumeModel = prefs.model;
+    this.bridge.listModels().then(models => {
+      // Guard against model changes before this resolves
+      const currentPrefs = this.getEffectivePrefs(channelId);
+      if (currentPrefs.model === resumeModel) {
+        this.cacheContextWindowTokens(channelId, resumeModel, models);
+      }
+    }).catch(() => { /* best-effort */ });
   }
 
   /**
@@ -2042,9 +2082,11 @@ export class SessionManager {
   private attachSessionEvents(session: CopilotSession, channelId: string): void {
     const unsub = session.on((event: any) => {
       if (event.type === 'session.usage_info' && event.data) {
+        const existing = this.contextUsage.get(channelId);
         this.contextUsage.set(channelId, {
           currentTokens: event.data.currentTokens,
           tokenLimit: event.data.tokenLimit,
+          contextWindowTokens: existing?.contextWindowTokens,
         });
       }
       this.eventHandler?.(session.sessionId, channelId, event);

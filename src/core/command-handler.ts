@@ -106,12 +106,13 @@ function formatTokens(n: number): string {
 }
 
 /** Format context usage as a one-line summary. */
-function formatContextUsage(usage: { currentTokens: number; tokenLimit: number }): string {
-  if (usage.tokenLimit <= 0) {
+function formatContextUsage(usage: { currentTokens: number; tokenLimit: number; contextWindowTokens?: number }): string {
+  const limit = usage.contextWindowTokens ?? usage.tokenLimit;
+  if (limit <= 0) {
     return `${formatTokens(usage.currentTokens)}/? tokens`;
   }
-  const pct = Math.round((usage.currentTokens / usage.tokenLimit) * 100);
-  return `${formatTokens(usage.currentTokens)}/${formatTokens(usage.tokenLimit)} tokens (${pct}%)`;
+  const pct = Math.round((usage.currentTokens / limit) * 100);
+  return `${formatTokens(usage.currentTokens)}/${formatTokens(limit)} tokens (${pct}%)`;
 }
 
 /** Extract a short description from agent markdown content (frontmatter or first body line). */
@@ -174,7 +175,7 @@ export interface McpServerInfo {
   pending?: boolean;
 }
 
-export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[], contextUsage?: { currentTokens: number; tokenLimit: number } | null): CommandResult {
+export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[], contextUsage?: { currentTokens: number; tokenLimit: number; contextWindowTokens?: number } | null): CommandResult {
   const parsed = parseCommand(text);
   if (!parsed) return { handled: false };
 
