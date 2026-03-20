@@ -165,12 +165,11 @@ ${editNote}
 
 | Field | Type | Description |
 |-------|------|-------------|
-| \`platform\` | string | \`"mattermost"\` (required) |
-| \`mattermost\` | object | Platform connection settings (url, token, etc.) |
+| \`platforms\` | object | Platform configs keyed by name (e.g., \`"mattermost": { url, bots }\`) |
+| \`channels\` | array | Per-channel config entries (each has \`id\`, \`platform\`, \`bot\`, etc.) |
+| \`defaults\` | object | Default values for channel settings |
 | \`logLevel\` | string | \`"debug"\`, \`"info"\`, \`"warn"\`, \`"error"\` |
 | \`infiniteSessions\` | boolean | Enable SDK context compaction (default: false) |
-| \`defaults\` | object | Per-channel defaults (can be overridden per channel) |
-| \`channels\` | object | Per-channel config overrides |
 | \`permissions\` | object | Permission rules (allow/deny patterns) |
 | \`interAgent\` | object | Inter-agent communication settings |
 
@@ -182,21 +181,22 @@ ${editNote}
 | \`verbose\` | \`false\` | Show tool call details |
 | \`permissionMode\` | \`"interactive"\` | Permission handling mode |
 | \`fallbackModels\` | \`[]\` | Model fallback chain |
-| \`workingDirectory\` | (auto) | Bot workspace path |
-| \`bot\` | (auto) | Bot identity name |
 
-## Channel Overrides
+## Channel Entries
 
-Per-channel settings in \`channels\` override \`defaults\`:
+Each entry in the \`channels\` array configures one channel:
 \`\`\`json
 {
-  "channels": {
-    "channel-id-here": {
-      "model": "claude-opus-4.6",
-      "bot": "admin-bot",
-      "workingDirectory": "/path/to/workspace"
+  "channels": [
+    {
+      "id": "channel-id-from-platform",
+      "platform": "mattermost",
+      "bot": "copilot",
+      "name": "My Project",
+      "workingDirectory": "/path/to/workspace",
+      "model": "claude-opus-4.6"
     }
-  }
+  ]
 }
 \`\`\`
 
@@ -377,21 +377,21 @@ Hooks run shell commands at session lifecycle points. They can allow, deny, or p
 
 ## Configuration
 
-Hooks are defined in \`hooks.json\` files, discovered in order:
+Hooks are defined in \`hooks.json\` files, discovered in order (lowest → highest priority):
 1. Plugin hooks (\`~/.copilot/installed-plugins/**/hooks.json\`)
-2. User hooks (\`~/.copilot/hooks/hooks.json\`)
-3. Workspace hooks (\`<workspace>/.copilot/hooks.json\`) — requires \`allowWorkspaceHooks: true\` in config
+2. User hooks (\`~/.copilot/hooks.json\`)
+3. Workspace hooks (\`<workspace>/.github/hooks/hooks.json\`, \`<workspace>/.github/hooks.json\`, or \`<workspace>/hooks.json\`) — requires \`allowWorkspaceHooks: true\` in config
 
 ## Format
 
 \`\`\`json
 {
-  "version": "1.0.0",
+  "version": 1,
   "hooks": {
     "preToolUse": [
       {
-        "type": "bash",
-        "bash": "/path/to/script.sh",
+        "type": "command",
+        "bash": "./scripts/guard.sh",
         "timeoutSec": 5
       }
     ]
