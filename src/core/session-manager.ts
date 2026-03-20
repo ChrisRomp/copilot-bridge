@@ -24,6 +24,7 @@ import { createLogger } from '../logger.js';
 import { tryWithFallback, isModelError, buildFallbackChain } from './model-fallback.js';
 import type { McpServerInfo } from './command-handler.js';
 import { loadHooks, getHooksInfo, type SessionHooks, type HookInfo } from './hooks-loader.js';
+import { getBridgeDocs } from './bridge-docs.js';
 import type {
   ChannelAdapter, InboundMessage, PendingPermission, PendingUserInput,
 } from '../types.js';
@@ -31,7 +32,7 @@ import type {
 const log = createLogger('session');
 
 /** Custom tools auto-approved without interactive prompt (they enforce workspace boundaries internally). */
-export const BRIDGE_CUSTOM_TOOLS = ['send_file', 'show_file_in_chat', 'ask_agent', 'schedule'];
+export const BRIDGE_CUSTOM_TOOLS = ['send_file', 'show_file_in_chat', 'ask_agent', 'schedule', 'fetch_copilot_bridge_documentation'];
 
 type SessionEventHandler = (sessionId: string, channelId: string, event: any) => void;
 
@@ -1986,6 +1987,9 @@ export class SessionManager {
     // Scheduler tool: create/list/cancel/pause/resume scheduled tasks
     tools.push(this.buildScheduleToolDef(channelId));
 
+    // Bridge documentation tool
+    tools.push(this.buildBridgeDocsTool(channelId));
+
     if (tools.length > 0) {
       log.info(`Built ${tools.length} custom tool(s) for channel ${channelId.slice(0, 8)}...`);
     }
@@ -2102,6 +2106,40 @@ export class SessionManager {
         } catch (err: any) {
           return { content: `Schedule error: ${err?.message ?? 'unknown error'}` };
         }
+      },
+    };
+  }
+
+  private buildBridgeDocsTool(channelId: string): any {
+    const channelConfig = getChannelConfig(channelId);
+    const botName = getChannelBotName(channelId);
+    const isAdmin = isBotAdmin(channelConfig.platform, botName);
+
+    return {
+      name: 'fetch_copilot_bridge_documentation',
+      description: 'Fetch documentation about copilot-bridge capabilities, commands, configuration, and system status. Use this when you need to understand bridge features, help users with commands, troubleshoot issues, or check system status. Call with a specific topic to get focused information. If the documentation doesn\'t fully answer your question, each topic includes source code pointers for deeper investigation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: {
+            type: 'string',
+            enum: ['overview', 'commands', 'config', 'mcp', 'permissions', 'workspaces', 'hooks', 'skills', 'inter-agent', 'scheduling', 'troubleshooting', 'status'],
+            description: "Topic to query. 'overview' = what the bridge is and key features. 'commands' = all slash commands. 'config' = configuration options. 'mcp' = MCP server setup. 'permissions' = permission system. 'workspaces' = workspace structure. 'hooks' = tool hooks. 'skills' = skill discovery. 'inter-agent' = bot-to-bot communication. 'scheduling' = task scheduling. 'troubleshooting' = common issues. 'status' = live system state.",
+          },
+        },
+        required: [],
+      },
+      handler: async (args: { topic?: string }) => {
+        const sessionInfo = this.getSessionInfo(channelId);
+        return {
+          content: getBridgeDocs({
+            topic: args.topic,
+            isAdmin,
+            channelId,
+            model: sessionInfo?.model,
+            sessionId: sessionInfo?.sessionId,
+          }),
+        };
       },
     };
   }
