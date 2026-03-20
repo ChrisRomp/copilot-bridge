@@ -56,6 +56,9 @@ const loopDetector = new LoopDetector();
 // Track last known sessionId per channel for implicit session change detection
 const lastSessionIds = new Map<string, string>();
 
+// Channels that have had their plan surfaced after session resume (one-time)
+const planSurfacedOnResume = new Set<string>();
+
 /** Format a date as a relative age string (e.g., "2h ago", "3d ago"). */
 function formatAge(date: Date): string {
   const ms = Date.now() - new Date(date).getTime();
@@ -643,6 +646,8 @@ async function handleMidTurnMessage(
       channelThreadRoots.delete(msg.channelId);
       await finalizeActivityFeed(msg.channelId, adapter);
       await sessionManager.abortSession(msg.channelId);
+      // Revert yolo if temporarily enabled for plan implementation
+      sessionManager.revertYoloIfNeeded(msg.channelId);
       markIdleImmediate(msg.channelId);
       await adapter.sendMessage(msg.channelId, '🛑 Task stopped.', { threadRootId: threadRoot });
       return;
@@ -656,6 +661,7 @@ async function handleMidTurnMessage(
       channelThreadRoots.delete(msg.channelId);
       await finalizeActivityFeed(msg.channelId, adapter);
       loopDetector.reset(msg.channelId);
+      planSurfacedOnResume.delete(msg.channelId);
       await sessionManager.newSession(msg.channelId);
       markIdleImmediate(msg.channelId);
       await adapter.sendMessage(msg.channelId, '✅ New session created.', { threadRootId: threadRoot });
@@ -946,6 +952,19 @@ async function handleInboundMessage(
           }
           const resumedId = await sessionManager.resumeToSession(msg.channelId, matches[0]);
           await adapter.updateMessage(msg.channelId, resumeAck, `✅ Resumed session \`${resumedId.slice(0, 8)}…\``);
+          // Surface existing plan after resume
+          try {
+            const plan = await sessionManager.readPlan(msg.channelId);
+            if (plan.exists && plan.content) {
+              planSurfacedOnResume.add(msg.channelId);
+              const summary = sessionManager.extractPlanSummary(plan.content);
+              const mode = await sessionManager.getSessionMode(msg.channelId);
+              const modeNote = mode === 'plan' ? ' Session is in plan mode. `/plan off` to exit.' : '';
+              await adapter.sendMessage(msg.channelId,
+                `📋 **Existing plan found** — ${summary}. \`/plan show\` to review, \`/plan clear\` to discard.${modeNote}`,
+                { threadRootId: threadRoot });
+            }
+          } catch { /* plan surfacing is best-effort */ }
         } catch (err: any) {
           await adapter.updateMessage(msg.channelId, resumeAck, `❌ Failed to resume session: ${err?.message ?? 'unknown error'}`);
         }
@@ -1360,10 +1379,20 @@ async function handleInboundMessage(
             await sessionManager.setSessionMode(msg.channelId, 'interactive');
             await adapter.sendMessage(msg.channelId, '📋 **Plan mode off** — back to interactive mode.', { threadRootId: threadRoot });
           } else if (subcommand === 'on') {
+            // Set mode first (ensures session is attached after restart), then check for existing plan
             await sessionManager.setSessionMode(msg.channelId, 'plan');
-            await adapter.sendMessage(msg.channelId,
-              '📋 **Plan mode on** — messages will be handled as planning requests. The agent will create and update a plan before implementing.\n\nUse `/plan show` to view the plan, `/plan` to toggle off.',
-              { threadRootId: threadRoot });
+            const existingPlan = await sessionManager.readPlan(msg.channelId);
+            planSurfacedOnResume.add(msg.channelId);
+            if (existingPlan.exists && existingPlan.content) {
+              const summary = sessionManager.extractPlanSummary(existingPlan.content);
+              await adapter.sendMessage(msg.channelId,
+                `📋 **Existing plan found** — ${summary}\n\n\`/plan show\` to review the full plan.\n\`/plan clear\` to discard and start fresh.\n\nEntering plan mode with existing plan.`,
+                { threadRootId: threadRoot });
+            } else {
+              await adapter.sendMessage(msg.channelId,
+                '📋 **Plan mode on** — messages will be handled as planning requests. The agent will create and update a plan before implementing.\n\nUse `/plan show` to view the plan, `/plan` to toggle off.',
+                { threadRootId: threadRoot });
+            }
           } else if (!subcommand) {
             // Toggle: check current mode and flip
             const current = await sessionManager.getSessionMode(msg.channelId);
@@ -1371,16 +1400,90 @@ async function handleInboundMessage(
               await sessionManager.setSessionMode(msg.channelId, 'interactive');
               await adapter.sendMessage(msg.channelId, '📋 **Plan mode off** — back to interactive mode.', { threadRootId: threadRoot });
             } else {
+              // Set mode first (ensures session is attached after restart), then check for existing plan
               await sessionManager.setSessionMode(msg.channelId, 'plan');
-              await adapter.sendMessage(msg.channelId,
-                '📋 **Plan mode on** — messages will be handled as planning requests. The agent will create and update a plan before implementing.\n\nUse `/plan show` to view the plan, `/plan` to toggle off.',
-                { threadRootId: threadRoot });
+              const existingPlan = await sessionManager.readPlan(msg.channelId);
+              planSurfacedOnResume.add(msg.channelId);
+              if (existingPlan.exists && existingPlan.content) {
+                const summary = sessionManager.extractPlanSummary(existingPlan.content);
+                await adapter.sendMessage(msg.channelId,
+                  `📋 **Existing plan found** — ${summary}\n\n\`/plan show\` to review the full plan.\n\`/plan clear\` to discard and start fresh.\n\nEntering plan mode with existing plan.`,
+                  { threadRootId: threadRoot });
+              } else {
+                await adapter.sendMessage(msg.channelId,
+                  '📋 **Plan mode on** — messages will be handled as planning requests. The agent will create and update a plan before implementing.\n\nUse `/plan show` to view the plan, `/plan` to toggle off.',
+                  { threadRootId: threadRoot });
+              }
             }
           } else {
             await adapter.sendMessage(msg.channelId, '⚠️ Usage: `/plan` (toggle), `/plan show`, `/plan clear`, `/plan on`, `/plan off`', { threadRootId: threadRoot });
           }
         } catch (err: any) {
           log.error(`Failed to handle /plan ${subcommand ?? '(toggle)'} on ${msg.channelId.slice(0, 8)}...:`, err);
+          await adapter.sendMessage(msg.channelId, `❌ Failed: ${err?.message ?? 'unknown error'}`, { threadRootId: threadRoot });
+        }
+        break;
+      }
+
+      case 'implement': {
+        try {
+          const arg = cmdResult.payload?.toLowerCase();
+          const enableYolo = arg === 'yolo';
+          const interactive = arg === 'interactive';
+
+          // Set mode first (ensures session is attached after restart)
+          const targetMode = interactive ? 'interactive' : 'autopilot';
+          await sessionManager.setSessionMode(msg.channelId, targetMode);
+
+          // Now read plan (session is guaranteed to be attached)
+          const plan = await sessionManager.readPlan(msg.channelId);
+          if (!plan.exists || !plan.content) {
+            // Revert mode back to interactive if we set autopilot
+            if (!interactive) await sessionManager.setSessionMode(msg.channelId, 'interactive');
+            await adapter.sendMessage(msg.channelId, '📋 No plan exists. Create one first with `/plan on`.', { threadRootId: threadRoot });
+            break;
+          }
+
+          // Save yolo state before changing it
+          if (enableYolo) {
+            sessionManager.saveYoloPreviousState(msg.channelId);
+            setChannelPrefs(msg.channelId, { permissionMode: 'autopilot' });
+          }
+
+          const modeLabel = interactive ? 'interactive' : enableYolo ? 'autopilot + yolo' : 'autopilot';
+          await adapter.sendMessage(msg.channelId,
+            `🚀 **Implementing plan** (${modeLabel})`,
+            { threadRootId: threadRoot });
+
+          // Clear pending plan exit if one was waiting
+          sessionManager.consumePendingPlanExit(msg.channelId);
+
+          // Set up stream and hold channel lock (matches regular message flow)
+          const evPrev = eventLocks.get(msg.channelId) ?? Promise.resolve();
+          const evTask = evPrev.then(async () => {
+            const existingStreamKey = activeStreams.get(msg.channelId);
+            if (existingStreamKey) {
+              await streaming.finalizeStream(existingStreamKey);
+              activeStreams.delete(msg.channelId);
+            }
+            initialStreamPosted.add(msg.channelId);
+            const streamKey = await streaming.startStream(msg.channelId, threadRoot);
+            activeStreams.set(msg.channelId, streamKey);
+          });
+          eventLocks.set(msg.channelId, evTask.catch(() => {}));
+          await evTask;
+
+          markBusy(msg.channelId);
+
+          // Send plan content as a synthetic message to kick off implementation
+          const kickoff = `Implement the following plan:\n\n${plan.content}`;
+          await sessionManager.sendMessage(msg.channelId, kickoff);
+          await waitForChannelIdle(msg.channelId);
+        } catch (err: any) {
+          markIdleImmediate(msg.channelId);
+          const sk = activeStreams.get(msg.channelId);
+          if (sk) { await streaming.cancelStream(sk); activeStreams.delete(msg.channelId); }
+          log.error(`Failed to handle /implement on ${msg.channelId.slice(0, 8)}...:`, err);
           await adapter.sendMessage(msg.channelId, `❌ Failed: ${err?.message ?? 'unknown error'}`, { threadRootId: threadRoot });
         }
         break;
@@ -1434,6 +1537,11 @@ async function handleInboundMessage(
     }
     // Unrecognized text — auto-deny and fall through to process as a normal message
     sessionManager.resolvePermission(msg.channelId, false);
+  }
+
+  // Pending plan exit — auto-dismiss on unrecognized text, process message normally
+  if (sessionManager.hasPendingPlanExit(msg.channelId)) {
+    sessionManager.consumePendingPlanExit(msg.channelId);
   }
 
   // Regular message — forward to Copilot session
@@ -1490,6 +1598,21 @@ async function handleInboundMessage(
     }
 
     await sessionManager.sendMessage(msg.channelId, prompt, sdkAttachments.length > 0 ? sdkAttachments : undefined, msg.userId);
+
+    // One-time plan surfacing after session resume (best-effort, non-blocking)
+    if (!planSurfacedOnResume.has(msg.channelId)) {
+      planSurfacedOnResume.add(msg.channelId);
+      sessionManager.surfacePlanIfExists(msg.channelId).then(async (result) => {
+        if (result?.exists) {
+          const modeNote = result.inPlanMode ? ' Session is in plan mode.' : '';
+          const threadRootForPlan = channelThreadRoots.get(msg.channelId);
+          await adapter.sendMessage(msg.channelId,
+            `📋 **Existing plan found** — ${result.summary}. \`/plan show\` to review.${modeNote}`,
+            { threadRootId: threadRootForPlan });
+        }
+      }).catch(() => { /* best-effort */ });
+    }
+
     // Hold the channelLock until session.idle so queued work (scheduler, etc.)
     // doesn't start a new stream while this response is still being streamed.
     await waitForChannelIdle(msg.channelId);
@@ -1631,6 +1754,64 @@ async function handleSessionEvent(
     const { question, choices } = event.data;
     const formatted = formatUserInputRequest(question, choices);
     await adapter.sendMessage(channelId, formatted, { threadRootId });
+    return;
+  }
+
+  // Handle plan_changed events — debounced summary surfacing
+  if (event.type === 'session.plan_changed') {
+    const operation = event.data?.operation;
+    if (operation === 'create' || operation === 'update') {
+      sessionManager.debouncePlanChanged(channelId, async () => {
+        try {
+          const plan = await sessionManager.readPlan(channelId);
+          if (!plan.exists || !plan.content) return;
+          const summary = sessionManager.extractPlanSummary(plan.content);
+          const threadRootId = channelThreadRoots.get(channelId);
+          await adapter.sendMessage(channelId, `📋 **Plan updated** — ${summary}. \`/plan show\` for details.`, { threadRootId });
+        } catch (err) {
+          log.warn(`Failed to surface plan summary: ${err}`);
+        }
+      });
+    }
+    return;
+  }
+
+  // Handle exit_plan_mode.requested — present implementation options
+  if (event.type === 'exit_plan_mode.requested') {
+    const { requestId, summary, planContent, actions, recommendedAction } = event.data;
+    const streamKey = activeStreams.get(channelId);
+    const threadRootId = streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined;
+    if (threadRootId) channelThreadRoots.set(channelId, threadRootId);
+    if (streamKey) {
+      await streaming.finalizeStream(streamKey);
+      activeStreams.delete(channelId);
+    }
+    await finalizeActivityFeed(channelId, adapter);
+
+    sessionManager.setPendingPlanExit(channelId, {
+      requestId,
+      summary: summary ?? '',
+      planContent: planContent ?? '',
+      actions: actions ?? [],
+      recommendedAction: recommendedAction ?? '',
+      createdAt: Date.now(),
+    });
+
+    const msg = [
+      '📋 **Plan ready**',
+      '',
+      summary || '(no summary provided)',
+      '',
+      'How would you like to proceed?',
+      '1. ▶️ `/implement yolo` — autopilot + yolo (fully autonomous)',
+      '2. 🚀 `/implement` — autopilot (with permission prompts)',
+      '3. 🔧 `/implement interactive` — interactive mode',
+      '4. ❌ `/plan off` — exit plan mode without implementing',
+      '',
+      'Or just keep chatting to continue refining the plan.',
+    ].join('\n');
+
+    await adapter.sendMessage(channelId, msg, { threadRootId });
     return;
   }
 
@@ -1802,7 +1983,7 @@ async function handleSessionEvent(
         }
       }
       // Finalize stream when the session goes idle (all turns complete).
-      if (event.type === 'session.idle') {
+       if (event.type === 'session.idle') {
         markIdle(channelId);
         nudgePending.delete(channelId);
         await finalizeActivityFeed(channelId, adapter);
@@ -1812,6 +1993,10 @@ async function handleSessionEvent(
           log.info(`Session idle, finalizing stream for ${channelId.slice(0, 8)}...`);
           await streaming.finalizeStream(streamKey);
           activeStreams.delete(channelId);
+        }
+        // Revert yolo if it was temporarily enabled for plan implementation
+        if (sessionManager.revertYoloIfNeeded(channelId)) {
+          log.info(`Reverted yolo state on idle for ${channelId.slice(0, 8)}...`);
         }
         // Clean up temp files from downloaded attachments
         cleanupTempFiles(channelId);

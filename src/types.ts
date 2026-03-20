@@ -222,6 +222,17 @@ export interface PendingUserInput {
   createdAt: number;
 }
 
+// Pending plan exit request
+export interface PendingPlanExit {
+  requestId: string;
+  summary: string;
+  planContent: string;
+  actions: string[];
+  recommendedAction: string;
+  messageId?: string; // chat message ID for the plan exit prompt
+  createdAt: number;
+}
+
 // Copilot session event types we care about
 export type CopilotEventType =
   | 'assistant.message'
