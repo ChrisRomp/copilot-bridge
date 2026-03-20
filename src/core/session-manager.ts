@@ -31,7 +31,7 @@ import type {
 
 const log = createLogger('session');
 
-/** Custom tools auto-approved without interactive prompt (they enforce workspace boundaries internally). */
+/** Custom tools auto-approved without interactive prompt (read-only or enforce workspace boundaries internally). */
 export const BRIDGE_CUSTOM_TOOLS = ['send_file', 'show_file_in_chat', 'ask_agent', 'schedule', 'fetch_copilot_bridge_documentation'];
 
 type SessionEventHandler = (sessionId: string, channelId: string, event: any) => void;
@@ -2124,7 +2124,7 @@ export class SessionManager {
           topic: {
             type: 'string',
             enum: ['overview', 'commands', 'config', 'mcp', 'permissions', 'workspaces', 'hooks', 'skills', 'inter-agent', 'scheduling', 'troubleshooting', 'status'],
-            description: "Topic to query. 'overview' = what the bridge is and key features. 'commands' = all slash commands. 'config' = configuration options. 'mcp' = MCP server setup. 'permissions' = permission system. 'workspaces' = workspace structure. 'hooks' = tool hooks. 'skills' = skill discovery. 'inter-agent' = bot-to-bot communication. 'scheduling' = task scheduling. 'troubleshooting' = common issues. 'status' = live system state.",
+            description: "Topic to query. 'overview' = what the bridge is and key features. 'commands' = common slash commands. 'config' = configuration options. 'mcp' = MCP server setup. 'permissions' = permission system. 'workspaces' = workspace structure. 'hooks' = tool hooks. 'skills' = skill discovery. 'inter-agent' = bot-to-bot communication. 'scheduling' = task scheduling. 'troubleshooting' = common issues. 'status' = live system state.",
           },
         },
         required: [],

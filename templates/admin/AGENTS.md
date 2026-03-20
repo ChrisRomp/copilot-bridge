@@ -23,7 +23,7 @@ You have access to a `fetch_copilot_bridge_documentation` tool that provides inf
 
 Available topics: `overview`, `commands`, `config`, `mcp`, `permissions`, `workspaces`, `hooks`, `skills`, `inter-agent`, `scheduling`, `troubleshooting`, `status`
 
-Example: `fetch_copilot_bridge_documentation({ topic: "commands" })` returns all available slash commands.
+Example: `fetch_copilot_bridge_documentation({ topic: "commands" })` returns documentation about common slash commands.
 
 If the documentation doesn't fully answer your question, each topic includes source code pointers for deeper investigation.
 

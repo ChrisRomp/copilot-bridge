@@ -7,6 +7,7 @@ import { createLogger } from '../logger.js';
 import { getConfig } from '../config.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const log = createLogger('bridge-docs');
 
@@ -21,12 +22,16 @@ export function isValidTopic(topic: string): topic is DocTopic {
   return TOPICS.includes(topic as DocTopic);
 }
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+let _cachedVersion: string | null = null;
+
 function getVersion(): string {
+  if (_cachedVersion) return _cachedVersion;
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '../../package.json'), 'utf8'));
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf8'));
     let version = pkg.version ?? 'unknown';
-    // Include git hash if running from source
-    const gitDir = path.join(import.meta.dirname, '../../.git');
+    const gitDir = path.join(__dirname, '../../.git');
     if (fs.existsSync(gitDir)) {
       try {
         const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
@@ -41,6 +46,7 @@ function getVersion(): string {
         }
       } catch { /* best-effort */ }
     }
+    _cachedVersion = version;
     return version;
   } catch {
     return 'unknown';
@@ -60,7 +66,7 @@ Call with a specific topic for focused information, e.g. \`fetch_copilot_bridge_
 function topicOverview(): string {
   return `# copilot-bridge Overview
 
-copilot-bridge connects GitHub Copilot CLI sessions to messaging platforms (Mattermost, with Slack planned). It runs as a background service, managing one Copilot session per chat channel.
+copilot-bridge connects GitHub Copilot CLI sessions to messaging platforms (Mattermost, Slack). It runs as a background service, managing one Copilot session per chat channel.
 
 ## Key Features
 
@@ -97,7 +103,7 @@ copilot-bridge connects GitHub Copilot CLI sessions to messaging platforms (Matt
 function topicCommands(): string {
   return `# Slash Commands
 
-Commands are intercepted by the bridge before reaching the Copilot session. The agent does not see these commands.
+Commands are intercepted by the bridge before reaching the Copilot session. The agent does not see these commands. Use \`/help all\` for the complete list — below are the most commonly used commands.
 
 ## Session Management
 | Command | Description |

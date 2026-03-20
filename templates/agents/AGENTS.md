@@ -25,7 +25,7 @@ You have access to a `fetch_copilot_bridge_documentation` tool that provides inf
 
 Available topics: `overview`, `commands`, `config`, `mcp`, `permissions`, `workspaces`, `hooks`, `skills`, `inter-agent`, `scheduling`, `troubleshooting`, `status`
 
-Example: `fetch_copilot_bridge_documentation({ topic: "commands" })` returns all available slash commands.
+Example: `fetch_copilot_bridge_documentation({ topic: "commands" })` returns documentation about common slash commands.
 
 Note: Configuration changes require an admin agent or the user — see "Out of Scope" below.
 
