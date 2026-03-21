@@ -76,6 +76,78 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[/\\]/g, '_').replace(/\.\./g, '_');
 }
 
+/** Max message size per platform. Conservative defaults — Slack blocks are 3000 but we allow some overhead. */
+function getMaxMessageLength(platform: string): number {
+  switch (platform) {
+    case 'slack': return 3500;
+    case 'mattermost': return 16000;
+    default: return 4000;
+  }
+}
+
+/**
+ * Split content into chunks that fit within a platform's message size limit.
+ * Splits at heading boundaries (## ) when possible, otherwise at line boundaries.
+ */
+function chunkContent(content: string, maxLen: number): string[] {
+  if (content.length <= maxLen) return [content];
+
+  const lines = content.split('\n');
+  const chunks: string[] = [];
+  let current: string[] = [];
+  let currentLen = 0;
+
+  for (const line of lines) {
+    const lineLen = line.length + 1; // +1 for newline
+    // Start new chunk at ## heading if adding this line would exceed limit
+    if (line.startsWith('## ') && current.length > 0 && currentLen + lineLen > maxLen) {
+      chunks.push(current.join('\n'));
+      current = [line];
+      currentLen = lineLen;
+    } else if (currentLen + lineLen > maxLen && current.length > 0) {
+      // Mid-section split at line boundary
+      chunks.push(current.join('\n'));
+      current = [line];
+      currentLen = lineLen;
+    } else {
+      current.push(line);
+      currentLen += lineLen;
+    }
+  }
+  if (current.length > 0) chunks.push(current.join('\n'));
+  return chunks;
+}
+
+/** Send content that may exceed platform message limits, chunking with part labels as needed. */
+async function sendChunked(
+  adapter: ChannelAdapter,
+  channelId: string,
+  content: string,
+  platform: string,
+  opts?: { threadRootId?: string; header?: string },
+): Promise<void> {
+  const maxLen = getMaxMessageLength(platform);
+  const header = opts?.header ? opts.header + '\n\n' : '';
+  const headerLen = header.length;
+
+  // Try to fit in one message
+  if (headerLen + content.length <= maxLen) {
+    await adapter.sendMessage(channelId, header + content, { threadRootId: opts?.threadRootId });
+    return;
+  }
+
+  // Chunk the content (reserve space for part label in each chunk)
+  const labelReserve = 30; // "_(Part XX of XX)_\n"
+  const chunks = chunkContent(content, maxLen - labelReserve);
+  const total = chunks.length;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const label = total > 1 ? `_(Part ${i + 1} of ${total})_\n` : '';
+    const prefix = i === 0 ? header : '';
+    await adapter.sendMessage(channelId, prefix + label + chunks[i].trim(), { threadRootId: opts?.threadRootId });
+  }
+}
+
 /** Download message attachments to .temp/<channelId>/ in the bot's workspace, returning SDK-compatible attachment objects. */
 async function downloadAttachments(
   attachments: MessageAttachment[] | undefined,
@@ -1367,14 +1439,24 @@ async function handleInboundMessage(
             if (!plan.exists || !plan.content) {
               await adapter.sendMessage(msg.channelId, '📋 No plan exists for this session.', { threadRootId: threadRoot });
             } else {
-              const truncated = plan.content.length > 3500 ? plan.content.slice(0, 3500) + '\n\n_…truncated_' : plan.content;
-              await adapter.sendMessage(msg.channelId, `📋 **Current Plan**\n\n${truncated}`, { threadRootId: threadRoot });
+              await sendChunked(adapter, msg.channelId, plan.content, channelConfig.platform, {
+                threadRootId: threadRoot,
+                header: '📋 **Current Plan**',
+              });
             }
           } else if (subcommand === 'clear' || subcommand === 'delete') {
             const deleted = await sessionManager.deletePlan(msg.channelId);
             await adapter.sendMessage(msg.channelId,
               deleted ? '📋 Plan cleared.' : '📋 No plan to clear.',
               { threadRootId: threadRoot });
+          } else if (subcommand === 'summary') {
+            const plan = await sessionManager.readPlan(msg.channelId);
+            if (!plan.exists || !plan.content) {
+              await adapter.sendMessage(msg.channelId, '📋 No plan exists for this session.', { threadRootId: threadRoot });
+            } else {
+              const summary = sessionManager.extractPlanSummary(plan.content);
+              await adapter.sendMessage(msg.channelId, `📋 ${summary}`, { threadRootId: threadRoot });
+            }
           } else if (subcommand === 'off') {
             await sessionManager.setSessionMode(msg.channelId, 'interactive');
             await adapter.sendMessage(msg.channelId, '📋 **Plan mode off** — back to interactive mode.', { threadRootId: threadRoot });
@@ -1416,7 +1498,7 @@ async function handleInboundMessage(
               }
             }
           } else {
-            await adapter.sendMessage(msg.channelId, '⚠️ Usage: `/plan` (toggle), `/plan show`, `/plan clear`, `/plan on`, `/plan off`', { threadRootId: threadRoot });
+            await adapter.sendMessage(msg.channelId, '⚠️ Usage: `/plan` (toggle), `/plan show`, `/plan summary`, `/plan clear`, `/plan on`, `/plan off`', { threadRootId: threadRoot });
           }
         } catch (err: any) {
           log.error(`Failed to handle /plan ${subcommand ?? '(toggle)'} on ${msg.channelId.slice(0, 8)}...:`, err);

@@ -537,6 +537,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/mcp` — Show MCP servers and their source',
           '`/plan` — Toggle plan mode (on/off)',
           '`/plan show` — Show current plan',
+          '`/plan summary` — Show plan summary',
           '`/plan clear` — Delete the plan',
           '`/implement [yolo|interactive]` — Start implementing the plan',
           '`/streamer-mode [on|off]` — Toggle streamer mode',

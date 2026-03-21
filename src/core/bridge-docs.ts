@@ -129,7 +129,7 @@ Commands are intercepted by the bridge before reaching the Copilot session. The 
 | \`/deny\` | Deny pending permission request |
 | \`/yolo\` | Toggle auto-approve all permissions |
 | \`/autopilot\`, \`/auto\` | Toggle autonomous mode |
-| \`/plan [on|off|show|clear]\` | Toggle plan mode. On entry, surfaces existing plan if found |
+| \`/plan [on|off|show|summary|clear]\` | Toggle plan mode. On entry, surfaces existing plan if found |
 | \`/implement [yolo|interactive]\` | Start implementing the current plan. Default: autopilot. \`yolo\`: autopilot + auto-approve. \`interactive\`: step-by-step |
 | \`/always approve|deny <pattern>\` | Persist a permission rule |
 | \`/rules\` | List all stored permission rules |
