@@ -1837,7 +1837,8 @@ async function handleSessionEvent(
   if (event.type === 'bridge.permission_request') {
     if (isQuiet(channelId)) {
       log.info(`Auto-denying permission during quiet mode on ${channelId.slice(0, 8)}...`);
-      return; // Permission handler already has auto-deny fallback timeout
+      sessionManager.resolvePermission(channelId, false);
+      return;
     }
     const streamKey = activeStreams.get(channelId);
     const threadRootId = streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined;
@@ -1856,6 +1857,7 @@ async function handleSessionEvent(
   if (event.type === 'bridge.user_input_request') {
     if (isQuiet(channelId)) {
       log.info(`Suppressing user input request during quiet mode on ${channelId.slice(0, 8)}...`);
+      sessionManager.resolveUserInput(channelId, '');
       return;
     }
     const streamKey = activeStreams.get(channelId);
@@ -1965,8 +1967,12 @@ async function handleSessionEvent(
         return;
       }
     }
-    // Suppress verbose/tool/status/subagent events during quiet
-    if (formatted.type === 'tool_start' || formatted.type === 'tool_complete' || formatted.type === 'status') {
+    // Suppress verbose/tool/status events during quiet — but let session.idle
+    // and session.error pass through so channel idle tracking still works
+    if (formatted.type === 'tool_start' || formatted.type === 'tool_complete') {
+      return;
+    }
+    if (formatted.type === 'status' && event.type !== 'session.idle') {
       return;
     }
     // Suppress errors — clear quiet and let error handler run below
