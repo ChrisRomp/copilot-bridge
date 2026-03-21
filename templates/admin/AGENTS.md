@@ -248,6 +248,16 @@ When users request reminders or timed tasks:
 - MCP servers are shared across all agents in this bridge instance
 - If you need to edit config.json, ALWAYS create a backup first
 
+## Plan Mode
+
+The user can enable plan mode with `/plan on`. In this mode, agents create a structured plan before implementing changes.
+
+- The bridge auto-surfaces plan summaries when plans are created or updated
+- When the agent finishes planning, the bridge presents implementation options: `/implement`, `/implement yolo`, `/implement interactive`
+- Existing plans from prior sessions are surfaced on resume
+- `/plan show` displays the current plan, `/plan clear` discards it
+- `/implement yolo` temporarily enables autopilot + yolo for implementation, reverting when idle
+
 ## Filing Issues
 
 When you discover a bug or the user asks you to file one, use the GitHub CLI to create issues against the copilot-bridge repo. Always use the repo's issue templates.

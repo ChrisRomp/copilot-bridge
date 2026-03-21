@@ -93,6 +93,16 @@ When users request reminders or timed tasks:
 3. Set `timezone` to the user's local IANA timezone (e.g., `America/Los_Angeles`) — this controls how times are displayed
 4. The `prompt` field is what you'll be asked to do when the task fires — write it as instructions to yourself
 
+## Plan Mode
+
+The user can enable plan mode with `/plan on`. In this mode, you create a structured plan before implementing changes.
+
+- When plan mode is active, you should focus on planning and outlining steps, not immediately implementing changes
+- The bridge auto-surfaces plan summaries when plans are created or updated
+- When you finish planning and the SDK exits plan mode, the bridge presents the user with implementation options (`/implement`, `/implement yolo`, `/implement interactive`)
+- If an existing plan is found (from a prior session), the bridge notifies the user so they can review or discard it
+- Use `/plan show` to display the current plan, `/plan clear` to discard it
+
 ## Out of Scope — Defer to Admin
 
 The following are **not your responsibility**. If a user asks about these, tell them to message the admin bot ({{adminBotName}}) instead:

@@ -26,7 +26,7 @@ import type { McpServerInfo } from './command-handler.js';
 import { loadHooks, getHooksInfo, type SessionHooks, type HookInfo } from './hooks-loader.js';
 import { getBridgeDocs } from './bridge-docs.js';
 import type {
-  ChannelAdapter, InboundMessage, PendingPermission, PendingUserInput,
+  ChannelAdapter, InboundMessage, PendingPermission, PendingUserInput, PendingPlanExit,
 } from '../types.js';
 
 const log = createLogger('session');
@@ -362,6 +362,38 @@ function discoverSkillDirectories(workingDirectory: string): string[] {
   return dirs;
 }
 
+/** Extract a succinct summary from plan content (first heading + first body line, ~150 chars max). */
+export function extractPlanSummary(content: string): string {
+  if (!content?.trim()) return '(empty plan)';
+
+  const lines = content.split('\n');
+  let heading = '';
+  let body = '';
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    if (!heading && trimmed.startsWith('#')) {
+      heading = trimmed.replace(/^#+\s*/, '');
+      continue;
+    }
+
+    if (!trimmed.startsWith('#') && !body) {
+      body = trimmed;
+      break;
+    }
+  }
+
+  if (heading && body) {
+    const full = `${heading}: ${body}`;
+    return full.length > 150 ? full.slice(0, 147) + '...' : full;
+  }
+  if (heading) return heading.length > 150 ? heading.slice(0, 147) + '...' : heading;
+  if (body) return body.length > 150 ? body.slice(0, 147) + '...' : body;
+  return '(empty plan)';
+}
+
 export class SessionManager {
   private bridge: CopilotBridge;
   private channelSessions = new Map<string, string>(); // channelId → sessionId
@@ -385,6 +417,12 @@ export class SessionManager {
   private sessionSkillDirs = new Map<string, Set<string>>(); // channelId → skill dir paths
   // Loaded session hooks per workspace (cached after first load)
   private workspaceHooks = new Map<string, SessionHooks | undefined>();
+  // Pending plan exit requests (one per channel)
+  private pendingPlanExit = new Map<string, PendingPlanExit>();
+  // Debounce timers for plan_changed events
+  private planChangedDebounce = new Map<string, ReturnType<typeof setTimeout>>();
+  // Previous permissionMode before yolo was auto-enabled by plan exit
+  private yoloPreviousState = new Map<string, string>();
   // Handler for send_file tool (set by index.ts, calls adapter.sendFile)
   private sendFileHandler: ((channelId: string, filePath: string, message?: string) => Promise<string>) | null = null;
   private getAdapterForChannel: ((channelId: string) => ChannelAdapter | null) | null = null;
@@ -620,6 +658,10 @@ export class SessionManager {
       this.lastMessageUserIds.delete(channelId);
       this.sessionMcpServers.delete(channelId);
       this.sessionSkillDirs.delete(channelId);
+      this.pendingPlanExit.delete(channelId);
+      this.revertYoloIfNeeded(channelId);
+      const debounceTimer = this.planChangedDebounce.get(channelId);
+      if (debounceTimer) { clearTimeout(debounceTimer); this.planChangedDebounce.delete(channelId); }
     }
     clearChannelSession(channelId);
     return this.createNewSession(channelId);
@@ -648,6 +690,9 @@ export class SessionManager {
     this.lastMessageUserIds.delete(channelId);
     this.sessionMcpServers.delete(channelId);
     this.sessionSkillDirs.delete(channelId);
+    this.pendingPlanExit.delete(channelId);
+    this.revertYoloIfNeeded(channelId);
+    { const dt = this.planChangedDebounce.get(channelId); if (dt) { clearTimeout(dt); this.planChangedDebounce.delete(channelId); } }
     try {
       await this.attachSession(channelId, existingId);
       log.info(`Reloaded session ${existingId} for channel ${channelId}`);
@@ -662,6 +707,8 @@ export class SessionManager {
       this.lastMessageUserIds.delete(channelId);
       this.sessionMcpServers.delete(channelId);
       this.sessionSkillDirs.delete(channelId);
+      this.pendingPlanExit.delete(channelId);
+      // yoloPreviousState already reverted above
       clearChannelSession(channelId);
       return this.createNewSession(channelId);
     }
@@ -687,6 +734,9 @@ export class SessionManager {
       this.lastMessageUserIds.delete(channelId);
       this.sessionMcpServers.delete(channelId);
       this.sessionSkillDirs.delete(channelId);
+      this.pendingPlanExit.delete(channelId);
+      this.revertYoloIfNeeded(channelId);
+      { const dt = this.planChangedDebounce.get(channelId); if (dt) { clearTimeout(dt); this.planChangedDebounce.delete(channelId); } }
     }
 
     // If target session is active on another channel, disconnect it first
@@ -702,6 +752,9 @@ export class SessionManager {
       this.lastMessageUserIds.delete(otherChannel);
       this.sessionMcpServers.delete(otherChannel);
       this.sessionSkillDirs.delete(otherChannel);
+      this.pendingPlanExit.delete(otherChannel);
+      this.revertYoloIfNeeded(otherChannel);
+      { const dt = this.planChangedDebounce.get(otherChannel); if (dt) { clearTimeout(dt); this.planChangedDebounce.delete(otherChannel); } }
       clearChannelSession(otherChannel);
     }
 
@@ -956,6 +1009,93 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Extract a succinct summary from plan content.
+   * Returns the first heading + first 1-2 sentences, ~100-150 chars.
+   */
+  extractPlanSummary(content: string): string {
+    return extractPlanSummary(content);
+  }
+
+  // Preferred models for plan summarization — balanced for quality and cost.
+  // Summarization needs accurate extraction without hallucination, so we
+  // prefer capable mid-tier models over the cheapest options.
+  // Matched against available models via exact-then-prefix so partial matches
+  // work even if the catalog adds suffixes or version bumps.
+  private static readonly SUMMARIZER_MODELS = [
+    'claude-sonnet-4.6',    // strong comprehension, likely to stay available
+    'claude-sonnet-4.5',    // strong comprehension
+    'gpt-4.1',              // fast, capable
+    'gpt-5-mini',           // smaller but still capable
+    'claude-haiku-4.5',     // fastest Claude, adequate for short summaries
+    'gpt-5.1',              // full-size fallback
+    'gpt-5.2',              // full-size fallback
+  ];
+
+  /**
+   * Summarize a plan using a lightweight ephemeral session.
+   * Creates a throwaway session with a cheap model, sends the plan for summarization,
+   * collects the streamed response, and destroys the session.
+   */
+  async summarizePlan(channelId: string): Promise<string | null> {
+    const plan = await this.readPlan(channelId);
+    if (!plan.exists || !plan.content) return null;
+
+    // Pick the best available cheap model
+    let availableIds: string[] = [];
+    try {
+      const models = await this.bridge.listModels();
+      availableIds = models.map(m => m.id);
+    } catch { /* best-effort */ }
+
+    let model: string | undefined;
+    for (const candidate of SessionManager.SUMMARIZER_MODELS) {
+      const match = availableIds.find(id => id === candidate || id.startsWith(candidate));
+      if (match) { model = match; break; }
+    }
+    // If none matched, leave model undefined — SDK picks its default
+
+    log.info(`Summarizing plan for ${channelId.slice(0, 8)}... using model ${model ?? '(sdk default)'}`);
+
+    let session: CopilotSession | undefined;
+    try {
+      session = await this.bridge.createSession({
+        ...(model ? { model } : {}),
+        onPermissionRequest: async () => ({ kind: 'denied-interactively-by-user' as const }),
+        systemMessage: { content: 'You are a concise summarizer. Respond with only the summary, no preamble.' },
+      });
+
+      const prompt = `Condense this plan into a short summary that preserves the main section headings (## level). Under each heading, write one sentence capturing the key point. Include any unresolved questions or TBDs. Omit code blocks, type definitions, and resolved questions. Keep the total under 500 characters.\n\n${plan.content}`;
+      const response = await this.sendAndWaitForIdle(session, prompt, 30_000);
+      return response.trim() || null;
+    } catch (err: any) {
+      log.warn(`Plan summarization failed: ${err?.message ?? err}`);
+      return null;
+    } finally {
+      if (session) {
+        try { await this.bridge.destroySession(session.sessionId); } catch { /* best-effort */ }
+      }
+    }
+  }
+
+  /**
+   * Check for an existing plan and return summary if found.
+   * Called after session resume to notify the user.
+   */
+  async surfacePlanIfExists(channelId: string): Promise<{ exists: boolean; summary: string; inPlanMode: boolean } | null> {
+    const plan = await this.readPlan(channelId);
+    if (!plan.exists || !plan.content) return null;
+
+    const summary = this.extractPlanSummary(plan.content);
+    let inPlanMode = false;
+    try {
+      const mode = await this.getSessionMode(channelId);
+      inPlanMode = mode === 'plan';
+    } catch { /* best-effort */ }
+
+    return { exists: true, summary, inPlanMode };
+  }
+
   /** Check if the Copilot CLI is authenticated. */
   async getAuthStatus(): Promise<{ isAuthenticated: boolean; statusMessage?: string; login?: string }> {
     try {
@@ -1048,6 +1188,52 @@ export class SessionManager {
   isHookPermission(channelId: string): boolean {
     const queue = this.pendingPermissions.get(channelId);
     return !!queue && queue.length > 0 && !!queue[0].fromHook;
+  }
+
+  /** Store a pending plan exit request. */
+  setPendingPlanExit(channelId: string, pending: PendingPlanExit): void {
+    this.pendingPlanExit.set(channelId, pending);
+  }
+
+  /** Check if channel has a pending plan exit request. */
+  hasPendingPlanExit(channelId: string): boolean {
+    return this.pendingPlanExit.has(channelId);
+  }
+
+  /** Get and clear the pending plan exit request. */
+  consumePendingPlanExit(channelId: string): PendingPlanExit | undefined {
+    const pending = this.pendingPlanExit.get(channelId);
+    if (pending) this.pendingPlanExit.delete(channelId);
+    return pending;
+  }
+
+  /** Save previous permission mode before auto-enabling yolo. */
+  saveYoloPreviousState(channelId: string): void {
+    const prefs = getChannelPrefs(channelId);
+    const channelConfig = getChannelConfig(channelId);
+    const current = prefs?.permissionMode ?? channelConfig.permissionMode;
+    this.yoloPreviousState.set(channelId, current);
+  }
+
+  /** Revert yolo to previous state (called on session.idle after plan implementation). */
+  revertYoloIfNeeded(channelId: string): boolean {
+    const previous = this.yoloPreviousState.get(channelId);
+    if (previous === undefined) return false;
+    this.yoloPreviousState.delete(channelId);
+    setChannelPrefs(channelId, { permissionMode: previous });
+    return true;
+  }
+
+  /** Debounced plan change handler — calls callback after debounce window. */
+  debouncePlanChanged(channelId: string, callback: () => void | Promise<void>, delayMs = 3000): void {
+    const existing = this.planChangedDebounce.get(channelId);
+    if (existing) clearTimeout(existing);
+    this.planChangedDebounce.set(channelId, setTimeout(() => {
+      this.planChangedDebounce.delete(channelId);
+      void Promise.resolve(callback()).catch((err) => {
+        log.warn(`Debounced plan callback failed for ${channelId.slice(0, 8)}...: ${err}`);
+      });
+    }, delayMs));
   }
 
   /** Get the current session ID for a channel (if any). */
