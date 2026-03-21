@@ -43,8 +43,38 @@ const channelLocks = new Map<string, Promise<void>>();
 // Per-channel promise chain to serialize SESSION EVENT handling (prevents race on auto-start)
 const eventLocks = new Map<string, Promise<void>>();
 
-// Channels with an active startup nudge in flight (NO_REPLY filter only applies here)
-const nudgePending = new Set<string>();
+// Channels in "quiet mode" — all streaming output suppressed until we determine
+// whether the response is NO_REPLY. Used for startup nudges and scheduled tasks.
+interface QuietState {
+  threadRoot?: string;       // preserve for delayed stream creation on flush
+  hasContent: boolean;       // any non-empty deltas received?
+  timeout: ReturnType<typeof setTimeout>;  // 60s safety net
+}
+const quietState = new Map<string, QuietState>();
+
+/** Enter quiet mode for a channel. Returns cleanup function for catch paths. */
+function enterQuietMode(channelId: string): () => void {
+  // Clear any previous quiet state (shouldn't happen, but safety)
+  const prev = quietState.get(channelId);
+  if (prev) clearTimeout(prev.timeout);
+
+  const timeout = setTimeout(() => {
+    log.warn(`Quiet mode timeout (60s) for channel ${channelId.slice(0, 8)}... — force-clearing`);
+    quietState.delete(channelId);
+  }, 60_000);
+
+  quietState.set(channelId, { hasContent: false, timeout });
+  return () => {
+    const qs = quietState.get(channelId);
+    if (qs) { clearTimeout(qs.timeout); quietState.delete(channelId); }
+  };
+}
+
+/** Exit quiet mode, cleaning up timer. */
+function exitQuietMode(channelId: string): void {
+  const qs = quietState.get(channelId);
+  if (qs) { clearTimeout(qs.timeout); quietState.delete(channelId); }
+}
 
 // Bot adapters keyed by "platform:botName" for channel→adapter lookup
 const botAdapters = new Map<string, ChannelAdapter>();
@@ -533,7 +563,8 @@ async function main(): Promise<void> {
         const resolved = getAdapterForChannel(channelId);
         if (resolved) {
           const { streaming } = resolved;
-          // Atomically swap streams via eventLocks to prevent event interleaving
+          // Finalize any existing stream, but don't create a new one —
+          // quiet mode defers stream creation until we know the response isn't NO_REPLY
           const evPrev = eventLocks.get(channelId) ?? Promise.resolve();
           const evTask = evPrev.then(async () => {
             const existingStream = activeStreams.get(channelId);
@@ -541,18 +572,20 @@ async function main(): Promise<void> {
               await streaming.finalizeStream(existingStream);
               activeStreams.delete(channelId);
             }
-            const streamKey = await streaming.startStream(channelId);
-            activeStreams.set(channelId, streamKey);
           });
           eventLocks.set(channelId, evTask.catch(() => {}));
           await evTask;
           markBusy(channelId);
         }
+
+        // Enter quiet mode — suppresses all streaming until NO_REPLY determination
+        const clearQuiet = enterQuietMode(channelId);
         try {
           await sessionManager.sendMessage(channelId, prompt);
           // Hold the lock until the response is fully streamed
           await waitForChannelIdle(channelId);
         } catch (err: any) {
+          clearQuiet();
           log.error(`Scheduled job sendMessage failed for ${channelId.slice(0, 8)}...:`, err);
           markIdleImmediate(channelId);
           const failedStream = activeStreams.get(channelId);
@@ -1827,7 +1860,13 @@ async function handleSessionEvent(
   const verbose = prefs?.verbose ?? channelConfig.verbose;
 
   // Handle custom bridge events (permissions, user input)
+  // During quiet mode, auto-deny permissions and suppress input requests —
+  // quiet tasks should be non-interactive
   if (event.type === 'bridge.permission_request') {
+    if (quietState.has(channelId)) {
+      log.info(`Auto-denying permission during quiet mode on ${channelId.slice(0, 8)}...`);
+      return; // Permission handler already has auto-deny fallback timeout
+    }
     const streamKey = activeStreams.get(channelId);
     const threadRootId = streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined;
     if (threadRootId) channelThreadRoots.set(channelId, threadRootId);
@@ -1843,6 +1882,10 @@ async function handleSessionEvent(
   }
 
   if (event.type === 'bridge.user_input_request') {
+    if (quietState.has(channelId)) {
+      log.info(`Suppressing user input request during quiet mode on ${channelId.slice(0, 8)}...`);
+      return;
+    }
     const streamKey = activeStreams.get(channelId);
     const threadRootId = streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined;
     if (threadRootId) channelThreadRoots.set(channelId, threadRootId);
@@ -1919,19 +1962,45 @@ async function handleSessionEvent(
   const formatted = formatEvent(event);
   if (!formatted) return;
 
-  // Filter out NO_REPLY responses from startup nudges only
-  if (nudgePending.has(channelId) && formatted.type === 'content' && event.type === 'assistant.message') {
-    const content = formatted.content?.trim();
-    nudgePending.delete(channelId);
-    if (content === 'NO_REPLY' || content === '`NO_REPLY`') {
-      log.info(`Filtered NO_REPLY from nudge on channel ${channelId.slice(0, 8)}...`);
-      // Clean up any active stream without posting
-      const sk = activeStreams.get(channelId);
-      if (sk) {
-        await streaming.deleteStream(sk);
-        activeStreams.delete(channelId);
+  // ── Quiet mode: suppress all output until we know if response is NO_REPLY ──
+  const qs = quietState.get(channelId);
+  if (qs) {
+    // Suppress content events (deltas and messages)
+    if (formatted.type === 'content') {
+      if (event.type === 'assistant.message_delta') {
+        // Don't render — just note that content arrived
+        if (formatted.content?.trim()) qs.hasContent = true;
+        return;
       }
+      if (event.type === 'assistant.message') {
+        const content = formatted.content?.trim();
+        // Skip empty assistant.message events (tool-call signals)
+        if (!content) return;
+        // Non-empty — check for NO_REPLY
+        if (content === 'NO_REPLY' || content === '`NO_REPLY`') {
+          log.info(`Filtered NO_REPLY (quiet mode) on channel ${channelId.slice(0, 8)}...`);
+          exitQuietMode(channelId);
+          const sk = activeStreams.get(channelId);
+          if (sk) { await streaming.deleteStream(sk); activeStreams.delete(channelId); }
+          return;
+        }
+        // Real content — flush: create stream with this content, exit quiet
+        log.info(`Quiet mode flush on channel ${channelId.slice(0, 8)}... — real content received`);
+        const savedThreadRoot = qs.threadRoot ?? channelThreadRoots.get(channelId);
+        exitQuietMode(channelId);
+        const newKey = await streaming.startStream(channelId, savedThreadRoot, content);
+        activeStreams.set(channelId, newKey);
+        return;
+      }
+    }
+    // Suppress verbose/tool/status/subagent events during quiet
+    if (formatted.type === 'tool_start' || formatted.type === 'tool_complete' || formatted.type === 'status') {
       return;
+    }
+    // Suppress errors — clear quiet and let error handler run below
+    if (formatted.type === 'error') {
+      exitQuietMode(channelId);
+      // Fall through to normal error handling
     }
   }
 
@@ -1964,8 +2033,8 @@ async function handleSessionEvent(
         }
       }
       if (!streamKey) {
-        // Suppress stream auto-start during startup nudge — avoid visible "Working..." flash
-        if (nudgePending.has(channelId)) break;
+        // Suppress stream auto-start during quiet mode — avoid visible "Working..." flash
+        if (quietState.has(channelId)) break;
         // Auto-start stream — use actual content, never a "Working..." placeholder.
         // This happens on subsequent turns after turn_end finalized the previous stream.
         log.info(`Auto-starting stream for channel ${channelId.slice(0, 8)}...`);
@@ -2021,7 +2090,7 @@ async function handleSessionEvent(
         }
       }
 
-      if (verbose && formatted.content && !nudgePending.has(channelId)) {
+      if (verbose && formatted.content && !quietState.has(channelId)) {
         await appendActivityFeed(channelId, formatted.content, adapter);
       }
       break;
@@ -2032,7 +2101,7 @@ async function handleSessionEvent(
 
     case 'error':
       markIdleImmediate(channelId);
-      nudgePending.delete(channelId);
+      exitQuietMode(channelId);
       channelThreadRoots.delete(channelId);
       if (streamKey) {
         await streaming.cancelStream(streamKey, formatted.content);
@@ -2085,7 +2154,7 @@ async function handleSessionEvent(
       // Finalize stream when the session goes idle (all turns complete).
        if (event.type === 'session.idle') {
         markIdle(channelId);
-        nudgePending.delete(channelId);
+        exitQuietMode(channelId);
         await finalizeActivityFeed(channelId, adapter);
         initialStreamPosted.delete(channelId);
         channelThreadRoots.delete(channelId);
@@ -2182,10 +2251,15 @@ async function nudgeAdminSessions(sessionManager: SessionManager): Promise<void>
           );
         }
       }
-      nudgePending.add(channelId);
-      await sessionManager.sendMessage(channelId, NUDGE_PROMPT);
+      const clearQuiet = enterQuietMode(channelId);
+      try {
+        await sessionManager.sendMessage(channelId, NUDGE_PROMPT);
+      } catch (err) {
+        clearQuiet();
+        throw err;
+      }
     } catch (err) {
-      nudgePending.delete(channelId);
+      exitQuietMode(channelId);
       log.warn(`Failed to nudge admin session on channel ${channelId.slice(0, 8)}...:`, err);
     }
   }
