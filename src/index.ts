@@ -1451,12 +1451,24 @@ async function handleInboundMessage(
               deleted ? '📋 Plan cleared.' : '📋 No plan to clear.',
               { threadRootId: threadRoot });
           } else if (subcommand === 'summary') {
+            // Ensure session is attached (handles post-restart state)
+            const currentMode = await sessionManager.getSessionMode(msg.channelId) as 'interactive' | 'plan' | 'autopilot';
+            await sessionManager.setSessionMode(msg.channelId, currentMode ?? 'interactive');
+
             const plan = await sessionManager.readPlan(msg.channelId);
             if (!plan.exists || !plan.content) {
               await adapter.sendMessage(msg.channelId, '📋 No plan exists for this session.', { threadRootId: threadRoot });
             } else {
-              const summary = sessionManager.extractPlanSummary(plan.content);
-              await adapter.sendMessage(msg.channelId, `📋 ${summary}`, { threadRootId: threadRoot });
+              // Ephemeral session with a cheap model — doesn't pollute main conversation
+              await adapter.sendMessage(msg.channelId, '📋 Summarizing plan...', { threadRootId: threadRoot });
+              const summary = await sessionManager.summarizePlan(msg.channelId);
+              if (summary) {
+                await adapter.sendMessage(msg.channelId, `📋 **Plan summary:**\n\n${summary}\n\n\`/plan show\` to view the full plan.`, { threadRootId: threadRoot });
+              } else {
+                // Fallback to structural extraction if ephemeral session fails
+                const fallback = sessionManager.extractPlanSummary(plan.content);
+                await adapter.sendMessage(msg.channelId, `📋 ${fallback}\n\n\`/plan show\` to view the full plan.`, { threadRootId: threadRoot });
+              }
             }
           } else if (subcommand === 'off') {
             await sessionManager.setSessionMode(msg.channelId, 'interactive');
@@ -1563,6 +1575,7 @@ async function handleInboundMessage(
           await sessionManager.sendMessage(msg.channelId, kickoff);
           await waitForChannelIdle(msg.channelId);
         } catch (err: any) {
+          sessionManager.revertYoloIfNeeded(msg.channelId);
           markIdleImmediate(msg.channelId);
           const sk = activeStreams.get(msg.channelId);
           if (sk) { await streaming.cancelStream(sk); activeStreams.delete(msg.channelId); }

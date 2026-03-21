@@ -1017,6 +1017,67 @@ export class SessionManager {
     return extractPlanSummary(content);
   }
 
+  // Preferred models for plan summarization — balanced for quality and cost.
+  // Summarization needs accurate extraction without hallucination, so we
+  // prefer capable mid-tier models over the cheapest options.
+  // Matched against available models via exact-then-prefix so partial matches
+  // work even if the catalog adds suffixes or version bumps.
+  private static readonly SUMMARIZER_MODELS = [
+    'claude-sonnet-4.6',    // strong comprehension, likely to stay available
+    'claude-sonnet-4.5',    // strong comprehension
+    'gpt-4.1',              // fast, capable
+    'gpt-5-mini',           // smaller but still capable
+    'claude-haiku-4.5',     // fastest Claude, adequate for short summaries
+    'gpt-5.1',              // full-size fallback
+    'gpt-5.2',              // full-size fallback
+  ];
+
+  /**
+   * Summarize a plan using a lightweight ephemeral session.
+   * Creates a throwaway session with a cheap model, sends the plan for summarization,
+   * collects the streamed response, and destroys the session.
+   */
+  async summarizePlan(channelId: string): Promise<string | null> {
+    const plan = await this.readPlan(channelId);
+    if (!plan.exists || !plan.content) return null;
+
+    // Pick the best available cheap model
+    let availableIds: string[] = [];
+    try {
+      const models = await this.bridge.listModels();
+      availableIds = models.map(m => m.id);
+    } catch { /* best-effort */ }
+
+    let model: string | undefined;
+    for (const candidate of SessionManager.SUMMARIZER_MODELS) {
+      const match = availableIds.find(id => id === candidate || id.startsWith(candidate));
+      if (match) { model = match; break; }
+    }
+    // If none matched, leave model undefined — SDK picks its default
+
+    log.info(`Summarizing plan for ${channelId.slice(0, 8)}... using model ${model ?? '(sdk default)'}`);
+
+    let session: CopilotSession | undefined;
+    try {
+      session = await this.bridge.createSession({
+        ...(model ? { model } : {}),
+        onPermissionRequest: async () => ({ kind: 'denied-interactively-by-user' as const }),
+        systemMessage: { content: 'You are a concise summarizer. Respond with only the summary, no preamble.' },
+      });
+
+      const prompt = `Condense this plan into a short summary that preserves the main section headings (## level). Under each heading, write one sentence capturing the key point. Include any unresolved questions or TBDs. Omit code blocks, type definitions, and resolved questions. Keep the total under 500 characters.\n\n${plan.content}`;
+      const response = await this.sendAndWaitForIdle(session, prompt, 30_000);
+      return response.trim() || null;
+    } catch (err: any) {
+      log.warn(`Plan summarization failed: ${err?.message ?? err}`);
+      return null;
+    } finally {
+      if (session) {
+        try { await this.bridge.destroySession(session.sessionId); } catch { /* best-effort */ }
+      }
+    }
+  }
+
   /**
    * Check for an existing plan and return summary if found.
    * Called after session resume to notify the user.
