@@ -1024,17 +1024,18 @@ async function handleInboundMessage(
           }
           const resumedId = await sessionManager.resumeToSession(msg.channelId, matches[0]);
           await adapter.updateMessage(msg.channelId, resumeAck, `✅ Resumed session \`${resumedId.slice(0, 8)}…\``);
-          // Surface existing plan after resume
+          // Surface existing plan after resume — only when in plan mode
           try {
-            const plan = await sessionManager.readPlan(msg.channelId);
-            if (plan.exists && plan.content) {
-              planSurfacedOnResume.add(msg.channelId);
-              const summary = sessionManager.extractPlanSummary(plan.content);
-              const mode = await sessionManager.getSessionMode(msg.channelId);
-              const modeNote = mode === 'plan' ? ' Session is in plan mode. `/plan off` to exit.' : '';
-              await adapter.sendMessage(msg.channelId,
-                `📋 **Existing plan found** — ${summary}. \`/plan show\` to review, \`/plan clear\` to discard.${modeNote}`,
-                { threadRootId: threadRoot });
+            const mode = await sessionManager.getSessionMode(msg.channelId);
+            if (mode === 'plan') {
+              const plan = await sessionManager.readPlan(msg.channelId);
+              if (plan.exists && plan.content) {
+                planSurfacedOnResume.add(msg.channelId);
+                const summary = sessionManager.extractPlanSummary(plan.content);
+                await adapter.sendMessage(msg.channelId,
+                  `📋 **Existing plan found** — ${summary}. \`/plan show\` to review, \`/plan clear\` to discard.`,
+                  { threadRootId: threadRoot });
+              }
             }
           } catch { /* plan surfacing is best-effort */ }
         } catch (err: any) {
@@ -1681,15 +1682,14 @@ async function handleInboundMessage(
 
     await sessionManager.sendMessage(msg.channelId, prompt, sdkAttachments.length > 0 ? sdkAttachments : undefined, msg.userId);
 
-    // One-time plan surfacing after session resume (best-effort, non-blocking)
+    // One-time plan surfacing after session resume — only when in plan mode (best-effort, non-blocking)
     if (!planSurfacedOnResume.has(msg.channelId)) {
       planSurfacedOnResume.add(msg.channelId);
       sessionManager.surfacePlanIfExists(msg.channelId).then(async (result) => {
-        if (result?.exists) {
-          const modeNote = result.inPlanMode ? ' Session is in plan mode.' : '';
+        if (result?.exists && result.inPlanMode) {
           const threadRootForPlan = channelThreadRoots.get(msg.channelId);
           await adapter.sendMessage(msg.channelId,
-            `📋 **Existing plan found** — ${result.summary}. \`/plan show\` to review.${modeNote}`,
+            `📋 **Existing plan found** — ${result.summary}. \`/plan show\` to review.`,
             { threadRootId: threadRootForPlan });
         }
       }).catch(() => { /* best-effort */ });
