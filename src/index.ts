@@ -12,7 +12,7 @@ import { initScheduler, stopAll as stopScheduler, listJobs, removeJob, pauseJob,
 import { markBusy, markIdle, markIdleImmediate, isBusy, waitForChannelIdle, cancelIdleDebounce } from './core/channel-idle.js';
 import { LoopDetector, MAX_IDENTICAL_CALLS } from './core/loop-detector.js';
 import { checkUserAccess } from './core/access-control.js';
-import { enterQuietMode, exitQuietMode, getQuietState, isQuiet } from './core/quiet-mode.js';
+import { enterQuietMode, exitQuietMode, isQuiet } from './core/quiet-mode.js';
 import { createLogger, setLogLevel } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -557,7 +557,6 @@ async function main(): Promise<void> {
           // Hold the lock until the response is fully streamed
           await waitForChannelIdle(channelId);
         } catch (err: any) {
-          clearQuiet();
           log.error(`Scheduled job sendMessage failed for ${channelId.slice(0, 8)}...:`, err);
           markIdleImmediate(channelId);
           const failedStream = activeStreams.get(channelId);
@@ -567,6 +566,8 @@ async function main(): Promise<void> {
             activeStreams.delete(channelId);
           }
           throw err;
+        } finally {
+          clearQuiet();
         }
       });
       channelLocks.set(channelId, task.catch(() => {}));
@@ -1937,13 +1938,10 @@ async function handleSessionEvent(
   if (!formatted) return;
 
   // ── Quiet mode: suppress all output until we know if response is NO_REPLY ──
-  const qs = getQuietState(channelId);
-  if (qs) {
+  if (isQuiet(channelId)) {
     // Suppress content events (deltas and messages)
     if (formatted.type === 'content') {
       if (event.type === 'assistant.message_delta') {
-        // Don't render — just note that content arrived
-        if (formatted.content?.trim()) qs.hasContent = true;
         return;
       }
       if (event.type === 'assistant.message') {
@@ -1960,7 +1958,7 @@ async function handleSessionEvent(
         }
         // Real content — flush: create stream with this content, exit quiet
         log.info(`Quiet mode flush on channel ${channelId.slice(0, 8)}... — real content received`);
-        const savedThreadRoot = qs.threadRoot ?? channelThreadRoots.get(channelId);
+        const savedThreadRoot = channelThreadRoots.get(channelId);
         exitQuietMode(channelId);
         const newKey = await streaming.startStream(channelId, savedThreadRoot, content);
         activeStreams.set(channelId, newKey);
@@ -1975,7 +1973,7 @@ async function handleSessionEvent(
     if (formatted.type === 'status' && event.type !== 'session.idle') {
       return;
     }
-    // Suppress errors — clear quiet and let error handler run below
+    // Errors: exit quiet and fall through to normal error handling (surfaces to user)
     if (formatted.type === 'error') {
       exitQuietMode(channelId);
       // Fall through to normal error handling
@@ -2232,9 +2230,8 @@ async function nudgeAdminSessions(sessionManager: SessionManager): Promise<void>
       const clearQuiet = enterQuietMode(channelId);
       try {
         await sessionManager.sendMessage(channelId, NUDGE_PROMPT);
-      } catch (err) {
+      } finally {
         clearQuiet();
-        throw err;
       }
     } catch (err) {
       exitQuietMode(channelId);

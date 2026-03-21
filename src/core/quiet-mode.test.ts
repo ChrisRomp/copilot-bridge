@@ -12,13 +12,10 @@ afterEach(() => {
 });
 
 describe('enterQuietMode / exitQuietMode', () => {
-  it('sets quiet state with hasContent false', () => {
+  it('sets quiet state', () => {
     enterQuietMode('ch1');
     expect(isQuiet('ch1')).toBe(true);
-    const qs = getQuietState('ch1');
-    expect(qs).toBeDefined();
-    expect(qs!.hasContent).toBe(false);
-    expect(qs!.threadRoot).toBeUndefined();
+    expect(getQuietState('ch1')).toBeDefined();
   });
 
   it('channels are independent', () => {
@@ -100,21 +97,12 @@ describe('timeout safety net', () => {
   });
 });
 
-describe('hasContent tracking', () => {
-  it('starts false and can be set true', () => {
+describe('getQuietState', () => {
+  it('returns state when quiet, undefined otherwise', () => {
+    expect(getQuietState('ch1')).toBeUndefined();
     enterQuietMode('ch1');
-    const qs = getQuietState('ch1')!;
-    expect(qs.hasContent).toBe(false);
-    qs.hasContent = true;
-    expect(getQuietState('ch1')!.hasContent).toBe(true);
-  });
-});
-
-describe('threadRoot preservation', () => {
-  it('can store threadRoot for delayed stream creation', () => {
-    enterQuietMode('ch1');
-    const qs = getQuietState('ch1')!;
-    qs.threadRoot = 'thread-abc';
-    expect(getQuietState('ch1')!.threadRoot).toBe('thread-abc');
+    expect(getQuietState('ch1')).toBeDefined();
+    exitQuietMode('ch1');
+    expect(getQuietState('ch1')).toBeUndefined();
   });
 });

@@ -7,8 +7,6 @@ import { createLogger } from '../logger.js';
 const log = createLogger('quiet');
 
 export interface QuietState {
-  threadRoot?: string;       // preserve for delayed stream creation on flush
-  hasContent: boolean;       // any non-empty deltas received?
   timeout: ReturnType<typeof setTimeout>;  // 60s safety net
 }
 
@@ -26,7 +24,7 @@ export function enterQuietMode(channelId: string): () => void {
     state.delete(channelId);
   }, TIMEOUT_MS);
 
-  state.set(channelId, { hasContent: false, timeout });
+  state.set(channelId, { timeout });
   return () => {
     const qs = state.get(channelId);
     if (qs) { clearTimeout(qs.timeout); state.delete(channelId); }
