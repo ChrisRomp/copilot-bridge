@@ -115,7 +115,9 @@ function chunkContent(content: string, maxLen: number): string[] {
     }
   }
   if (current.length > 0) chunks.push(current.join('\n'));
-  return chunks;
+
+  // Safety: hard-truncate any chunk that still exceeds maxLen (e.g. single very long line)
+  return chunks.map(c => c.length > maxLen ? c.slice(0, maxLen - 3) + '...' : c);
 }
 
 /** Send content that may exceed platform message limits, chunking with part labels as needed. */
@@ -136,9 +138,10 @@ async function sendChunked(
     return;
   }
 
-  // Chunk the content (reserve space for part label in each chunk)
+  // Chunk the content (reserve space for part label + header in first chunk)
   const labelReserve = 30; // "_(Part XX of XX)_\n"
-  const chunks = chunkContent(content, maxLen - labelReserve);
+  const effectiveMax = maxLen - labelReserve - headerLen;
+  const chunks = chunkContent(content, effectiveMax);
   const total = chunks.length;
 
   for (let i = 0; i < chunks.length; i++) {
@@ -1459,7 +1462,7 @@ async function handleInboundMessage(
             if (!plan.exists || !plan.content) {
               await adapter.sendMessage(msg.channelId, '📋 No plan exists for this session.', { threadRootId: threadRoot });
             } else {
-              // Ephemeral session with a cheap model — doesn't pollute main conversation
+              // Ephemeral session summarization — doesn't pollute main conversation
               await adapter.sendMessage(msg.channelId, '📋 Summarizing plan...', { threadRootId: threadRoot });
               const summary = await sessionManager.summarizePlan(msg.channelId);
               if (summary) {
@@ -1526,7 +1529,8 @@ async function handleInboundMessage(
           const enableYolo = arg === 'yolo';
           const interactive = arg === 'interactive';
 
-          // Set mode first (ensures session is attached after restart)
+          // Set mode first (ensures session is attached after restart).
+          // For interactive, this is a no-op on mode; for autopilot, we revert below if no plan.
           const targetMode = interactive ? 'interactive' : 'autopilot';
           await sessionManager.setSessionMode(msg.channelId, targetMode);
 
