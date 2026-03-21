@@ -12,6 +12,7 @@ import { initScheduler, stopAll as stopScheduler, listJobs, removeJob, pauseJob,
 import { markBusy, markIdle, markIdleImmediate, isBusy, waitForChannelIdle, cancelIdleDebounce } from './core/channel-idle.js';
 import { LoopDetector, MAX_IDENTICAL_CALLS } from './core/loop-detector.js';
 import { checkUserAccess } from './core/access-control.js';
+import { enterQuietMode, exitQuietMode, getQuietState, isQuiet } from './core/quiet-mode.js';
 import { createLogger, setLogLevel } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -45,36 +46,7 @@ const eventLocks = new Map<string, Promise<void>>();
 
 // Channels in "quiet mode" — all streaming output suppressed until we determine
 // whether the response is NO_REPLY. Used for startup nudges and scheduled tasks.
-interface QuietState {
-  threadRoot?: string;       // preserve for delayed stream creation on flush
-  hasContent: boolean;       // any non-empty deltas received?
-  timeout: ReturnType<typeof setTimeout>;  // 60s safety net
-}
-const quietState = new Map<string, QuietState>();
-
-/** Enter quiet mode for a channel. Returns cleanup function for catch paths. */
-function enterQuietMode(channelId: string): () => void {
-  // Clear any previous quiet state (shouldn't happen, but safety)
-  const prev = quietState.get(channelId);
-  if (prev) clearTimeout(prev.timeout);
-
-  const timeout = setTimeout(() => {
-    log.warn(`Quiet mode timeout (60s) for channel ${channelId.slice(0, 8)}... — force-clearing`);
-    quietState.delete(channelId);
-  }, 60_000);
-
-  quietState.set(channelId, { hasContent: false, timeout });
-  return () => {
-    const qs = quietState.get(channelId);
-    if (qs) { clearTimeout(qs.timeout); quietState.delete(channelId); }
-  };
-}
-
-/** Exit quiet mode, cleaning up timer. */
-function exitQuietMode(channelId: string): void {
-  const qs = quietState.get(channelId);
-  if (qs) { clearTimeout(qs.timeout); quietState.delete(channelId); }
-}
+// State managed in src/core/quiet-mode.ts
 
 // Bot adapters keyed by "platform:botName" for channel→adapter lookup
 const botAdapters = new Map<string, ChannelAdapter>();
@@ -1863,7 +1835,7 @@ async function handleSessionEvent(
   // During quiet mode, auto-deny permissions and suppress input requests —
   // quiet tasks should be non-interactive
   if (event.type === 'bridge.permission_request') {
-    if (quietState.has(channelId)) {
+    if (isQuiet(channelId)) {
       log.info(`Auto-denying permission during quiet mode on ${channelId.slice(0, 8)}...`);
       return; // Permission handler already has auto-deny fallback timeout
     }
@@ -1882,7 +1854,7 @@ async function handleSessionEvent(
   }
 
   if (event.type === 'bridge.user_input_request') {
-    if (quietState.has(channelId)) {
+    if (isQuiet(channelId)) {
       log.info(`Suppressing user input request during quiet mode on ${channelId.slice(0, 8)}...`);
       return;
     }
@@ -1963,7 +1935,7 @@ async function handleSessionEvent(
   if (!formatted) return;
 
   // ── Quiet mode: suppress all output until we know if response is NO_REPLY ──
-  const qs = quietState.get(channelId);
+  const qs = getQuietState(channelId);
   if (qs) {
     // Suppress content events (deltas and messages)
     if (formatted.type === 'content') {
@@ -2034,7 +2006,7 @@ async function handleSessionEvent(
       }
       if (!streamKey) {
         // Suppress stream auto-start during quiet mode — avoid visible "Working..." flash
-        if (quietState.has(channelId)) break;
+        if (isQuiet(channelId)) break;
         // Auto-start stream — use actual content, never a "Working..." placeholder.
         // This happens on subsequent turns after turn_end finalized the previous stream.
         log.info(`Auto-starting stream for channel ${channelId.slice(0, 8)}...`);
@@ -2090,7 +2062,7 @@ async function handleSessionEvent(
         }
       }
 
-      if (verbose && formatted.content && !quietState.has(channelId)) {
+      if (verbose && formatted.content && !isQuiet(channelId)) {
         await appendActivityFeed(channelId, formatted.content, adapter);
       }
       break;
