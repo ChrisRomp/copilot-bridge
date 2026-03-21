@@ -464,7 +464,7 @@ async function main(): Promise<void> {
         handleMidTurnMessage(msg, sessionManager, platformName, botName)
           .catch(err => {
             // Expected fallbacks — debug level
-            const expected = err?.message === 'slash-command-while-busy' || err?.message === 'file-only-while-busy';
+            const expected = err?.message === 'slash-command-while-busy' || err?.message === 'attachments-while-busy';
             if (expected) {
               log.debug(`Mid-turn fallback (${err.message}), routing to normal handler`);
             } else {
@@ -743,7 +743,13 @@ async function handleMidTurnMessage(
       return;
     }
 
-    // Read-only / toggle commands — safe to handle mid-turn
+    // Messages with attachments can't steer — queue them for normal processing
+  // where downloadAttachments runs and files are passed to the SDK
+  if (msg.attachments?.length) {
+    throw new Error('attachments-while-busy');
+  }
+
+  // Read-only / toggle commands — safe to handle mid-turn
     // Only commands where handleCommand returns a complete response (no separate action rendering).
     // Commands with complex action handlers (skills, schedule, rules) defer to serialized path.
     const SAFE_MID_TURN = new Set([
@@ -785,11 +791,6 @@ async function handleMidTurnMessage(
 
     // All other slash commands — defer to serialized path
     throw new Error('slash-command-while-busy');
-  }
-
-  // File-only messages can't steer — queue them for normal processing
-  if (!text && msg.attachments?.length) {
-    throw new Error('file-only-while-busy');
   }
 
   log.info(`Mid-turn steering for ${msg.channelId.slice(0, 8)}...: "${text.slice(0, 100)}"`);
