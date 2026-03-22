@@ -2218,23 +2218,28 @@ async function nudgeAdminSessions(sessionManager: SessionManager): Promise<void>
 
     try {
       log.info(`Nudging admin session for bot "${botName}" on channel ${channelId.slice(0, 8)}...`);
+      const resolved = getAdapterForChannel(channelId);
+      if (!resolved) {
+        log.warn(`No adapter for channel ${channelId.slice(0, 8)}... — skipping nudge`);
+        continue;
+      }
       // Only post the visible restart notice in DM channels
       if (channelConfig.isDM) {
-        const resolved = getAdapterForChannel(channelId);
-        if (resolved) {
-          resolved.adapter.sendMessage(channelId, '🔄 Bridge restarted.').catch(e =>
-            log.warn(`Failed to post restart notice on ${channelId.slice(0, 8)}...:`, e)
-          );
-        }
+        resolved.adapter.sendMessage(channelId, '🔄 Bridge restarted.').catch(e =>
+          log.warn(`Failed to post restart notice on ${channelId.slice(0, 8)}...:`, e)
+        );
       }
       const clearQuiet = enterQuietMode(channelId);
       try {
+        markBusy(channelId);
         await sessionManager.sendMessage(channelId, NUDGE_PROMPT);
+        await waitForChannelIdle(channelId);
       } finally {
         clearQuiet();
       }
     } catch (err) {
       exitQuietMode(channelId);
+      markIdleImmediate(channelId);
       log.warn(`Failed to nudge admin session on channel ${channelId.slice(0, 8)}...:`, err);
     }
   }
