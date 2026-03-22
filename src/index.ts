@@ -2229,12 +2229,15 @@ async function nudgeAdminSessions(sessionManager: SessionManager): Promise<void>
       }
       const clearQuiet = enterQuietMode(channelId);
       try {
+        markBusy(channelId);
         await sessionManager.sendMessage(channelId, NUDGE_PROMPT);
+        await waitForChannelIdle(channelId);
       } finally {
         clearQuiet();
       }
     } catch (err) {
       exitQuietMode(channelId);
+      markIdleImmediate(channelId);
       log.warn(`Failed to nudge admin session on channel ${channelId.slice(0, 8)}...:`, err);
     }
   }
