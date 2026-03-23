@@ -164,6 +164,32 @@ describe('BYOK provider config validation', () => {
     expect(() => loadConfig(filePath)).toThrow(/must be an object/);
   });
 
+  it('rejects provider name containing colon', () => {
+    const filePath = writeConfig({
+      ...minimalConfig,
+      providers: {
+        'my:provider': {
+          baseUrl: 'http://localhost:11434/v1',
+          models: [{ id: 'model1' }],
+        },
+      },
+    });
+    expect(() => loadConfig(filePath)).toThrow(/cannot contain ':' or whitespace/);
+  });
+
+  it('rejects provider name containing whitespace', () => {
+    const filePath = writeConfig({
+      ...minimalConfig,
+      providers: {
+        'my provider': {
+          baseUrl: 'http://localhost:11434/v1',
+          models: [{ id: 'model1' }],
+        },
+      },
+    });
+    expect(() => loadConfig(filePath)).toThrow(/cannot contain ':' or whitespace/);
+  });
+
   it('accepts multiple providers', () => {
     const filePath = writeConfig({
       ...minimalConfig,

@@ -1442,9 +1442,12 @@ export class SessionManager {
 
     // Resolve BYOK provider for resume
     const providerName = prefs.provider ?? null;
-    const sdkProvider = providerName
+    let sdkProvider = providerName
       ? resolveProviderConfig(providerName, getConfig().providers)
       : undefined;
+    if (providerName && !sdkProvider) {
+      log.warn(`Provider "${providerName}" set for channel ${channelId} but not found in config — using Copilot`);
+    }
 
     const session = await withWorkspaceEnv(workingDirectory, () =>
       this.bridge.resumeSession(sessionId, {

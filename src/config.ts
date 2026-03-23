@@ -125,6 +125,9 @@ function validateAndNormalize(raw: any): AppConfig {
       throw new Error('"providers" must be an object mapping provider names to configs');
     }
     for (const [provName, provRaw] of Object.entries(raw.providers)) {
+      if (!provName || /[:\s]/.test(provName)) {
+        throw new Error(`Provider name "${provName}" is invalid — must be non-empty and cannot contain ':' or whitespace`);
+      }
       const p = provRaw as any;
       if (!p || typeof p !== 'object' || Array.isArray(p)) {
         throw new Error(`Provider "${provName}" must be an object`);
