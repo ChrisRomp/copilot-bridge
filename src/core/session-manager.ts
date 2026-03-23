@@ -800,7 +800,8 @@ export class SessionManager {
           availableModels = models.map(m => m.id);
         } catch { /* best-effort */ }
 
-        const chain = buildFallbackChain(prefs.model, availableModels, configFallbacks);
+        const byokPrefixes = Object.keys(getConfig().providers ?? {});
+        const chain = buildFallbackChain(prefs.model, availableModels, configFallbacks, byokPrefixes);
 
         // Try each fallback: create session + send
         let lastError: any = err;
@@ -894,16 +895,38 @@ export class SessionManager {
   }
 
   /** Switch the model for a channel's session. */
-  async switchModel(channelId: string, model: string): Promise<void> {
-    const sessionId = this.channelSessions.get(channelId);
-    if (sessionId) {
+  async switchModel(channelId: string, model: string, provider?: string | null): Promise<void> {
+    const currentPrefs = this.getEffectivePrefs(channelId);
+    const currentProvider = currentPrefs.provider ?? null;
+    const newProvider = provider ?? null;
+    const providerChanged = currentProvider !== newProvider;
+
+    if (providerChanged) {
+      // Provider change requires a fresh session (different endpoint/auth)
+      log.info(`Provider switch ${currentProvider ?? 'copilot'} → ${newProvider ?? 'copilot'} for channel ${channelId.slice(0, 8)}...`);
+      // Set prefs before newSession so createNewSession picks up the new provider,
+      // but restore on failure so the channel isn't left in a broken state.
+      const prevModel = currentPrefs.model;
+      setChannelPrefs(channelId, { model, provider: newProvider });
       try {
-        await this.bridge.switchSessionModel(sessionId, model);
+        await this.newSession(channelId);
       } catch (err) {
-        log.warn(`RPC model switch failed:`, err);
+        log.warn(`Provider switch failed, reverting prefs:`, err);
+        setChannelPrefs(channelId, { model: prevModel, provider: currentProvider });
+        throw err;
       }
+    } else {
+      // Same provider — use RPC model switch
+      const sessionId = this.channelSessions.get(channelId);
+      if (sessionId) {
+        try {
+          await this.bridge.switchSessionModel(sessionId, model);
+        } catch (err) {
+          log.warn(`RPC model switch failed:`, err);
+        }
+      }
+      setChannelPrefs(channelId, { model, provider: newProvider });
     }
-    setChannelPrefs(channelId, { model });
 
     // Clear stale context window tokens so /context falls back to tokenLimit during transition
     this.contextWindowTokens.delete(channelId);
@@ -911,8 +934,8 @@ export class SessionManager {
     // Update cached context window tokens for the new model (best-effort)
     this.bridge.listModels(getConfig().providers).then(models => {
       // Guard against rapid switches: only cache if the channel is still on this model
-      const currentPrefs = this.getEffectivePrefs(channelId);
-      if (currentPrefs.model === model) {
+      const prefs = this.getEffectivePrefs(channelId);
+      if (prefs.model === model) {
         this.cacheContextWindowTokens(channelId, model, models);
       }
     }).catch(() => { /* best-effort */ });
@@ -1389,11 +1412,13 @@ export class SessionManager {
       );
     };
 
+    const byokPrefixes = Object.keys(getConfig().providers ?? {});
     const { result: session, usedModel, didFallback } = await tryWithFallback(
       prefs.model,
       availableModels,
       configFallbacks,
       createWithModel,
+      byokPrefixes,
     );
 
     this.sessionMcpServers.set(channelId, new Set(Object.keys(resolvedMcpServers)));
