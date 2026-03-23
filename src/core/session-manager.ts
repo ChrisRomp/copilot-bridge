@@ -1413,13 +1413,39 @@ export class SessionManager {
     };
 
     const byokPrefixes = Object.keys(getConfig().providers ?? {});
-    const { result: session, usedModel, didFallback } = await tryWithFallback(
-      prefs.model,
-      availableModels,
-      configFallbacks,
-      createWithModel,
-      byokPrefixes,
-    );
+    let session: any;
+    let usedModel: string;
+    let didFallback: boolean;
+
+    try {
+      const result = await tryWithFallback(
+        prefs.model,
+        availableModels,
+        configFallbacks,
+        createWithModel,
+        byokPrefixes,
+      );
+      session = result.result;
+      usedModel = result.usedModel;
+      didFallback = result.didFallback;
+    } catch (err: any) {
+      // Enhance error message with BYOK context
+      if (providerName) {
+        const msg = String(err?.message ?? err);
+        const provConfig = getConfig().providers?.[providerName];
+        if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('fetch failed')) {
+          throw new Error(`Provider "${providerName}" is unreachable at ${provConfig?.baseUrl ?? 'unknown URL'}. Check that the service is running.`);
+        }
+        if (msg.includes('401') || msg.includes('403') || msg.includes('Unauthorized') || msg.includes('Forbidden')) {
+          throw new Error(`Provider "${providerName}" rejected authentication. Check your API key configuration.`);
+        }
+        if (msg.includes('404') || msg.includes('model not found') || msg.includes('does not exist')) {
+          throw new Error(`Model "${prefs.model}" not found on provider "${providerName}". Check the model ID in your config.`);
+        }
+        throw new Error(`Provider "${providerName}" error: ${msg}`);
+      }
+      throw err;
+    }
 
     this.sessionMcpServers.set(channelId, new Set(Object.keys(resolvedMcpServers)));
     this.sessionSkillDirs.set(channelId, new Set(skillDirectories));

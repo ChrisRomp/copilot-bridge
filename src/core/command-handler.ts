@@ -41,7 +41,7 @@ export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'reload_session' | 'reload_config' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_deny' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills' | 'skill_toggle' | 'mcp' | 'plan' | 'implement';
+           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_deny' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills' | 'skill_toggle' | 'mcp' | 'plan' | 'implement' | 'provider_test';
   payload?: any;
 }
 
@@ -405,6 +405,52 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       return { handled: true, action: 'switch_model', payload: { modelId: bareModelId, provider: resolvedProvider }, response };
     }
 
+    case 'provider':
+    case 'providers': {
+      const providerMap = providers ?? {};
+      const provNames = Object.keys(providerMap);
+      const args = parsed.args?.trim();
+
+      if (!args) {
+        // List all providers
+        if (provNames.length === 0) {
+          return { handled: true, response: 'No BYOK providers configured.\n↳ Add providers in `config.json` under the `"providers"` key, then `/reload config`.' };
+        }
+        const lines = ['**Configured Providers**', ''];
+        for (const name of provNames) {
+          const p = providerMap[name];
+          const modelCount = p.models?.length ?? 0;
+          const authMethod = p.apiKeyEnv ? `apiKeyEnv: ${p.apiKeyEnv}` : p.bearerTokenEnv ? `bearerTokenEnv: ${p.bearerTokenEnv}` : p.apiKey ? 'apiKey (inline)' : 'none';
+          lines.push(`**${name}**`);
+          lines.push(`  URL: \`${p.baseUrl}\``);
+          lines.push(`  Type: ${p.type ?? 'openai'} · Auth: ${authMethod} · Models: ${modelCount}`);
+          lines.push(`  Models: ${p.models.map(m => `\`${m.id}\``).join(', ')}`);
+          lines.push('');
+        }
+        lines.push('↳ Use `/provider test <name>` to test connectivity');
+        lines.push('↳ Use `/model <provider>:<model>` to switch to a provider model');
+        return { handled: true, response: lines.join('\n') };
+      }
+
+      // /provider test <name>
+      const testMatch = args.match(/^test\s+(.+)$/i);
+      if (testMatch) {
+        const target = testMatch[1].trim();
+        const canonical = provNames.find(p => p.toLowerCase() === target.toLowerCase());
+        if (!canonical) {
+          return { handled: true, response: `⚠️ Unknown provider "${target}". Configured: ${provNames.join(', ')}` };
+        }
+        return { handled: true, action: 'provider_test', payload: canonical, response: `🔄 Testing provider "${canonical}"...` };
+      }
+
+      // /provider add|remove — guide to config file
+      if (/^(add|remove|delete)\b/i.test(args)) {
+        return { handled: true, response: 'Providers are managed in `config.json` under the `"providers"` key.\n↳ Edit the file, then run `/reload config` to apply changes.' };
+      }
+
+      return { handled: true, response: '⚠️ Unknown subcommand. Usage:\n  `/provider` — list providers\n  `/provider test <name>` — test connectivity\n  `/model <provider>:<model>` — switch model' };
+    }
+
     case 'agent': {
       const agent = parsed.args || null;
       if (!agent) {
@@ -687,6 +733,8 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/skills disable <name...>` — Disable skills for this channel',
           '`/skills enable|disable all` — Enable or disable all skills',
           '`/mcp` — Show MCP servers and their source',
+          '`/provider` — List configured BYOK providers',
+          '`/provider test <name>` — Test provider connectivity',
           '`/plan` — Toggle plan mode (on/off)',
           '`/plan show` — Show current plan',
           '`/plan summary` — Show plan summary',
