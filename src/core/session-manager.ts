@@ -1274,7 +1274,14 @@ export class SessionManager {
 
   /** Cache the model's max_context_window_tokens for accurate /context display. */
   private cacheContextWindowTokens(channelId: string, modelId: string, modelList: any[]): void {
-    const model = modelList.find((m: any) => m.id === modelId);
+    let model = modelList.find((m: any) => m.id === modelId);
+    // For BYOK models, the merged list has provider-prefixed IDs (e.g., "ollama-local:qwen3:8b")
+    if (!model) {
+      const prefs = getChannelPrefs(channelId);
+      if (prefs?.provider) {
+        model = modelList.find((m: any) => m.id === `${prefs.provider}:${modelId}`);
+      }
+    }
     const ctxTokens = model?.capabilities?.limits?.max_context_window_tokens;
     if (typeof ctxTokens === 'number' && ctxTokens > 0) {
       this.contextWindowTokens.set(channelId, ctxTokens);
