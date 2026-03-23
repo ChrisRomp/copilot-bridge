@@ -148,6 +148,9 @@ function validateAndNormalize(raw: any): AppConfig {
         if (m.contextWindow !== undefined && (typeof m.contextWindow !== 'number' || m.contextWindow <= 0 || !Number.isInteger(m.contextWindow))) {
           throw new Error(`Provider "${provName}" model "${m.id}" contextWindow must be a positive integer`);
         }
+        if (m.wireApi !== undefined && !['completions', 'responses'].includes(m.wireApi)) {
+          throw new Error(`Provider "${provName}" model "${m.id}" wireApi must be "completions" or "responses"`);
+        }
       }
       // Validate optional string fields
       for (const field of ['apiKey', 'apiKeyEnv', 'bearerToken', 'bearerTokenEnv'] as const) {
@@ -209,11 +212,13 @@ function validateAndNormalize(raw: any): AppConfig {
 /**
  * Resolve a BridgeProviderConfig into the SDK's ProviderConfig format.
  * Resolves apiKeyEnv/bearerTokenEnv from process.env.
+ * If modelId is provided, model-level wireApi overrides the provider-level value.
  * Returns null if the provider name is not found in config.
  */
 export function resolveProviderConfig(
   providerName: string,
   providers?: Record<string, BridgeProviderConfig>,
+  modelId?: string,
 ): SDKProviderConfig | null {
   if (!providers) return null;
   const entry = providers[providerName];
@@ -237,12 +242,16 @@ export function resolveProviderConfig(
     }
   }
 
+  // Model-level wireApi overrides provider-level
+  const modelEntry = modelId ? entry.models.find(m => m.id === modelId) : undefined;
+  const wireApi = modelEntry?.wireApi ?? entry.wireApi;
+
   const sdkConfig: SDKProviderConfig = {
     baseUrl: entry.baseUrl,
     ...(entry.type ? { type: entry.type } : {}),
     ...(apiKey ? { apiKey } : {}),
     ...(bearerToken ? { bearerToken } : {}),
-    ...(entry.wireApi ? { wireApi: entry.wireApi } : {}),
+    ...(wireApi ? { wireApi } : {}),
     ...(entry.azure ? { azure: entry.azure } : {}),
   };
 

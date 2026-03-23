@@ -197,11 +197,18 @@ Users may ask you to add, remove, or modify BYOK (Bring Your Own Key) providers.
 2. Add an entry under `"providers"` with required fields:
    - `type`: `"openai"` (OpenAI-compatible, including Ollama) or `"azure"`
    - `baseUrl`: The API endpoint URL
-   - `models`: Array of `{ "id": "model-id", "name": "Display Name" }`
+   - `models`: Array of `{ "id": "model-id", "name": "Display Name" }`. Models can also have a `wireApi` override.
    - `apiKeyEnv` (optional): Environment variable name holding the API key
-   - `wireApi` (optional): `"chat"` (default) or `"responses"` (Azure)
+   - `wireApi` (optional): Default wire protocol for all models — `"chat"` (default) or `"responses"`. Can be overridden per model.
    - `azure` (Azure only): `{ "apiVersion": "2024-10-21" }`
 3. Tell the user to run `/reload config` in their channel
+
+**Wire API and model compatibility:**
+- `"chat"` (Chat Completions API) — works with most models: GPT-4o, GPT-4.1, Llama, Phi, Qwen, etc.
+- `"responses"` (Responses API) — required for Codex models (gpt-5.x-codex-*)
+- Set `wireApi` on the **model entry** when only specific models need it (e.g., one Codex model among several chat models on the same endpoint)
+- Models must support **structured function calling** (OpenAI-compatible tool_calls). Models that emit tool calls as raw text (e.g., DeepSeek, some smaller models) will not work correctly with the bridge — they'll output XML/JSON tool markup instead of executing tools.
+- When in doubt, ask the user what model they want and recommend `"responses"` for Codex models, `"chat"` for everything else.
 
 **Removing a provider:**
 1. Back up config.json

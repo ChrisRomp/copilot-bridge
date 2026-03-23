@@ -1369,7 +1369,7 @@ export class SessionManager {
     // Resolve BYOK provider if set in prefs
     const providerName = prefs.provider ?? null;
     const sdkProvider = providerName
-      ? resolveProviderConfig(providerName, getConfig().providers)
+      ? resolveProviderConfig(providerName, getConfig().providers, prefs.model ?? undefined)
       : undefined;
     if (providerName && !sdkProvider) {
       log.warn(`Provider "${providerName}" set for channel ${channelId} but not found in config — using Copilot`);
@@ -1494,7 +1494,7 @@ export class SessionManager {
     // Resolve BYOK provider for resume
     const providerName = prefs.provider ?? null;
     let sdkProvider = providerName
-      ? resolveProviderConfig(providerName, getConfig().providers)
+      ? resolveProviderConfig(providerName, getConfig().providers, prefs.model ?? undefined)
       : undefined;
     if (providerName && !sdkProvider) {
       log.warn(`Provider "${providerName}" set for channel ${channelId} but not found in config — using Copilot`);

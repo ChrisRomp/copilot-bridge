@@ -57,7 +57,7 @@ Each provider is a named entry under the `"providers"` key in `config.json`:
 | `apiKeyEnv` | Environment variable name containing the API key |
 | `bearerToken` | Inline bearer token |
 | `bearerTokenEnv` | Environment variable name containing the bearer token |
-| `wireApi` | Wire protocol: `completions` or `responses` |
+| `wireApi` | Default wire protocol for all models: `"chat"` (default) or `"responses"`. Can be overridden per model. |
 | `azure` | Azure-specific config: `{ "apiVersion": "2024-10-21" }` |
 
 ### Model Entry Fields
@@ -67,6 +67,15 @@ Each provider is a named entry under the `"providers"` key in `config.json`:
 | `id` | Model identifier as the provider expects it (e.g., `qwen3:8b`) |
 | `name` | Optional display name |
 | `contextWindow` | Context window size in tokens (used for `/context` display) |
+| `wireApi` | Override the provider's wire protocol for this model: `"chat"` or `"responses"` |
+
+### Wire API & Model Compatibility
+
+`wireApi` can be set at the provider level (applies to all models) or per model (overrides the provider default). This lets you mix models that need different protocols on the same endpoint.
+
+- **`"chat"` (Chat Completions API)** — default. Works with most models: GPT-4o, GPT-4.1, Llama, Phi, Qwen, etc.
+- **`"responses"` (Responses API)** — required for **Codex models** (`gpt-5.x-codex-*`).
+- Models must support **structured function calling** (OpenAI-compatible `tool_calls`). Models that emit tool calls as raw text (e.g., DeepSeek, some smaller/fine-tuned models) will not work correctly — the agent will output XML/JSON markup instead of executing tools.
 
 ### Provider Names
 
@@ -98,10 +107,10 @@ No authentication needed for local Ollama instances.
     "type": "azure",
     "baseUrl": "https://myco.openai.azure.com",
     "apiKeyEnv": "AZURE_OPENAI_KEY",
-    "wireApi": "responses",
     "azure": { "apiVersion": "2024-10-21" },
     "models": [
-      { "id": "gpt-5.2-codex", "name": "GPT-5.2 Codex" }
+      { "id": "gpt-4o", "name": "GPT-4o" },
+      { "id": "gpt-5.2-codex", "name": "GPT-5.2 Codex", "wireApi": "responses" }
     ]
   }
 }

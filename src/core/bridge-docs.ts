@@ -617,10 +617,10 @@ Providers are configured under the \`"providers"\` key in \`config.json\`:
       "type": "azure",
       "baseUrl": "https://myco.openai.azure.com",
       "apiKeyEnv": "AZURE_OPENAI_KEY",
-      "wireApi": "responses",
       "azure": { "apiVersion": "2024-10-21" },
       "models": [
-        { "id": "gpt-5.2-codex", "name": "GPT-5.2 Codex" }
+        { "id": "gpt-4o", "name": "GPT-4o" },
+        { "id": "gpt-5.2-codex", "name": "GPT-5.2 Codex", "wireApi": "responses" }
       ]
     }
   }
@@ -634,9 +634,17 @@ Providers are configured under the \`"providers"\` key in \`config.json\`:
 | \`type\` | yes | \`"openai"\` (OpenAI-compatible) or \`"azure"\` |
 | \`baseUrl\` | yes | API endpoint URL |
 | \`apiKeyEnv\` | no | Environment variable holding the API key (omit for keyless, e.g., local Ollama) |
-| \`wireApi\` | no | \`"chat"\` (default) or \`"responses"\` (Azure) |
+| \`wireApi\` | no | Default wire protocol for all models: \`"chat"\` (default) or \`"responses"\`. Can be overridden per model. |
 | \`azure\` | azure only | \`{ "apiVersion": "..." }\` |
-| \`models\` | yes | Array of \`{ "id": "...", "name": "..." }\` — models available from this provider |
+| \`models\` | yes | Array of model entries. Each has \`id\` (required), \`name\`, and optional \`wireApi\` override. |
+
+### Wire API & Model Compatibility
+
+\`wireApi\` can be set at provider level (applies to all models) or per model (overrides provider default).
+
+- \`"chat"\` (Chat Completions API) — works with most models: GPT-4o, GPT-4.1, Llama, Phi, Qwen, etc.
+- \`"responses"\` (Responses API) — **required** for Codex models (\`gpt-5.x-codex-*\`)
+- Models must support **structured function calling** (OpenAI-compatible \`tool_calls\`). Models that emit tool calls as raw text (e.g., DeepSeek, some smaller models) will not work correctly.
 
 ## Commands
 

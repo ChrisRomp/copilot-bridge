@@ -51,6 +51,7 @@ export interface ProviderModelEntry {
   id: string;
   name?: string;
   contextWindow?: number;
+  wireApi?: 'completions' | 'responses';
 }
 
 // BYOK provider configuration (user-facing, stored in config.json)
