@@ -185,21 +185,69 @@ describe('BYOK provider config validation', () => {
     const config = loadConfig(filePath);
     expect(Object.keys(config.providers!)).toEqual(['ollama', 'azure']);
   });
+
+  it('rejects non-string apiKeyEnv', () => {
+    const filePath = writeConfig({
+      ...minimalConfig,
+      providers: {
+        bad: {
+          baseUrl: 'http://localhost',
+          apiKeyEnv: 123,
+          models: [{ id: 'm1' }],
+        },
+      },
+    });
+    expect(() => loadConfig(filePath)).toThrow(/apiKeyEnv must be a string/);
+  });
+
+  it('rejects non-integer contextWindow', () => {
+    const filePath = writeConfig({
+      ...minimalConfig,
+      providers: {
+        bad: {
+          baseUrl: 'http://localhost',
+          models: [{ id: 'm1', contextWindow: '32768' }],
+        },
+      },
+    });
+    expect(() => loadConfig(filePath)).toThrow(/contextWindow must be a positive integer/);
+  });
+
+  it('rejects non-object azure field', () => {
+    const filePath = writeConfig({
+      ...minimalConfig,
+      providers: {
+        bad: {
+          type: 'azure',
+          baseUrl: 'http://localhost',
+          azure: 'wrong',
+          models: [{ id: 'm1' }],
+        },
+      },
+    });
+    expect(() => loadConfig(filePath)).toThrow(/azure must be an object/);
+  });
 });
 
 // --- Provider resolution tests ---
 
 describe('resolveProviderConfig', () => {
   let resolveProviderConfig: typeof import('../config.js').resolveProviderConfig;
-  const originalEnv = { ...process.env };
+  let originalEnv: typeof process.env;
 
   beforeEach(async () => {
+    originalEnv = { ...process.env };
     const configMod = await import('../config.js');
     resolveProviderConfig = configMod.resolveProviderConfig;
   });
 
   afterEach(() => {
-    process.env = { ...originalEnv };
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, originalEnv);
   });
 
   const providers: Record<string, BridgeProviderConfig> = {

@@ -142,9 +142,29 @@ function validateAndNormalize(raw: any): AppConfig {
         if (!m || typeof m !== 'object' || !m.id || typeof m.id !== 'string') {
           throw new Error(`Provider "${provName}" models entries must have a string "id"`);
         }
+        if (m.contextWindow !== undefined && (typeof m.contextWindow !== 'number' || m.contextWindow <= 0 || !Number.isInteger(m.contextWindow))) {
+          throw new Error(`Provider "${provName}" model "${m.id}" contextWindow must be a positive integer`);
+        }
+      }
+      // Validate optional string fields
+      for (const field of ['apiKey', 'apiKeyEnv', 'bearerToken', 'bearerTokenEnv'] as const) {
+        if (p[field] !== undefined && typeof p[field] !== 'string') {
+          throw new Error(`Provider "${provName}" ${field} must be a string`);
+        }
+      }
+      if (p.azure !== undefined) {
+        if (typeof p.azure !== 'object' || Array.isArray(p.azure)) {
+          throw new Error(`Provider "${provName}" azure must be an object`);
+        }
+        if (p.azure.apiVersion !== undefined && typeof p.azure.apiVersion !== 'string') {
+          throw new Error(`Provider "${provName}" azure.apiVersion must be a string`);
+        }
       }
       if (p.apiKey && typeof p.apiKey === 'string') {
         log.warn(`Provider "${provName}": inline apiKey is discouraged — use apiKeyEnv instead`);
+      }
+      if (p.bearerToken && typeof p.bearerToken === 'string') {
+        log.warn(`Provider "${provName}": inline bearerToken is discouraged — use bearerTokenEnv instead`);
       }
       if (p.wireApi !== undefined && !['completions', 'responses'].includes(p.wireApi)) {
         throw new Error(`Provider "${provName}" wireApi must be "completions" or "responses"`);
