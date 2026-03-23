@@ -102,7 +102,7 @@ External model providers are configured under `providers` in `config.json`. Each
 
 - `resolveProviderConfig()` in `config.ts` resolves env vars to build SDK `ProviderConfig` at session creation time
 - `/model` listing groups models by provider (Copilot section first, then BYOK providers)
-- `/provider test <name>` hits the provider's `/v1/models` endpoint to verify connectivity
+- `/provider test <name>` calls the provider's models endpoint (`${baseUrl}/models`) to verify connectivity
 - `switchModel()` in session-manager detects provider changes and creates a fresh session (different endpoint/auth)
 - BYOK models are excluded from auto-fallback chains unless explicitly in `configFallbacks`
 - Provider config changes are hot-reloadable via `/reload config`

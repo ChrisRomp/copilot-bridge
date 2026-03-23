@@ -1454,8 +1454,8 @@ export class SessionManager {
       usedModel = result.usedModel;
       didFallback = result.didFallback;
     } catch (err: any) {
-      // Enhance error message with BYOK context
-      if (providerName) {
+      // Enhance error message with BYOK context (only when provider actually resolved)
+      if (providerName && sdkProvider) {
         const msg = String(err?.message ?? err);
         const provConfig = getConfig().providers?.[providerName];
         if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('fetch failed')) {
