@@ -207,6 +207,16 @@ Check that the provider service is running and the `baseUrl` is correct. Use `/p
 
 Verify your API key environment variable is set and the value is correct. Check with `/provider` to see the configured auth method.
 
+**Auth headers by provider type:**
+
+| `type` | Auth method | Header sent |
+|--------|-------------|-------------|
+| `"openai"` (default) | `apiKeyEnv` / `bearerTokenEnv` | `Authorization: Bearer <token>` |
+| `"azure"` | `apiKeyEnv` | `api-key: <key>` |
+| `"anthropic"` | `apiKeyEnv` | `x-api-key: <key>` |
+
+If you get 401 errors, make sure you're using the right `type` for your provider. Azure endpoints require `type: "azure"` to send the `api-key` header — using the default `"openai"` type sends a `Bearer` token which Azure rejects.
+
 ### Model not found
 
 ```
@@ -214,6 +224,40 @@ Verify your API key environment variable is set and the value is correct. Check 
 ```
 
 Check the model ID matches what the provider expects. For Ollama, model IDs include the tag (e.g., `qwen3:8b`, not just `qwen3`). Use `/provider test <name>` to see available remote models.
+
+### Azure 404 Not Found
+
+This is the most common Azure issue. The SDK constructs Azure URLs using a specific pattern, and mismatches cause 404s.
+
+**How the SDK builds Azure URLs:**
+
+The SDK constructs the final URL as: `{baseUrl}/openai/deployments/{model.id}/{endpoint}?api-version={apiVersion}`
+
+- If `baseUrl` already contains `/openai/`, the SDK uses it as-is
+- If `baseUrl` does not contain `/openai/`, the SDK strips it to just the origin (scheme + host) and appends `/openai`
+- The `model.id` in your config becomes the Azure deployment name in the URL path
+
+**Common causes:**
+
+1. **Wrong `baseUrl` format** — use just the host, no path segments:
+
+   ✅ `"baseUrl": "https://myco.openai.azure.com"`
+   ❌ `"baseUrl": "https://myco.openai.azure.com/v1"`
+   ❌ `"baseUrl": "https://myco.openai.azure.com/openai/deployments/gpt-4o"`
+
+2. **Deployment name mismatch** — the `model.id` must exactly match your deployment name in Azure. If your Azure deployment is named `gpt-4o-2024` but your config has `"id": "gpt-4o"`, the SDK will request `/deployments/gpt-4o/` which doesn't exist.
+
+3. **Wrong `apiVersion`** — Azure deployments support specific API versions. If omitted, the SDK defaults to `"2024-10-21"`. Check your Azure portal for supported versions and set explicitly:
+
+   ```json
+   "azure": { "apiVersion": "2025-04-01-preview" }
+   ```
+
+4. **Non-standard Azure gateways** — some Azure AI Foundry gateways don't use the `/deployments/{model}/` URL pattern. The SDK always constructs this path for `type: "azure"`, so these gateways may need `type: "openai"` instead (though this changes the auth header — see Authentication above).
+
+### Tools not executing (raw XML/JSON output)
+
+If the agent outputs raw tool call markup instead of executing tools, the model doesn't support structured function calling. Known incompatible models: DeepSeek, some smaller/fine-tuned models. Use models that support OpenAI-compatible `tool_calls` (GPT-4o, GPT-4.1, Llama 3.3, Phi-4, Qwen 3).
 
 ### Context window showing wrong value
 

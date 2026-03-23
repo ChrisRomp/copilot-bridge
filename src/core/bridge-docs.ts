@@ -670,6 +670,29 @@ Providers are configured under the \`"providers"\` key in \`config.json\`:
 - Provider config changes apply on \`/reload config\` — no bridge restart needed
 ${adminNote}
 
+## Troubleshooting
+
+### Azure 404 Not Found
+
+The SDK constructs Azure URLs as: \`{baseUrl}/openai/deployments/{model.id}/{endpoint}?api-version={apiVersion}\`
+
+- If \`baseUrl\` contains \`/openai/\`, it's used as-is; otherwise the SDK strips to origin and appends \`/openai\`
+- \`model.id\` becomes the deployment name in the URL — must match your Azure deployment exactly
+- \`apiVersion\` defaults to \`"2024-10-21"\` if omitted; check Azure portal for supported versions
+
+Common fixes:
+1. Use just the host for \`baseUrl\`: \`https://myco.openai.azure.com\` (no \`/v1\` or \`/openai/deployments/...\`)
+2. Ensure \`model.id\` matches the Azure deployment name exactly
+3. Set \`azure.apiVersion\` explicitly if the default doesn't work
+
+### Auth Header Mismatch
+
+Azure uses \`api-key\` header, OpenAI uses \`Authorization: Bearer\`. Set \`type: "azure"\` for Azure endpoints — default \`"openai"\` sends the wrong header.
+
+### Tools Not Executing
+
+If the agent outputs raw XML/JSON instead of running tools, the model doesn't support structured function calling. Use GPT-4o, GPT-4.1, Llama 3.3, Phi-4, or Qwen 3 instead of DeepSeek or small fine-tuned models.
+
 ## Source
 - Provider config/validation: \`src/config.ts\`
 - Model resolution: \`src/core/command-handler.ts\` (resolveModel, parseProviderModel)
