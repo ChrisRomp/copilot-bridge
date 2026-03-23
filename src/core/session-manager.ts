@@ -902,10 +902,10 @@ export class SessionManager {
     const providerChanged = currentProvider !== newProvider;
 
     if (providerChanged) {
-      // Provider change requires session recreation (different endpoint/auth)
+      // Provider change requires a fresh session (different endpoint/auth)
       log.info(`Provider switch ${currentProvider ?? 'copilot'} → ${newProvider ?? 'copilot'} for channel ${channelId.slice(0, 8)}...`);
       setChannelPrefs(channelId, { model, provider: newProvider });
-      await this.reloadSession(channelId);
+      await this.newSession(channelId);
     } else {
       // Same provider — use RPC model switch
       const sessionId = this.channelSessions.get(channelId);

@@ -77,6 +77,7 @@ export function resolveModel(input: string, models: ModelInfo[], providerNames?:
   // Check for provider:model syntax — if prefix is a known provider, scope to that provider's models
   const parsed = parseProviderModel(lower, providers);
   if (parsed) {
+    if (!parsed.bareModel) return { error: '⚠️ Please specify a model name after the provider prefix.' };
     const prefixed = `${parsed.provider}:${parsed.bareModel}`;
     const scoped = models.filter(m => m.id.toLowerCase().startsWith(`${parsed.provider.toLowerCase()}:`));
     // Exact match on full prefixed ID
@@ -374,7 +375,11 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       }
 
       if (!models || models.length === 0) {
-        return { handled: true, action: 'switch_model', payload: { modelId: parsed.args, provider: null }, response: `🔄 Switching model to **${parsed.args}**...` };
+        // Best-effort provider parsing when model list is unavailable
+        const parsedInput = parseProviderModel(parsed.args, providerNames);
+        const fallbackProvider = parsedInput?.provider ?? null;
+        const fallbackModelId = parsedInput?.bareModel ?? parsed.args;
+        return { handled: true, action: 'switch_model', payload: { modelId: fallbackModelId, provider: fallbackProvider }, response: `🔄 Switching model to **${parsed.args}**...` };
       }
       const result = resolveModel(parsed.args, models, providerNames);
       if ('error' in result) {

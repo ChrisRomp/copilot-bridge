@@ -112,6 +112,14 @@ describe('resolveModel (provider-aware)', () => {
     const result = resolveModel('', allModels, providerNames);
     expect('error' in result).toBe(true);
   });
+
+  it('returns error for provider prefix with no model name', () => {
+    const result = resolveModel('ollama-local:', allModels, providerNames);
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toContain('model name after the provider');
+    }
+  });
 });
 
 // --- /model listing ---
@@ -215,6 +223,12 @@ describe('/model switch (provider-aware)', () => {
     const result = handleCommand(channelId, '/model some-model', sessionInfo, prefs, meta, [], undefined, null, providers);
     expect(result.action).toBe('switch_model');
     expect(result.payload).toEqual({ modelId: 'some-model', provider: null });
+  });
+
+  it('parses provider prefix when models list unavailable', () => {
+    const result = handleCommand(channelId, '/model ollama-local:qwen3:8b', sessionInfo, prefs, meta, [], undefined, null, providers);
+    expect(result.action).toBe('switch_model');
+    expect(result.payload).toEqual({ modelId: 'qwen3:8b', provider: 'ollama-local' });
   });
 });
 
