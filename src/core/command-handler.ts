@@ -359,10 +359,11 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       };
       const sessionMode = prefs?.sessionMode ?? 'interactive';
       const modeDisplay = modeLabels[sessionMode] ?? '🛡️ Interactive';
+      const providerDisplay = prefs?.provider ? `${prefs.provider}:` : '';
       const lines = [
         '📊 **Session Status**',
         `• Session: \`${sessionInfo.sessionId.slice(0, 8)}...\``,
-        `• Model: **${modelDisplay}**`,
+        `• Model: **${providerDisplay}${modelDisplay}**`,
         `• Agent: ${sessionInfo.agent ? `**${sessionInfo.agent}**` : 'Default (Copilot)'}`,
         `• Mode: ${modeDisplay}`,
         `• Yolo: ${(effectivePrefs?.permissionMode ?? prefs?.permissionMode) === 'autopilot' ? '🤠 On' : '🛡️ Off'}`,
