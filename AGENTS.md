@@ -94,7 +94,18 @@ All slash commands are parsed in `command-handler.ts`. Commands starting with `/
 
 ### Fuzzy Model Matching
 
-`resolveModel()` does exact → substring → token matching against model IDs and names. `pickBestMatch()` prefers shorter IDs (base model over specialized variants like `-1m`). Always validate models against the live `listModels()` response before passing to the SDK.
+`resolveModel()` does exact → substring → token matching against model IDs and names, with provider awareness. If the input contains a known provider prefix (e.g., `ollama-local:qwen3:8b`), resolution is scoped to that provider's models. Bare model IDs resolve Copilot first, then BYOK providers in config order. `pickBestMatch()` prefers shorter IDs (base model over specialized variants like `-1m`). Always validate models against the live `listModels()` response before passing to the SDK.
+
+### BYOK Providers
+
+External model providers are configured under `providers` in `config.json`. Each provider has a name (used as prefix in model IDs), `baseUrl`, optional auth (`apiKeyEnv`/`bearerTokenEnv`), and a `models` array. Provider names cannot contain `:` or whitespace.
+
+- `resolveProviderConfig()` in `config.ts` resolves env vars to build SDK `ProviderConfig` at session creation time
+- `/model` listing groups models by provider (Copilot section first, then BYOK providers)
+- `/provider test <name>` hits the provider's `/v1/models` endpoint to verify connectivity
+- `switchModel()` in session-manager detects provider changes and creates a fresh session (different endpoint/auth)
+- BYOK models are excluded from auto-fallback chains unless explicitly in `configFallbacks`
+- Provider config changes are hot-reloadable via `/reload config`
 
 ### TypeScript
 

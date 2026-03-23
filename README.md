@@ -29,6 +29,7 @@ More screenshots [here](docs/screenshots.md).
 - **Streaming responses** — Edit-in-place message updates with throttling
 - **MCP & skills** — Auto-loads MCP servers and skill directories from Copilot config
 - **Fuzzy model matching** — `/model opus` resolves to `claude-opus-4.6` (mobile-friendly)
+- **Bring Your Own Key (BYOK)** — Connect your own providers (Ollama, Azure, Anthropic) alongside Copilot models
 - **Interactive permissions** — Approve/deny tool use via chat, or `/autopilot` for full autonomous mode
 - **Model fallback** — Automatic fallback to alternative models on capacity/availability errors
 - **Loop detection** — Detects and breaks tool call loops with user notification
@@ -95,12 +96,15 @@ See the [Setup Guide — Running as a Service](docs/setup.md#running-as-a-servic
 | `/skills enable <name...>` | | Enable skills for this channel (`all` for bulk) |
 | `/skills disable <name...>` | | Disable skills for this channel (`all` for bulk) |
 | `/mcp` | | Show MCP servers and their source |
+| `/provider` | `/providers` | List configured BYOK providers |
+| `/provider test <name>` | | Test provider connectivity |
 | `/streamer-mode` | `/on-air` | Toggle streamer mode (hides preview/internal models) |
 | `/help` | | Show common commands; `/help all` for full list |
 
 ## Documentation
 
 - **[Configuration](docs/configuration.md)** — Platforms, channels, permissions, defaults
+- **[Bring Your Own Key (BYOK)](docs/byok.md)** — Connect external model providers (Ollama, Azure, Anthropic)
 - **[Workspaces & Agents](docs/workspaces.md)** — Workspace system, .env secrets, templates, agent onboarding
 - **[Architecture](docs/architecture.md)** — Source layout, message flow, adapter pattern, persistence
 
