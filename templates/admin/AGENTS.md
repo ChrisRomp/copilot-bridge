@@ -195,7 +195,7 @@ Users may ask you to add, remove, or modify BYOK (Bring Your Own Key) providers.
 **Adding a provider:**
 1. Back up config.json (see above)
 2. Add an entry under `"providers"` with required fields:
-   - `type`: `"openai"` (OpenAI-compatible, including Ollama) or `"azure"`
+   - `type`: `"openai"` (default, OpenAI-compatible, including Ollama), `"azure"`, or `"anthropic"`
    - `baseUrl`: The API endpoint URL
    - `models`: Array of `{ "id": "model-id", "name": "Display Name" }`. Models can also have a `wireApi` override.
    - `apiKeyEnv` (optional): Environment variable name holding the API key

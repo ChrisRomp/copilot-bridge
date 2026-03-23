@@ -420,7 +420,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         for (const name of provNames) {
           const p = providerMap[name];
           const modelCount = p.models?.length ?? 0;
-          const authMethod = p.apiKeyEnv ? `apiKeyEnv: ${p.apiKeyEnv}` : p.bearerTokenEnv ? `bearerTokenEnv: ${p.bearerTokenEnv}` : p.apiKey ? 'apiKey (inline)' : 'none';
+          const authMethod = p.apiKeyEnv ? `apiKeyEnv: ${p.apiKeyEnv}` : p.bearerTokenEnv ? `bearerTokenEnv: ${p.bearerTokenEnv}` : p.apiKey ? 'apiKey (inline)' : p.bearerToken ? 'bearerToken (inline)' : 'none';
           lines.push(`**${name}**`);
           lines.push(`  URL: \`${p.baseUrl}\``);
           lines.push(`  Type: ${p.type ?? 'openai'} · Auth: ${authMethod} · Models: ${modelCount}`);

@@ -87,12 +87,14 @@ Provider names must be non-empty and cannot contain `:` or whitespace. They're u
 
 ```json
 {
-  "ollama": {
-    "baseUrl": "http://localhost:11434/v1",
-    "models": [
-      { "id": "qwen3:8b", "name": "Qwen 3 8B", "contextWindow": 32768 },
-      { "id": "qwen3:14b", "name": "Qwen 3 14B" }
-    ]
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://localhost:11434/v1",
+      "models": [
+        { "id": "qwen3:8b", "name": "Qwen 3 8B", "contextWindow": 32768 },
+        { "id": "qwen3:14b", "name": "Qwen 3 14B" }
+      ]
+    }
   }
 }
 ```
@@ -103,15 +105,17 @@ No authentication needed for local Ollama instances.
 
 ```json
 {
-  "work-azure": {
-    "type": "azure",
-    "baseUrl": "https://myco.openai.azure.com",
-    "apiKeyEnv": "AZURE_OPENAI_KEY",
-    "azure": { "apiVersion": "2024-10-21" },
-    "models": [
-      { "id": "gpt-4o", "name": "GPT-4o" },
-      { "id": "gpt-5.2-codex", "name": "GPT-5.2 Codex", "wireApi": "responses" }
-    ]
+  "providers": {
+    "work-azure": {
+      "type": "azure",
+      "baseUrl": "https://myco.openai.azure.com",
+      "apiKeyEnv": "AZURE_OPENAI_KEY",
+      "azure": { "apiVersion": "2024-10-21" },
+      "models": [
+        { "id": "gpt-4o", "name": "GPT-4o" },
+        { "id": "gpt-5.2-codex", "name": "GPT-5.2 Codex", "wireApi": "responses" }
+      ]
+    }
   }
 }
 ```
@@ -120,13 +124,15 @@ No authentication needed for local Ollama instances.
 
 ```json
 {
-  "anthropic": {
-    "type": "anthropic",
-    "baseUrl": "https://api.anthropic.com/v1",
-    "apiKeyEnv": "ANTHROPIC_API_KEY",
-    "models": [
-      { "id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4" }
-    ]
+  "providers": {
+    "anthropic": {
+      "type": "anthropic",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "models": [
+        { "id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4" }
+      ]
+    }
   }
 }
 ```

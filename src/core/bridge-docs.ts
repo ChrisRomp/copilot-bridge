@@ -631,7 +631,7 @@ Providers are configured under the \`"providers"\` key in \`config.json\`:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| \`type\` | yes | \`"openai"\` (OpenAI-compatible) or \`"azure"\` |
+| \`type\` | no | \`"openai"\` (default, OpenAI-compatible), \`"azure"\`, or \`"anthropic"\` |
 | \`baseUrl\` | yes | API endpoint URL |
 | \`apiKeyEnv\` | no | Environment variable holding the API key (omit for keyless, e.g., local Ollama) |
 | \`wireApi\` | no | Default wire protocol for all models: \`"completions"\` (default) or \`"responses"\`. Can be overridden per model. |
