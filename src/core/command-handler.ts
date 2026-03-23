@@ -175,12 +175,11 @@ function formatModelListing(models: ModelInfo[], providerNames: string[], curren
   // Determine if the current model matches a given model entry
   const isCurrent = (m: ModelInfo): boolean => {
     if (!currentModel) return false;
-    if (m.id === currentModel) return true;
-    // For BYOK: currentModel is bare (e.g., "qwen3:8b"), m.id is prefixed (e.g., "ollama-local:qwen3:8b")
     if (currentProvider) {
+      // BYOK active: only match the prefixed BYOK entry, not the Copilot model with the same bare name
       return m.id === `${currentProvider}:${currentModel}`;
     }
-    return false;
+    return m.id === currentModel;
   };
 
   const formatRow = (m: ModelInfo, showBilling: boolean): string => {
