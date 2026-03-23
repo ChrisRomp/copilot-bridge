@@ -102,10 +102,10 @@
       "type": "azure",
       "baseUrl": "https://myco.openai.azure.com",
       "apiKeyEnv": "AZURE_OPENAI_KEY",
-      "wireApi": "responses",
       "azure": { "apiVersion": "2024-10-21" },
       "models": [
-        { "id": "gpt-5.2-codex", "name": "GPT-5.2 Codex" }
+        { "id": "gpt-4o", "name": "GPT-4o" },
+        { "id": "gpt-5.2-codex", "name": "GPT-5.2 Codex", "wireApi": "responses" }
       ]
     }
   }

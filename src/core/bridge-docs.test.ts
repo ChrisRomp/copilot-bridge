@@ -32,7 +32,7 @@ function makeReq(overrides: Partial<DocRequest> = {}): DocRequest {
 describe('isValidTopic', () => {
   it('accepts all known topics', () => {
     const topics = ['overview', 'commands', 'config', 'mcp', 'permissions', 'workspaces',
-      'hooks', 'skills', 'inter-agent', 'scheduling', 'troubleshooting', 'status'];
+      'hooks', 'skills', 'inter-agent', 'scheduling', 'providers', 'troubleshooting', 'status'];
     for (const t of topics) {
       expect(isValidTopic(t)).toBe(true);
     }
@@ -151,6 +151,27 @@ describe('getBridgeDocs', () => {
     });
   });
 
+  describe('providers topic', () => {
+    it('returns BYOK provider content', () => {
+      const result = getBridgeDocs(makeReq({ topic: 'providers' }));
+      expect(result).toContain('BYOK');
+      expect(result).toContain('providers');
+      expect(result).toContain('Source');
+    });
+
+    it('shows admin management instructions for admin', () => {
+      const result = getBridgeDocs(makeReq({ topic: 'providers', isAdmin: true }));
+      expect(result).toContain('Managing Providers (Admin)');
+      expect(result).toContain('back up');
+    });
+
+    it('defers to admin for non-admin', () => {
+      const result = getBridgeDocs(makeReq({ topic: 'providers', isAdmin: false }));
+      expect(result).toContain('ask the admin bot');
+      expect(result).not.toContain('Managing Providers (Admin)');
+    });
+  });
+
   describe('troubleshooting topic', () => {
     it('includes filing issues guidance', () => {
       const result = getBridgeDocs(makeReq({ topic: 'troubleshooting' }));
@@ -191,7 +212,7 @@ describe('getBridgeDocs', () => {
   describe('source pointers', () => {
     it('all static topics include source pointers', () => {
       const topics = ['overview', 'commands', 'config', 'mcp', 'permissions', 'workspaces',
-        'hooks', 'skills', 'inter-agent', 'scheduling', 'troubleshooting', 'status'];
+        'hooks', 'skills', 'inter-agent', 'scheduling', 'providers', 'troubleshooting', 'status'];
       for (const topic of topics) {
         const result = getBridgeDocs(makeReq({ topic }));
         expect(result, `topic "${topic}" should include Source section`).toContain('Source');

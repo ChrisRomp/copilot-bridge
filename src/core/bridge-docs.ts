@@ -13,7 +13,7 @@ const log = createLogger('bridge-docs');
 
 const TOPICS = [
   'overview', 'commands', 'config', 'mcp', 'permissions', 'workspaces',
-  'hooks', 'skills', 'inter-agent', 'scheduling', 'troubleshooting', 'status',
+  'hooks', 'skills', 'inter-agent', 'scheduling', 'providers', 'troubleshooting', 'status',
 ] as const;
 
 export type DocTopic = typeof TOPICS[number];
@@ -80,6 +80,7 @@ copilot-bridge connects GitHub Copilot CLI sessions to messaging platforms (Matt
 - **Inter-agent communication** — bots can query each other via \`ask_agent\` tool
 - **Task scheduling** — cron and one-off scheduled prompts
 - **Model fallback** — automatic failover on model capacity/availability errors
+- **BYOK providers** — bring your own API keys for external model providers (Ollama, Azure, OpenAI-compatible)
 - **Infinite sessions** — SDK-managed context compaction for long conversations
 
 ## Architecture
@@ -118,6 +119,9 @@ Commands are intercepted by the bridge before reaching the Copilot session. The 
 | Command | Description |
 |---------|-------------|
 | \`/model [name]\` | Show available models or switch model |
+| \`/model <provider>:<model>\` | Switch to a BYOK provider model |
+| \`/provider\` | List configured BYOK providers |
+| \`/provider test <name>\` | Test provider connectivity |
 | \`/agent <name>\` | Switch to a named agent persona |
 | \`/agents\` | List available agent definitions |
 | \`/reasoning [level]\` | Set reasoning effort (low/medium/high/xhigh) |
@@ -179,6 +183,7 @@ ${editNote}
 | \`infiniteSessions\` | boolean | Enable SDK context compaction (default: false) |
 | \`permissions\` | object | Permission rules (allow/deny patterns) |
 | \`interAgent\` | object | Inter-agent communication settings |
+| \`providers\` | object | BYOK provider configs (use \`fetch_copilot_bridge_documentation({ topic: "providers" })\` for details) |
 
 ## Defaults Section (per-channel overridable)
 
@@ -567,6 +572,135 @@ User command: \`/schedule\` or \`/tasks\` lists all scheduled tasks.
 }
 
 // ---------------------------------------------------------------------------
+// Topic: providers
+// ---------------------------------------------------------------------------
+
+function topicProviders(isAdmin: boolean): string {
+  const adminNote = isAdmin
+    ? `\n\n## Managing Providers (Admin)
+
+As the admin agent, you can add/remove/edit providers in \`config.json\`:
+
+1. **Always back up first**: \`cp ~/.copilot-bridge/config.json ~/.copilot-bridge/config.json.bak.$(date +%s)\`
+2. Edit the \`"providers"\` key in config.json
+3. Run \`/reload config\` in the target channel to apply (no restart needed)
+
+### Adding a Provider
+Add an entry under \`"providers"\` with: \`type\`, \`baseUrl\`, optional \`apiKeyEnv\`, and \`models\` array.
+
+### Removing a Provider
+Delete the provider key from \`"providers"\`. Channels using that provider will fall back to Copilot on next session create.
+
+### Validating
+After editing, the user can run \`/provider test <name>\` to verify connectivity.`
+    : '\n\nTo add or remove providers, ask the admin bot or edit `config.json` directly, then `/reload config`.';
+
+  return `# BYOK Providers
+
+Bring Your Own Key (BYOK) lets you use external model providers alongside GitHub Copilot models. Supported backends: OpenAI-compatible APIs, Azure OpenAI, Ollama, vLLM, and any OpenAI-compatible endpoint.
+
+## Config Schema
+
+Providers are configured under the \`"providers"\` key in \`config.json\`:
+
+\`\`\`json
+{
+  "providers": {
+    "ollama": {
+      "type": "openai",
+      "baseUrl": "http://localhost:11434/v1",
+      "models": [
+        { "id": "qwen3:8b", "name": "Qwen 3 8B" }
+      ]
+    },
+    "work-azure": {
+      "type": "azure",
+      "baseUrl": "https://myco.openai.azure.com",
+      "apiKeyEnv": "AZURE_OPENAI_KEY",
+      "azure": { "apiVersion": "2024-10-21" },
+      "models": [
+        { "id": "gpt-4o", "name": "GPT-4o" },
+        { "id": "gpt-5.2-codex", "name": "GPT-5.2 Codex", "wireApi": "responses" }
+      ]
+    }
+  }
+}
+\`\`\`
+
+### Provider Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| \`type\` | no | \`"openai"\` (default, OpenAI-compatible), \`"azure"\`, or \`"anthropic"\` |
+| \`baseUrl\` | yes | API endpoint URL |
+| \`apiKeyEnv\` | no | Environment variable holding the API key (omit for keyless, e.g., local Ollama) |
+| \`wireApi\` | no | Default wire protocol for all models: \`"completions"\` (default) or \`"responses"\`. Can be overridden per model. |
+| \`azure\` | azure only | \`{ "apiVersion": "..." }\` |
+| \`models\` | yes | Array of model entries. Each has \`id\` (required), \`name\`, and optional \`wireApi\` override. |
+
+### Wire API & Model Compatibility
+
+\`wireApi\` can be set at provider level (applies to all models) or per model (overrides provider default).
+
+- \`"completions"\` (Chat Completions API) — works with most models: GPT-4o, GPT-4.1, Llama, Phi, Qwen, etc.
+- \`"responses"\` (Responses API) — **required** for Codex models (\`gpt-5.x-codex-*\`)
+- Models must support **structured function calling** (OpenAI-compatible \`tool_calls\`). Models that emit tool calls as raw text (e.g., DeepSeek, some smaller models) will not work correctly.
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| \`/provider\` | List all configured providers |
+| \`/provider test <name>\` | Test connectivity and validate models |
+| \`/model\` | Lists all models grouped by provider |
+| \`/model <provider>\` | Filter to one provider's models |
+| \`/model <provider>:<model>\` | Switch to a specific provider model |
+
+## Model Resolution
+
+- \`/model qwen3:8b\` — bare ID resolves Copilot first, then BYOK providers
+- \`/model ollama:qwen3:8b\` — provider-prefixed ID targets that provider directly
+- Provider names are case-insensitive; model IDs split on the first colon only
+
+## Session Behavior
+
+- Switching between Copilot and BYOK (or between BYOK providers) creates a fresh session
+- Switching models within the same provider reuses the existing session
+- BYOK models are excluded from automatic fallback chains (only Copilot models auto-fallback)
+- Provider config changes apply on \`/reload config\` — no bridge restart needed
+${adminNote}
+
+## Troubleshooting
+
+### Azure 404 Not Found
+
+The SDK constructs Azure URLs as: \`{baseUrl}/openai/deployments/{model.id}/{endpoint}?api-version={apiVersion}\`
+
+- If \`baseUrl\` contains \`/openai/\`, it's used as-is; otherwise the SDK strips to origin and appends \`/openai\`
+- \`model.id\` becomes the deployment name in the URL — must match your Azure deployment exactly
+- \`apiVersion\` defaults to \`"2024-10-21"\` if omitted; check Azure portal for supported versions
+
+Common fixes:
+1. Use just the host for \`baseUrl\`: \`https://myco.openai.azure.com\` (no \`/v1\` or \`/openai/deployments/...\`)
+2. Ensure \`model.id\` matches the Azure deployment name exactly
+3. Set \`azure.apiVersion\` explicitly if the default doesn't work
+
+### Auth Header Mismatch
+
+Azure uses \`api-key\` header, OpenAI uses \`Authorization: Bearer\`. Set \`type: "azure"\` for Azure endpoints — default \`"openai"\` sends the wrong header.
+
+### Tools Not Executing
+
+If the agent outputs raw XML/JSON instead of running tools, the model doesn't support structured function calling. Use GPT-4o, GPT-4.1, Llama 3.3, Phi-4, or Qwen 3 instead of DeepSeek or small fine-tuned models.
+
+## Source
+- Provider config/validation: \`src/config.ts\`
+- Model resolution: \`src/core/command-handler.ts\` (resolveModel, parseProviderModel)
+- Provider routing: \`src/core/session-manager.ts\` (createNewSession, switchModel)
+- Docs: \`docs/byok.md\``;
+}
+
+// ---------------------------------------------------------------------------
 // Topic: troubleshooting
 // ---------------------------------------------------------------------------
 
@@ -708,6 +842,7 @@ ${topicList()}`;
     case 'skills': return topicSkills();
     case 'inter-agent': return topicInterAgent();
     case 'scheduling': return topicScheduling();
+    case 'providers': return topicProviders(req.isAdmin);
     case 'troubleshooting': return topicTroubleshooting(req.isAdmin);
     case 'status': return topicStatus({ channelId: req.channelId, model: req.model, sessionId: req.sessionId });
   }

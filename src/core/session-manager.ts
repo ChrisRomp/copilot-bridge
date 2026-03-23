@@ -915,6 +915,18 @@ export class SessionManager {
         setChannelPrefs(channelId, { model: prevModel, provider: currentProvider });
         throw err;
       }
+    } else if (newProvider && this.wireApiChanged(newProvider, currentPrefs.model ?? '', model)) {
+      // Same provider but wireApi differs between models — need fresh session
+      log.info(`wireApi change for provider ${newProvider}, model ${currentPrefs.model} → ${model} — creating new session`);
+      const prevModel = currentPrefs.model;
+      setChannelPrefs(channelId, { model, provider: newProvider });
+      try {
+        await this.newSession(channelId);
+      } catch (err) {
+        log.warn(`wireApi switch failed, reverting prefs:`, err);
+        setChannelPrefs(channelId, { model: prevModel, provider: currentProvider });
+        throw err;
+      }
     } else {
       // Same provider — use RPC model switch
       const sessionId = this.channelSessions.get(channelId);
@@ -939,6 +951,19 @@ export class SessionManager {
         this.cacheContextWindowTokens(channelId, model, models);
       }
     }).catch(() => { /* best-effort */ });
+  }
+
+  /** Check if two models on the same provider have different wireApi settings. */
+  private wireApiChanged(providerName: string, oldModel: string, newModel: string): boolean {
+    const providers = getConfig().providers;
+    if (!providers) return false;
+    const entry = providers[providerName];
+    if (!entry) return false;
+    const oldEntry = entry.models.find(m => m.id === oldModel);
+    const newEntry = entry.models.find(m => m.id === newModel);
+    const oldWire = oldEntry?.wireApi ?? entry.wireApi;
+    const newWire = newEntry?.wireApi ?? entry.wireApi;
+    return oldWire !== newWire;
   }
 
   /** Switch the agent for a channel's session. */
@@ -1369,7 +1394,7 @@ export class SessionManager {
     // Resolve BYOK provider if set in prefs
     const providerName = prefs.provider ?? null;
     const sdkProvider = providerName
-      ? resolveProviderConfig(providerName, getConfig().providers)
+      ? resolveProviderConfig(providerName, getConfig().providers, prefs.model ?? undefined)
       : undefined;
     if (providerName && !sdkProvider) {
       log.warn(`Provider "${providerName}" set for channel ${channelId} but not found in config — using Copilot`);
@@ -1413,13 +1438,39 @@ export class SessionManager {
     };
 
     const byokPrefixes = Object.keys(getConfig().providers ?? {});
-    const { result: session, usedModel, didFallback } = await tryWithFallback(
-      prefs.model,
-      availableModels,
-      configFallbacks,
-      createWithModel,
-      byokPrefixes,
-    );
+    let session: any;
+    let usedModel: string;
+    let didFallback: boolean;
+
+    try {
+      const result = await tryWithFallback(
+        prefs.model,
+        availableModels,
+        configFallbacks,
+        createWithModel,
+        byokPrefixes,
+      );
+      session = result.result;
+      usedModel = result.usedModel;
+      didFallback = result.didFallback;
+    } catch (err: any) {
+      // Enhance error message with BYOK context (only when provider actually resolved)
+      if (providerName && sdkProvider) {
+        const msg = String(err?.message ?? err);
+        const provConfig = getConfig().providers?.[providerName];
+        if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('fetch failed')) {
+          throw new Error(`Provider "${providerName}" is unreachable at ${provConfig?.baseUrl ?? 'unknown URL'}. Check that the service is running.`);
+        }
+        if (msg.includes('401') || msg.includes('403') || msg.includes('Unauthorized') || msg.includes('Forbidden')) {
+          throw new Error(`Provider "${providerName}" rejected authentication. Check your API key configuration.`);
+        }
+        if (msg.includes('404') || msg.includes('model not found') || msg.includes('does not exist')) {
+          throw new Error(`Model "${prefs.model}" not found on provider "${providerName}". Check the model ID in your config.`);
+        }
+        throw new Error(`Provider "${providerName}" error: ${msg}`);
+      }
+      throw err;
+    }
 
     this.sessionMcpServers.set(channelId, new Set(Object.keys(resolvedMcpServers)));
     this.sessionSkillDirs.set(channelId, new Set(skillDirectories));
@@ -1468,7 +1519,7 @@ export class SessionManager {
     // Resolve BYOK provider for resume
     const providerName = prefs.provider ?? null;
     let sdkProvider = providerName
-      ? resolveProviderConfig(providerName, getConfig().providers)
+      ? resolveProviderConfig(providerName, getConfig().providers, prefs.model ?? undefined)
       : undefined;
     if (providerName && !sdkProvider) {
       log.warn(`Provider "${providerName}" set for channel ${channelId} but not found in config — using Copilot`);
@@ -2362,8 +2413,8 @@ export class SessionManager {
         properties: {
           topic: {
             type: 'string',
-            enum: ['overview', 'commands', 'config', 'mcp', 'permissions', 'workspaces', 'hooks', 'skills', 'inter-agent', 'scheduling', 'troubleshooting', 'status'],
-            description: "Topic to query. 'overview' = what the bridge is and key features. 'commands' = common slash commands. 'config' = configuration options. 'mcp' = MCP server setup. 'permissions' = permission system. 'workspaces' = workspace structure. 'hooks' = tool hooks. 'skills' = skill discovery. 'inter-agent' = bot-to-bot communication. 'scheduling' = task scheduling. 'troubleshooting' = common issues. 'status' = live system state.",
+            enum: ['overview', 'commands', 'config', 'mcp', 'permissions', 'workspaces', 'hooks', 'skills', 'inter-agent', 'scheduling', 'providers', 'troubleshooting', 'status'],
+            description: "Topic to query. 'overview' = what the bridge is and key features. 'commands' = common slash commands. 'config' = configuration options. 'mcp' = MCP server setup. 'permissions' = permission system. 'workspaces' = workspace structure. 'hooks' = tool hooks. 'skills' = skill discovery. 'inter-agent' = bot-to-bot communication. 'scheduling' = task scheduling. 'providers' = BYOK provider setup and commands. 'troubleshooting' = common issues. 'status' = live system state.",
           },
         },
         required: [],

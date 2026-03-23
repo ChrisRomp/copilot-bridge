@@ -822,6 +822,73 @@ async function handleMidTurnMessage(
   try { adapter.addReaction?.(msg.postId, 'zap')?.catch(() => {}); } catch { /* best-effort */ }
 }
 
+/** Test BYOK provider connectivity by hitting its models endpoint. */
+async function testProviderConnectivity(providerName: string): Promise<string> {
+  const providers = getConfig().providers ?? {};
+  const provider = providers[providerName];
+  if (!provider) return `⚠️ Provider "${providerName}" not found in config.`;
+
+  const baseUrl = provider.baseUrl.replace(/\/+$/, '');
+  const modelsUrl = `${baseUrl}/models`;
+
+  // Resolve auth
+  let apiKey = provider.apiKey;
+  if (!apiKey && provider.apiKeyEnv) apiKey = process.env[provider.apiKeyEnv];
+  let bearerToken = provider.bearerToken;
+  if (!bearerToken && provider.bearerTokenEnv) bearerToken = process.env[provider.bearerTokenEnv];
+
+  const headers: Record<string, string> = { 'Accept': 'application/json' };
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+  else if (bearerToken) headers['Authorization'] = `Bearer ${bearerToken}`;
+
+  const startTime = Date.now();
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    const response = await fetch(modelsUrl, { headers, signal: controller.signal });
+    clearTimeout(timeout);
+    const elapsed = Date.now() - startTime;
+
+    if (!response.ok) {
+      return `❌ Provider "${providerName}" returned HTTP ${response.status} ${response.statusText}\n  URL: \`${modelsUrl}\``;
+    }
+
+    const data = await response.json() as any;
+    const modelCount = Array.isArray(data?.data) ? data.data.length : '?';
+    const configuredModels = provider.models.map(m => m.id);
+    const lines = [
+      `✅ Provider "${providerName}" is reachable (${elapsed}ms)`,
+      `  URL: \`${modelsUrl}\``,
+      `  Remote models: ${modelCount}`,
+      `  Configured: ${configuredModels.map(m => `\`${m}\``).join(', ')}`,
+    ];
+
+    // Check if configured models exist on the remote
+    if (Array.isArray(data?.data)) {
+      const remoteIds = new Set(data.data.map((m: any) => m.id));
+      const missing = configuredModels.filter(id => !remoteIds.has(id));
+      if (missing.length > 0) {
+        lines.push(`  ⚠️ Not found on remote: ${missing.map(m => `\`${m}\``).join(', ')}`);
+      }
+    }
+
+    return lines.join('\n');
+  } catch (err: any) {
+    const elapsed = Date.now() - startTime;
+    if (err?.name === 'AbortError') {
+      return `❌ Provider "${providerName}" timed out after 10s\n  URL: \`${modelsUrl}\``;
+    }
+    const msg = String(err?.message ?? err);
+    if (msg.includes('ECONNREFUSED')) {
+      return `❌ Provider "${providerName}" connection refused\n  URL: \`${modelsUrl}\`\n  Is the service running?`;
+    }
+    if (msg.includes('ENOTFOUND')) {
+      return `❌ Provider "${providerName}" hostname not found\n  URL: \`${modelsUrl}\``;
+    }
+    return `❌ Provider "${providerName}" failed (${elapsed}ms): ${msg}\n  URL: \`${modelsUrl}\``;
+  }
+}
+
 async function handleInboundMessage(
   msg: InboundMessage,
   sessionManager: SessionManager,
@@ -1097,6 +1164,18 @@ async function handleInboundMessage(
         } catch (err: any) {
           log.error(`Failed to switch agent on ${msg.channelId.slice(0, 8)}...:`, err);
           await adapter.updateMessage(msg.channelId, ackId, '❌ Failed to switch agent. Check logs for details.');
+        }
+        break;
+      }
+      case 'provider_test': {
+        const providerName = cmdResult.payload as string;
+        const ackId = await adapter.sendMessage(msg.channelId, cmdResult.response ?? `🔄 Testing provider "${providerName}"...`, { threadRootId: threadRoot });
+        try {
+          const result = await testProviderConnectivity(providerName);
+          await adapter.updateMessage(msg.channelId, ackId, result);
+        } catch (err: any) {
+          log.error(`Provider test failed for "${providerName}":`, err);
+          await adapter.updateMessage(msg.channelId, ackId, `❌ Provider test failed: ${err?.message ?? 'unknown error'}`);
         }
         break;
       }

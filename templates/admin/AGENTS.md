@@ -188,6 +188,42 @@ A bridge restart is needed for removals to take effect.
 - Channel mappings and permissions changes also require a restart
 - Per-channel preferences (model, verbose, etc.) are stored in SQLite and don't need restarts — users change them via slash commands
 
+### BYOK Provider Management
+
+Users may ask you to add, remove, or modify BYOK (Bring Your Own Key) providers. Providers are configured under the `"providers"` key in `config.json`.
+
+**Adding a provider:**
+1. Back up config.json (see above)
+2. Add an entry under `"providers"` with required fields:
+   - `type`: `"openai"` (default, OpenAI-compatible, including Ollama), `"azure"`, or `"anthropic"`
+   - `baseUrl`: The API endpoint URL
+   - `models`: Array of `{ "id": "model-id", "name": "Display Name" }`. Models can also have a `wireApi` override.
+   - `apiKeyEnv` (optional): Environment variable name holding the API key
+   - `wireApi` (optional): Default wire protocol for all models — `"completions"` (default) or `"responses"`. Can be overridden per model.
+   - `azure` (Azure only): `{ "apiVersion": "2024-10-21" }`
+3. Tell the user to run `/reload config` in their channel
+
+**Wire API and model compatibility:**
+- `"completions"` (Chat Completions API) — works with most models: GPT-4o, GPT-4.1, Llama, Phi, Qwen, etc.
+- `"responses"` (Responses API) — required for Codex models (gpt-5.x-codex-*)
+- Set `wireApi` on the **model entry** when only specific models need it (e.g., one Codex model among several chat models on the same endpoint)
+- Models must support **structured function calling** (OpenAI-compatible tool_calls). Models that emit tool calls as raw text (e.g., DeepSeek, some smaller models) will not work correctly with the bridge — they'll output XML/JSON tool markup instead of executing tools.
+- When in doubt, ask the user what model they want and recommend `"responses"` for Codex models, `"completions"` for everything else.
+
+**Removing a provider:**
+1. Back up config.json
+2. Delete the provider key from `"providers"`
+3. Tell the user to run `/reload config` — channels using that provider will fall back to Copilot
+
+**Validation rules:**
+- Provider names must not contain `:` or whitespace (they're used as model ID prefixes)
+- Each provider must have at least one model in the `models` array
+- If `apiKeyEnv` is set, the env variable must exist at runtime
+
+**No restart needed** — provider config changes take effect on `/reload config`.
+
+After making changes, suggest the user run `/provider test <name>` to verify connectivity.
+
 ## Bridge Architecture (Reference)
 
 ```

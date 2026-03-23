@@ -156,6 +156,33 @@ describe('BYOK provider config validation', () => {
     expect(() => loadConfig(filePath)).toThrow(/wireApi must be/);
   });
 
+  it('rejects invalid model-level wireApi value', () => {
+    const filePath = writeConfig({
+      ...minimalConfig,
+      providers: {
+        bad: {
+          baseUrl: 'http://localhost',
+          models: [{ id: 'm1', wireApi: 'invalid' }],
+        },
+      },
+    });
+    expect(() => loadConfig(filePath)).toThrow(/model "m1" wireApi must be/);
+  });
+
+  it('accepts valid model-level wireApi value', () => {
+    const filePath = writeConfig({
+      ...minimalConfig,
+      providers: {
+        good: {
+          baseUrl: 'http://localhost',
+          models: [{ id: 'm1', wireApi: 'responses' }],
+        },
+      },
+    });
+    const config = loadConfig(filePath);
+    expect(config.providers!.good.models[0].wireApi).toBe('responses');
+  });
+
   it('rejects providers that is not an object', () => {
     const filePath = writeConfig({
       ...minimalConfig,
@@ -356,6 +383,36 @@ describe('resolveProviderConfig', () => {
     expect(result!.wireApi).toBeUndefined();
     expect(result!.azure).toBeUndefined();
     expect(result!.bearerToken).toBeUndefined();
+  });
+
+  it('applies model-level wireApi override', () => {
+    const provs: Record<string, BridgeProviderConfig> = {
+      mixed: {
+        type: 'azure',
+        baseUrl: 'https://myco.openai.azure.com',
+        wireApi: 'completions',
+        azure: { apiVersion: '2024-10-21' },
+        models: [
+          { id: 'gpt-4o', name: 'GPT-4o' },
+          { id: 'gpt-5.1-codex-mini', name: 'Codex Mini', wireApi: 'responses' },
+        ],
+      },
+    };
+    // Default model — uses provider-level wireApi
+    const base = resolveProviderConfig('mixed', provs, 'gpt-4o');
+    expect(base!.wireApi).toBe('completions');
+
+    // Codex model — model-level overrides to responses
+    const codex = resolveProviderConfig('mixed', provs, 'gpt-5.1-codex-mini');
+    expect(codex!.wireApi).toBe('responses');
+
+    // Unknown model — falls back to provider-level
+    const unknown = resolveProviderConfig('mixed', provs, 'nonexistent');
+    expect(unknown!.wireApi).toBe('completions');
+
+    // No model specified — uses provider-level
+    const noModel = resolveProviderConfig('mixed', provs);
+    expect(noModel!.wireApi).toBe('completions');
   });
 });
 

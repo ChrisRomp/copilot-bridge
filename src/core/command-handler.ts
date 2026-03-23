@@ -1,5 +1,6 @@
 import { setChannelPrefs, getChannelPrefs, getGlobalSetting, setGlobalSetting } from '../state/store.js';
 import { discoverAgentDefinitions, discoverAgentNames } from './inter-agent.js';
+import { isBotAdminAny } from '../config.js';
 import type { BridgeProviderConfig } from '../types.js';
 
 const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
@@ -41,7 +42,7 @@ export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'reload_session' | 'reload_config' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_deny' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills' | 'skill_toggle' | 'mcp' | 'plan' | 'implement';
+           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_deny' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills' | 'skill_toggle' | 'mcp' | 'plan' | 'implement' | 'provider_test';
   payload?: any;
 }
 
@@ -174,12 +175,11 @@ function formatModelListing(models: ModelInfo[], providerNames: string[], curren
   // Determine if the current model matches a given model entry
   const isCurrent = (m: ModelInfo): boolean => {
     if (!currentModel) return false;
-    if (m.id === currentModel) return true;
-    // For BYOK: currentModel is bare (e.g., "qwen3:8b"), m.id is prefixed (e.g., "ollama-local:qwen3:8b")
     if (currentProvider) {
+      // BYOK active: only match the prefixed BYOK entry, not the Copilot model with the same bare name
       return m.id === `${currentProvider}:${currentModel}`;
     }
-    return false;
+    return m.id === currentModel;
   };
 
   const formatRow = (m: ModelInfo, showBilling: boolean): string => {
@@ -403,6 +403,57 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         if (altList) response += `\n↳ Also matched: ${altList}`;
       }
       return { handled: true, action: 'switch_model', payload: { modelId: bareModelId, provider: resolvedProvider }, response };
+    }
+
+    case 'provider':
+    case 'providers': {
+      const providerMap = providers ?? {};
+      const provNames = Object.keys(providerMap);
+      const args = parsed.args?.trim();
+
+      if (!args) {
+        // List all providers
+        if (provNames.length === 0) {
+          return { handled: true, response: 'No BYOK providers configured.\n↳ Add providers in `config.json` under the `"providers"` key, then `/reload config`.' };
+        }
+        const lines = ['**Configured Providers**', ''];
+        for (const name of provNames) {
+          const p = providerMap[name];
+          const modelCount = p.models?.length ?? 0;
+          const authMethod = p.apiKeyEnv ? `apiKeyEnv: ${p.apiKeyEnv}` : p.bearerTokenEnv ? `bearerTokenEnv: ${p.bearerTokenEnv}` : p.apiKey ? 'apiKey (inline)' : p.bearerToken ? 'bearerToken (inline)' : 'none';
+          lines.push(`**${name}**`);
+          lines.push(`  URL: \`${p.baseUrl}\``);
+          lines.push(`  Type: ${p.type ?? 'openai'} · Auth: ${authMethod} · Models: ${modelCount}`);
+          lines.push(`  Models: ${p.models.map(m => `\`${m.id}\``).join(', ')}`);
+          lines.push('');
+        }
+        lines.push('↳ Use `/provider test <name>` to test connectivity');
+        lines.push('↳ Use `/model <provider>:<model>` to switch to a provider model');
+        return { handled: true, response: lines.join('\n') };
+      }
+
+      // /provider test <name>
+      const testMatch = args.match(/^test\s+(.+)$/i);
+      if (testMatch) {
+        const target = testMatch[1].trim();
+        const canonical = provNames.find(p => p.toLowerCase() === target.toLowerCase());
+        if (!canonical) {
+          return { handled: true, response: `⚠️ Unknown provider "${target}". Configured: ${provNames.join(', ')}` };
+        }
+        return { handled: true, action: 'provider_test', payload: canonical, response: `🔄 Testing provider "${canonical}"...` };
+      }
+
+      // /provider add|remove — guide to config file (admin can help)
+      if (/^(add|remove|delete)\b/i.test(args)) {
+        const botName = channelMeta?.bot;
+        const isAdmin = botName ? isBotAdminAny(botName) : false;
+        if (isAdmin) {
+          return { handled: true, response: `Sure — I can help with that. Tell me the provider details (name, base URL, auth, models) and I'll update \`config.json\` for you.` };
+        }
+        return { handled: true, response: 'Providers are managed in `config.json` under the `"providers"` key.\n↳ Ask the **admin** bot to add/remove providers, or edit the file directly, then `/reload config`.' };
+      }
+
+      return { handled: true, response: '⚠️ Unknown subcommand. Usage:\n  `/provider` — list providers\n  `/provider test <name>` — test connectivity\n  `/model <provider>:<model>` — switch model' };
     }
 
     case 'agent': {
@@ -687,6 +738,8 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/skills disable <name...>` — Disable skills for this channel',
           '`/skills enable|disable all` — Enable or disable all skills',
           '`/mcp` — Show MCP servers and their source',
+          '`/provider` — List configured BYOK providers',
+          '`/provider test <name>` — Test provider connectivity',
           '`/plan` — Toggle plan mode (on/off)',
           '`/plan show` — Show current plan',
           '`/plan summary` — Show plan summary',
