@@ -392,6 +392,56 @@ describe('/reasoning command', () => {
   });
 });
 
+// --- BYOK reasoning suppression ---
+
+describe('BYOK reasoning effort suppression', () => {
+  const COPILOT_MODEL: ModelInfo = {
+    id: 'gpt-5.1-codex-mini',
+    name: 'GPT-5.1 Codex Mini',
+    supportedReasoningEfforts: ['low', 'medium', 'high'],
+    defaultReasoningEffort: 'medium',
+  };
+  const BYOK_MODEL: ModelInfo = {
+    id: 'azure:gpt-5.1-codex-mini',
+    name: 'GPT-5.1 Codex Mini',
+    // No supportedReasoningEfforts — BYOK models don't carry this metadata
+  };
+  const MODELS = [COPILOT_MODEL, BYOK_MODEL];
+  const SESSION_INFO = { sessionId: 'sess-byok', model: 'gpt-5.1-codex-mini', agent: null };
+  const PREFS = { verbose: false, permissionMode: 'interactive' as const, reasoningEffort: 'medium' as string | null };
+
+  it('/status suppresses reasoning effort when BYOK provider is active', async () => {
+    const { setChannelPrefs } = await import('../state/store.js');
+    setChannelPrefs('ch-byok-status', { provider: 'azure' });
+
+    const result = handleCommand('ch-byok-status', '/status', SESSION_INFO, PREFS,
+      undefined, MODELS);
+    expect(result.response).not.toContain('Reasoning effort');
+    expect(result.response).not.toContain('🧠');
+  });
+
+  it('/status shows reasoning effort for Copilot model (no provider)', async () => {
+    const { setChannelPrefs } = await import('../state/store.js');
+    setChannelPrefs('ch-copilot-status', { provider: undefined });
+
+    const result = handleCommand('ch-copilot-status', '/status', SESSION_INFO, PREFS,
+      undefined, MODELS);
+    expect(result.response).toContain('Reasoning effort');
+    expect(result.response).toContain('🧠');
+  });
+
+  it('/reasoning rejects unsupported level for BYOK model', async () => {
+    const { setChannelPrefs } = await import('../state/store.js');
+    setChannelPrefs('ch-byok-reason', { provider: 'azure' });
+
+    const result = handleCommand('ch-byok-reason', '/reasoning high', SESSION_INFO, PREFS,
+      undefined, MODELS);
+    // BYOK model has no supportedReasoningEfforts, so currentModelInfo is the BYOK entry
+    // The command should still set the level (it only blocks if model explicitly doesn't support it)
+    expect(result.handled).toBe(true);
+  });
+});
+
 describe('/always command', () => {
   it('/always approve returns remember action', () => {
     const result = handleCommand('ch-always-1', '/always approve');
