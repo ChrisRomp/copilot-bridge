@@ -904,8 +904,17 @@ export class SessionManager {
     if (providerChanged) {
       // Provider change requires a fresh session (different endpoint/auth)
       log.info(`Provider switch ${currentProvider ?? 'copilot'} → ${newProvider ?? 'copilot'} for channel ${channelId.slice(0, 8)}...`);
+      // Set prefs before newSession so createNewSession picks up the new provider,
+      // but restore on failure so the channel isn't left in a broken state.
+      const prevModel = currentPrefs.model;
       setChannelPrefs(channelId, { model, provider: newProvider });
-      await this.newSession(channelId);
+      try {
+        await this.newSession(channelId);
+      } catch (err) {
+        log.warn(`Provider switch failed, reverting prefs:`, err);
+        setChannelPrefs(channelId, { model: prevModel, provider: currentProvider });
+        throw err;
+      }
     } else {
       // Same provider — use RPC model switch
       const sessionId = this.channelSessions.get(channelId);

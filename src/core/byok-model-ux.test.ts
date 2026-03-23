@@ -41,7 +41,7 @@ describe('parseProviderModel', () => {
 
   it('is case-insensitive on provider name', () => {
     const result = parseProviderModel('Ollama-Local:qwen3:8b', providerNames);
-    expect(result).toEqual({ provider: 'Ollama-Local', bareModel: 'qwen3:8b' });
+    expect(result).toEqual({ provider: 'ollama-local', bareModel: 'qwen3:8b' });
   });
 
   it('handles azure provider with simple model', () => {

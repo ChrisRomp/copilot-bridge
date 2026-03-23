@@ -54,8 +54,9 @@ export function parseProviderModel(input: string, providerNames: string[]): { pr
   const colonIdx = input.indexOf(':');
   if (colonIdx <= 0) return null;
   const prefix = input.slice(0, colonIdx);
-  if (providerNames.some(p => p.toLowerCase() === prefix.toLowerCase())) {
-    return { provider: prefix, bareModel: input.slice(colonIdx + 1) };
+  const canonical = providerNames.find(p => p.toLowerCase() === prefix.toLowerCase());
+  if (canonical) {
+    return { provider: canonical, bareModel: input.slice(colonIdx + 1) };
   }
   return null;
 }
