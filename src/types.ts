@@ -46,6 +46,26 @@ export interface PermissionsConfig {
   allowUrls?: string[];   // pre-approved URL domains
 }
 
+// BYOK provider model entry
+export interface ProviderModelEntry {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+}
+
+// BYOK provider configuration (user-facing, stored in config.json)
+export interface BridgeProviderConfig {
+  type?: 'openai' | 'azure' | 'anthropic';
+  baseUrl: string;
+  apiKeyEnv?: string;
+  apiKey?: string;
+  bearerTokenEnv?: string;
+  bearerToken?: string;
+  wireApi?: 'completions' | 'responses';
+  azure?: { apiVersion?: string };
+  models: ProviderModelEntry[];
+}
+
 // Full app config
 export interface AppConfig {
   platforms: Record<string, PlatformConfig>;
@@ -64,6 +84,7 @@ export interface AppConfig {
   infiniteSessions?: boolean;
   permissions?: PermissionsConfig;
   interAgent?: InterAgentConfig;
+  providers?: Record<string, BridgeProviderConfig>;
 }
 
 // Inter-agent communication config

@@ -16,12 +16,23 @@ import {
   type Tool,
 } from '@github/copilot-sdk';
 import type { SessionHooks } from './hooks-loader.js';
+import type { BridgeProviderConfig } from '../types.js';
 
 // SDK types not re-exported from package root
 type UserInputHandler = (
   request: { question: string; choices?: string[]; allowFreeform?: boolean },
   invocation: { sessionId: string },
 ) => Promise<{ answer: string; wasFreeform: boolean }> | { answer: string; wasFreeform: boolean };
+
+// SDK ProviderConfig — matches @github/copilot-sdk types.d.ts
+export interface SDKProviderConfig {
+  type?: 'openai' | 'azure' | 'anthropic';
+  wireApi?: 'completions' | 'responses';
+  baseUrl: string;
+  apiKey?: string;
+  bearerToken?: string;
+  azure?: { apiVersion?: string };
+}
 
 export class CopilotBridge {
   private client: CopilotClient;
@@ -61,6 +72,7 @@ export class CopilotBridge {
 
   async createSession(opts: {
     model?: string;
+    provider?: SDKProviderConfig;
     workingDirectory?: string;
     configDir?: string;
     reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
@@ -79,6 +91,7 @@ export class CopilotBridge {
     const session = await this.client.createSession({
       clientName: 'copilot-bridge',
       model: opts.model,
+      provider: opts.provider,
       workingDirectory: opts.workingDirectory,
       configDir: opts.configDir,
       reasoningEffort: opts.reasoningEffort,
@@ -107,6 +120,7 @@ export class CopilotBridge {
       customAgents?: CustomAgentConfig[];
       configDir?: string;
       workingDirectory?: string;
+      provider?: SDKProviderConfig;
       reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
       mcpServers?: Record<string, MCPServerConfig>;
       skillDirectories?: string[];
@@ -129,6 +143,7 @@ export class CopilotBridge {
       customAgents: opts?.customAgents,
       configDir: opts?.configDir,
       workingDirectory: opts?.workingDirectory,
+      provider: opts?.provider,
       reasoningEffort: opts?.reasoningEffort,
       mcpServers: opts?.mcpServers,
       skillDirectories: opts?.skillDirectories,
@@ -146,9 +161,30 @@ export class CopilotBridge {
     return this.client.listSessions(filter);
   }
 
-  async listModels(): Promise<ModelInfo[]> {
+  async listModels(providers?: Record<string, BridgeProviderConfig>): Promise<ModelInfo[]> {
     await this.start();
-    return this.client.listModels();
+    const copilotModels = await this.client.listModels();
+
+    if (!providers || Object.keys(providers).length === 0) {
+      return copilotModels;
+    }
+
+    // Append BYOK provider models with prefixed IDs
+    const byokModels: ModelInfo[] = [];
+    for (const [provName, prov] of Object.entries(providers)) {
+      for (const m of prov.models) {
+        byokModels.push({
+          id: `${provName}:${m.id}`,
+          name: m.name ?? m.id,
+          capabilities: {
+            supports: { vision: false, reasoningEffort: false },
+            limits: { max_context_window_tokens: m.contextWindow ?? 0 },
+          },
+        } as ModelInfo);
+      }
+    }
+
+    return [...copilotModels, ...byokModels];
   }
 
   async getAuthStatus(): Promise<GetAuthStatusResponse> {
