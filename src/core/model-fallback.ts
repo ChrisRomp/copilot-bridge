@@ -272,13 +272,23 @@ export function buildFallbackChain(
   primaryModel: string,
   availableModels: string[],
   configFallbacks?: string[],
+  byokPrefixes?: string[],
 ): string[] {
   const hasAvailability = availableModels.length > 0;
   const availableSet = new Set(availableModels);
-  const autoChain = hasAvailability ? getFallbackChain(primaryModel, availableModels) : [];
+
+  // Exclude BYOK models from auto-fallback (they use different endpoints/auth)
+  const prefixes = byokPrefixes ?? [];
+  const isByok = (m: string) => prefixes.some(p => m.startsWith(`${p}:`));
+  const copilotModels = prefixes.length > 0
+    ? availableModels.filter(m => !isByok(m))
+    : availableModels;
+
+  const autoChain = hasAvailability ? getFallbackChain(primaryModel, copilotModels) : [];
 
   if (configFallbacks && configFallbacks.length > 0) {
     const configSet = new Set(configFallbacks);
+    // Config fallbacks may include BYOK models — respect those explicitly
     const filtered = hasAvailability
       ? configFallbacks.filter(m => m !== primaryModel && availableSet.has(m))
       : configFallbacks.filter(m => m !== primaryModel);
@@ -307,6 +317,7 @@ export async function tryWithFallback<T>(
   availableModels: string[],
   configFallbacks: string[] | undefined,
   action: (model: string) => Promise<T>,
+  byokPrefixes?: string[],
 ): Promise<{ result: T; usedModel: string; didFallback: boolean }> {
   // Try primary model first
   try {
@@ -318,7 +329,7 @@ export async function tryWithFallback<T>(
     }
     log.warn(`Model "${primaryModel}" failed: ${err.message ?? err}. Trying fallbacks...`);
 
-    const chain = buildFallbackChain(primaryModel, availableModels, configFallbacks);
+    const chain = buildFallbackChain(primaryModel, availableModels, configFallbacks, byokPrefixes);
 
     if (chain.length === 0) {
       log.error(`No fallback models available for "${primaryModel}"`);

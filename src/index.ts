@@ -779,7 +779,7 @@ async function handleMidTurnMessage(
         msg.channelId, commandText, sessionInfo ?? undefined,
         { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort },
         { workingDirectory: channelConfig.workingDirectory, bot: channelConfig.bot },
-        models, mcpInfo, contextUsage,
+        models, mcpInfo, contextUsage, getConfig().providers,
       );
 
       if (cmdResult.handled) {
@@ -930,6 +930,7 @@ async function handleInboundMessage(
     models,
     undefined,
     contextUsage,
+    getConfig().providers,
   );
 
   if (cmdResult.handled) {
@@ -1079,7 +1080,8 @@ async function handleInboundMessage(
       case 'switch_model': {
         const ackId = await adapter.sendMessage(msg.channelId, '⏳ Switching model...', { threadRootId: threadRoot });
         try {
-          await sessionManager.switchModel(msg.channelId, cmdResult.payload);
+          const { modelId, provider } = cmdResult.payload as { modelId: string; provider: string | null };
+          await sessionManager.switchModel(msg.channelId, modelId, provider);
           await adapter.updateMessage(msg.channelId, ackId, cmdResult.response ?? '✅ Model switched.');
         } catch (err: any) {
           log.error(`Failed to switch model on ${msg.channelId.slice(0, 8)}...:`, err);

@@ -1,5 +1,6 @@
 import { setChannelPrefs, getChannelPrefs, getGlobalSetting, setGlobalSetting } from '../state/store.js';
 import { discoverAgentDefinitions, discoverAgentNames } from './inter-agent.js';
+import type { BridgeProviderConfig } from '../types.js';
 
 const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 const TRUTHY = new Set(['on', 'true', 'yes', '1', 'enable', 'enabled']);
@@ -45,42 +46,71 @@ export interface CommandResult {
 }
 
 /**
+ * Parse user input that may contain a provider prefix (e.g., "ollama-local:qwen3:8b").
+ * Splits on the first colon, checks if the prefix is a known provider name.
+ * Returns { provider, bareModel } if a provider prefix was found, or null if not.
+ */
+export function parseProviderModel(input: string, providerNames: string[]): { provider: string; bareModel: string } | null {
+  const colonIdx = input.indexOf(':');
+  if (colonIdx <= 0) return null;
+  const prefix = input.slice(0, colonIdx);
+  if (providerNames.some(p => p.toLowerCase() === prefix.toLowerCase())) {
+    return { provider: prefix, bareModel: input.slice(colonIdx + 1) };
+  }
+  return null;
+}
+
+/**
  * Fuzzy-match user input to a model from the available list.
- * Always tries to pick the best match. Returns:
+ * Supports provider:model syntax (e.g., "ollama-local:qwen3:8b") and bare model
+ * names that resolve against Copilot models first, then BYOK providers.
+ * Returns:
  * - { model, alternatives } on success (alternatives may be empty)
  * - { error } only when truly no match is found
  */
-export function resolveModel(input: string, models: ModelInfo[]): { model: ModelInfo; alternatives: ModelInfo[] } | { error: string } {
+export function resolveModel(input: string, models: ModelInfo[], providerNames?: string[]): { model: ModelInfo; alternatives: ModelInfo[] } | { error: string } {
   const lower = input.toLowerCase().trim();
   if (!lower) return { error: '⚠️ Please specify a model name.' };
 
-  // Exact match on id or name
+  const providers = providerNames ?? [];
+
+  // Check for provider:model syntax — if prefix is a known provider, scope to that provider's models
+  const parsed = parseProviderModel(lower, providers);
+  if (parsed) {
+    const prefixed = `${parsed.provider}:${parsed.bareModel}`;
+    const scoped = models.filter(m => m.id.toLowerCase().startsWith(`${parsed.provider.toLowerCase()}:`));
+    // Exact match on full prefixed ID
+    const exact = scoped.find(m => m.id.toLowerCase() === prefixed);
+    if (exact) return { model: exact, alternatives: [] };
+    // Fuzzy within provider scope
+    return fuzzyMatch(parsed.bareModel, scoped, `provider "${parsed.provider}"`);
+  }
+
+  // Exact match on id or name (works for both Copilot and full BYOK IDs)
   const exact = models.find(m => m.id.toLowerCase() === lower || m.name.toLowerCase() === lower);
   if (exact) return { model: exact, alternatives: [] };
 
-  // Substring match: input appears in id or name
-  const substringMatches = models.filter(m =>
-    m.id.toLowerCase().includes(lower) || m.name.toLowerCase().includes(lower)
-  );
-  if (substringMatches.length === 1) return { model: substringMatches[0], alternatives: [] };
+  // For bare model input, try Copilot models first, then BYOK
+  if (providers.length > 0) {
+    const copilotModels = models.filter(m => !providers.some(p => m.id.toLowerCase().startsWith(`${p.toLowerCase()}:`)));
+    const copilotResult = fuzzyMatch(lower, copilotModels);
+    if ('model' in copilotResult) return copilotResult;
 
-  // Token match: all words in input appear in id or name
-  const tokens = lower.split(/[\s\-_.]+/).filter(Boolean);
-  const tokenMatches = models.filter(m => {
-    const haystack = `${m.id} ${m.name}`.toLowerCase();
-    return tokens.every(t => haystack.includes(t));
-  });
-  if (tokenMatches.length === 1) return { model: tokenMatches[0], alternatives: [] };
+    // Try each BYOK provider in config order
+    for (const prov of providers) {
+      const provModels = models.filter(m => m.id.toLowerCase().startsWith(`${prov.toLowerCase()}:`));
+      // Match against the bare part of the ID (after provider prefix)
+      const bareExact = provModels.find(m => {
+        const bare = m.id.slice(prov.length + 1);
+        return bare.toLowerCase() === lower;
+      });
+      if (bareExact) return { model: bareExact, alternatives: [] };
+    }
 
-  // Multiple matches — pick the best one
-  const candidates = (substringMatches.length > 0 ? substringMatches : tokenMatches).slice(0, 8);
-  if (candidates.length > 1) {
-    const best = pickBestMatch(lower, candidates);
-    const alternatives = candidates.filter(m => m.id !== best.id);
-    return { model: best, alternatives };
+    // Fall through to global fuzzy match
   }
 
-  return { error: `⚠️ Unknown model "${input}". Use \`/model\` to see available models.` };
+  return fuzzyMatch(lower, models);
 }
 
 /** Pick the best model from ambiguous candidates. Prefers shorter IDs and closer matches. */
@@ -97,6 +127,117 @@ function pickBestMatch(input: string, candidates: ModelInfo[]): ModelInfo {
     // Prefer shorter name
     return a.name.length - b.name.length;
   })[0];
+}
+
+/** Fuzzy-match input against a set of models. */
+function fuzzyMatch(input: string, models: ModelInfo[], scope?: string): { model: ModelInfo; alternatives: ModelInfo[] } | { error: string } {
+  if (models.length === 0) {
+    return { error: scope
+      ? `⚠️ No models found for ${scope}.`
+      : `⚠️ Unknown model "${input}". Use \`/model\` to see available models.` };
+  }
+
+  // Substring match
+  const substringMatches = models.filter(m =>
+    m.id.toLowerCase().includes(input) || m.name.toLowerCase().includes(input)
+  );
+  if (substringMatches.length === 1) return { model: substringMatches[0], alternatives: [] };
+
+  // Token match
+  const tokens = input.split(/[\s\-_.]+/).filter(Boolean);
+  const tokenMatches = models.filter(m => {
+    const haystack = `${m.id} ${m.name}`.toLowerCase();
+    return tokens.every(t => haystack.includes(t));
+  });
+  if (tokenMatches.length === 1) return { model: tokenMatches[0], alternatives: [] };
+
+  // Multiple matches — pick best
+  const candidates = (substringMatches.length > 0 ? substringMatches : tokenMatches).slice(0, 8);
+  if (candidates.length > 1) {
+    const best = pickBestMatch(input, candidates);
+    const alternatives = candidates.filter(m => m.id !== best.id);
+    return { model: best, alternatives };
+  }
+
+  return { error: scope
+    ? `⚠️ Unknown model "${input}" in ${scope}. Use \`/model\` to see available models.`
+    : `⚠️ Unknown model "${input}". Use \`/model\` to see available models.` };
+}
+
+/** Build the formatted model listing, optionally grouped by provider. */
+function formatModelListing(models: ModelInfo[], providerNames: string[], currentModel: string | null, currentProvider: string | null, filterProvider?: string): string {
+  const streamer = isStreamerMode();
+  let hiddenIndex = 0;
+
+  // Determine if the current model matches a given model entry
+  const isCurrent = (m: ModelInfo): boolean => {
+    if (!currentModel) return false;
+    if (m.id === currentModel) return true;
+    // For BYOK: currentModel is bare (e.g., "qwen3:8b"), m.id is prefixed (e.g., "ollama-local:qwen3:8b")
+    if (currentProvider) {
+      return m.id === `${currentProvider}:${currentModel}`;
+    }
+    return false;
+  };
+
+  const formatRow = (m: ModelInfo, showBilling: boolean): string => {
+    const current = isCurrent(m) ? ' ← current' : '';
+    const reasoning = m.supportedReasoningEfforts?.length ? ' 🧠' : '';
+    const hidden = streamer && isHiddenModel(m);
+    const displayName = hidden ? redactedModelLabel(++hiddenIndex) : `\`${m.id}\``;
+    if (showBilling) {
+      const billing = m.billing ? `${m.billing.multiplier}x` : '—';
+      return `| ${displayName} | ${billing} |${reasoning}${current} |`;
+    }
+    return `| ${displayName} |${reasoning}${current} |`;
+  };
+
+  const copilotHeader = '| Model | Billing | |\n|:------|--------:|:--|';
+  const byokHeader = '| Model | |\n|:------|:--|';
+
+  const title = filterProvider ? `**Models: ${filterProvider}**` : '**Available Models**';
+  const lines: string[] = [title, ''];
+
+  if (providerNames.length > 0 && !filterProvider) {
+    // Group by provider: Copilot first, then each BYOK provider
+    const copilotModels = models.filter(m => !providerNames.some(p => m.id.startsWith(`${p}:`)));
+    if (copilotModels.length > 0) {
+      lines.push('**GitHub Copilot**', '', copilotHeader);
+      for (const m of copilotModels) lines.push(formatRow(m, true));
+      lines.push('');
+    }
+    for (const prov of providerNames) {
+      const provModels = models.filter(m => m.id.startsWith(`${prov}:`));
+      if (provModels.length > 0) {
+        lines.push(`**${prov}**`, '', byokHeader);
+        for (const m of provModels) lines.push(formatRow(m, false));
+        lines.push('');
+      }
+    }
+  } else if (filterProvider) {
+    // Filtered to single BYOK provider — no billing column
+    lines.push(byokHeader);
+    for (const m of models) lines.push(formatRow(m, false));
+    lines.push('');
+  } else {
+    // Flat listing (no providers configured)
+    lines.push(copilotHeader);
+    for (const m of models) lines.push(formatRow(m, true));
+    lines.push('');
+  }
+
+  const hasCopilotModels = !filterProvider && models.some(m => !providerNames.some(p => m.id.startsWith(`${p}:`)));
+  const legend = hasCopilotModels
+    ? '🧠 = supports reasoning effort · Billing = premium request multiplier'
+    : '🧠 = supports reasoning effort';
+  lines.push(legend);
+  lines.push('↳ Use `/model <name>` to switch');
+  if (providerNames.length > 0 && !filterProvider) {
+    const shown = providerNames.slice(0, 3).join(', ');
+    const suffix = providerNames.length > 3 ? ', …' : '';
+    lines.push(`↳ Use \`/model <provider>\` to filter (${shown}${suffix})`);
+  }
+  return lines.join('\n');
 }
 
 /** Format a token count as a human-readable string (e.g., 109000 → "109k"). */
@@ -175,7 +316,7 @@ export interface McpServerInfo {
   pending?: boolean;
 }
 
-export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[], contextUsage?: { currentTokens: number; tokenLimit: number; contextWindowTokens?: number } | null): CommandResult {
+export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[], contextUsage?: { currentTokens: number; tokenLimit: number; contextWindowTokens?: number } | null, providers?: Record<string, BridgeProviderConfig>): CommandResult {
   const parsed = parseCommand(text);
   if (!parsed) return { handled: false };
 
@@ -208,38 +349,42 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
 
     case 'model':
     case 'models': {
+      const providerNames = providers ? Object.keys(providers) : [];
+      const currentProvider = getChannelPrefs(channelId)?.provider ?? null;
+
       if (!parsed.args) {
-        // No args: show model table
+        // No args: show model table grouped by provider
         if (!models || models.length === 0) {
           return { handled: true, response: '⚠️ Model list not available.' };
         }
-        const streamer = isStreamerMode();
-        let hiddenIndex = 0;
-        const lines = [
-          '**Available Models**',
-          '',
-          '| Model | Billing | |',
-          '|:------|--------:|:--|',
-        ];
-        for (const m of models) {
-          const current = sessionInfo?.model === m.id ? ' ← current' : '';
-          const reasoning = m.supportedReasoningEfforts?.length ? ' 🧠' : '';
-          const billing = m.billing ? `${m.billing.multiplier}x` : '—';
-          const hidden = streamer && isHiddenModel(m);
-          const displayName = hidden ? redactedModelLabel(++hiddenIndex) : `\`${m.id}\``;
-          lines.push(`| ${displayName} | ${billing} |${reasoning}${current} |`);
+        return { handled: true, response: formatModelListing(models, providerNames, sessionInfo?.model ?? null, currentProvider) };
+      }
+
+      // Check if arg is a provider name → show just that provider's models
+      if (providerNames.some(p => p.toLowerCase() === parsed.args!.toLowerCase().trim())) {
+        if (!models || models.length === 0) {
+          return { handled: true, response: '⚠️ Model list not available.' };
         }
-        lines.push('', '🧠 = supports reasoning effort · Billing = premium request multiplier');
-        lines.push('↳ Use `/model <name>` to switch');
-        return { handled: true, response: lines.join('\n') };
+        const provName = providerNames.find(p => p.toLowerCase() === parsed.args!.toLowerCase().trim())!;
+        const provModels = models.filter(m => m.id.toLowerCase().startsWith(`${provName.toLowerCase()}:`));
+        if (provModels.length === 0) {
+          return { handled: true, response: `⚠️ No models found for provider "${provName}".` };
+        }
+        return { handled: true, response: formatModelListing(provModels, providerNames, sessionInfo?.model ?? null, currentProvider, provName) };
       }
+
       if (!models || models.length === 0) {
-        return { handled: true, action: 'switch_model', payload: parsed.args, response: `🔄 Switching model to **${parsed.args}**...` };
+        return { handled: true, action: 'switch_model', payload: { modelId: parsed.args, provider: null }, response: `🔄 Switching model to **${parsed.args}**...` };
       }
-      const result = resolveModel(parsed.args, models);
+      const result = resolveModel(parsed.args, models, providerNames);
       if ('error' in result) {
         return { handled: true, response: result.error };
       }
+
+      // Determine provider from the resolved model ID
+      const resolvedProvider = providerNames.find(p => result.model.id.toLowerCase().startsWith(`${p.toLowerCase()}:`)) ?? null;
+      const bareModelId = resolvedProvider ? result.model.id.slice(resolvedProvider.length + 1) : result.model.id;
+
       const streamerSwitch = isStreamerMode();
       const switchName = (streamerSwitch && isHiddenModel(result.model))
         ? 'a hidden model'
@@ -251,7 +396,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           .map(m => `\`${m.id}\` (${m.name})`).join(', ');
         if (altList) response += `\n↳ Also matched: ${altList}`;
       }
-      return { handled: true, action: 'switch_model', payload: result.model.id, response };
+      return { handled: true, action: 'switch_model', payload: { modelId: bareModelId, provider: resolvedProvider }, response };
     }
 
     case 'agent': {
