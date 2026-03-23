@@ -323,8 +323,13 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
   if (!parsed) return { handled: false };
 
   // Resolve current model's info from models list
+  // When a BYOK provider is active, prefer the provider-prefixed entry to avoid
+  // inheriting metadata (e.g., supportedReasoningEfforts) from a same-named Copilot model
+  const currentProvider = getChannelPrefs(channelId)?.provider ?? null;
   const currentModelInfo = models && sessionInfo
-    ? models.find(m => m.id === sessionInfo.model) ?? null
+    ? (currentProvider
+        ? models.find(m => m.id === `${currentProvider}:${sessionInfo.model}`) ?? null
+        : models.find(m => m.id === sessionInfo.model) ?? null)
     : null;
 
   switch (parsed.command) {
