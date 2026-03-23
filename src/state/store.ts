@@ -215,6 +215,11 @@ function getDb(): Database.Database {
   } catch {
     // Column already exists
   }
+  try {
+    _db.exec(`ALTER TABLE channel_prefs ADD COLUMN provider TEXT`);
+  } catch {
+    // Column already exists
+  }
 
   return _db;
 }
@@ -249,6 +254,7 @@ export function getAllChannelSessions(): Array<{ channelId: string; sessionId: s
 
 export interface ChannelPrefs {
   model?: string;
+  provider?: string | null;
   agent?: string | null;
   verbose?: boolean;
 
@@ -265,6 +271,7 @@ export function getChannelPrefs(channelId: string): ChannelPrefs | null {
   if (!row) return null;
   return {
     model: row.model ?? undefined,
+    provider: row.provider ?? null,
     agent: row.agent,
     verbose: row.verbose != null ? !!row.verbose : undefined,
 
@@ -285,6 +292,7 @@ export function setChannelPrefs(channelId: string, prefs: Partial<ChannelPrefs>)
     const values: any[] = [];
 
     if (prefs.model !== undefined) { updates.push('model = ?'); values.push(prefs.model); }
+    if (prefs.provider !== undefined) { updates.push('provider = ?'); values.push(prefs.provider); }
     if (prefs.agent !== undefined) { updates.push('agent = ?'); values.push(prefs.agent); }
     if (prefs.verbose !== undefined) { updates.push('verbose = ?'); values.push(prefs.verbose ? 1 : 0); }
 
@@ -301,11 +309,12 @@ export function setChannelPrefs(channelId: string, prefs: Partial<ChannelPrefs>)
     }
   } else {
     db.prepare(
-      `INSERT INTO channel_prefs (channel_id, model, agent, verbose, threaded_replies, permission_mode, reasoning_effort, session_mode, disabled_skills)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO channel_prefs (channel_id, model, provider, agent, verbose, threaded_replies, permission_mode, reasoning_effort, session_mode, disabled_skills)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       channelId,
       prefs.model ?? null,
+      prefs.provider ?? null,
       prefs.agent ?? null,
       prefs.verbose != null ? (prefs.verbose ? 1 : 0) : null,
       prefs.threadedReplies != null ? (prefs.threadedReplies ? 1 : 0) : null,

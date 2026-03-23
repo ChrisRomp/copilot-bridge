@@ -10,7 +10,7 @@ import {
   recordAgentCall,
   type ChannelPrefs,
 } from '../state/store.js';
-import { getChannelConfig, getChannelBotName, getChannelBotConfig, evaluateConfigPermissions, isBotAdmin, getConfig, getInterAgentConfig, isHardDeny } from '../config.js';
+import { getChannelConfig, getChannelBotName, getChannelBotConfig, evaluateConfigPermissions, isBotAdmin, getConfig, getInterAgentConfig, isHardDeny, resolveProviderConfig } from '../config.js';
 import { getWorkspacePath, getWorkspaceAllowPaths, ensureWorkspacesDir } from './workspace-manager.js';
 import { onboardProject } from './onboarding.js';
 import { addJob, removeJob, pauseJob, resumeJob, listJobs, formatInTimezone } from './scheduler.js';
@@ -796,7 +796,7 @@ export class SessionManager {
 
         let availableModels: string[] = [];
         try {
-          const models = await this.bridge.listModels();
+          const models = await this.bridge.listModels(getConfig().providers);
           availableModels = models.map(m => m.id);
         } catch { /* best-effort */ }
 
@@ -909,7 +909,7 @@ export class SessionManager {
     this.contextWindowTokens.delete(channelId);
 
     // Update cached context window tokens for the new model (best-effort)
-    this.bridge.listModels().then(models => {
+    this.bridge.listModels(getConfig().providers).then(models => {
       // Guard against rapid switches: only cache if the channel is still on this model
       const currentPrefs = this.getEffectivePrefs(channelId);
       if (currentPrefs.model === model) {
@@ -939,6 +939,7 @@ export class SessionManager {
     const storedPrefs = getChannelPrefs(channelId);
     return {
       model: storedPrefs?.model ?? configChannel.model ?? 'claude-sonnet-4.6',
+      provider: storedPrefs?.provider ?? null,
       agent: storedPrefs?.agent !== undefined ? storedPrefs.agent : configChannel.agent,
       verbose: storedPrefs?.verbose ?? configChannel.verbose,
       triggerMode: configChannel.triggerMode,
@@ -952,7 +953,7 @@ export class SessionManager {
   /** Get model info (for checking capabilities like reasoning effort). */
   async getModelInfo(modelId: string): Promise<any | null> {
     try {
-      const models = await this.bridge.listModels();
+      const models = await this.bridge.listModels(getConfig().providers);
       return models.find(m => m.id === modelId) ?? null;
     } catch {
       return null;
@@ -961,7 +962,7 @@ export class SessionManager {
 
   /** List all available models. */
   async listModels(): Promise<any[]> {
-    return this.bridge.listModels();
+    return this.bridge.listModels(getConfig().providers);
   }
 
   /** Get the current session mode (interactive, plan, autopilot). Falls back to persisted prefs after restart. */
@@ -1044,7 +1045,7 @@ export class SessionManager {
     // Pick the best available cheap model
     let availableIds: string[] = [];
     try {
-      const models = await this.bridge.listModels();
+      const models = await this.bridge.listModels(getConfig().providers);
       availableIds = models.map(m => m.id);
     } catch { /* best-effort */ }
 
@@ -1273,7 +1274,14 @@ export class SessionManager {
 
   /** Cache the model's max_context_window_tokens for accurate /context display. */
   private cacheContextWindowTokens(channelId: string, modelId: string, modelList: any[]): void {
-    const model = modelList.find((m: any) => m.id === modelId);
+    let model = modelList.find((m: any) => m.id === modelId);
+    // For BYOK models, the merged list has provider-prefixed IDs (e.g., "ollama-local:qwen3:8b")
+    if (!model) {
+      const prefs = getChannelPrefs(channelId);
+      if (prefs?.provider) {
+        model = modelList.find((m: any) => m.id === `${prefs.provider}:${modelId}`);
+      }
+    }
     const ctxTokens = model?.capabilities?.limits?.max_context_window_tokens;
     if (typeof ctxTokens === 'number' && ctxTokens > 0) {
       this.contextWindowTokens.set(channelId, ctxTokens);
@@ -1335,11 +1343,20 @@ export class SessionManager {
     const configChannel = getChannelConfig(channelId);
     const configFallbacks = configChannel.fallbackModels ?? getConfig().defaults.fallbackModels;
 
+    // Resolve BYOK provider if set in prefs
+    const providerName = prefs.provider ?? null;
+    const sdkProvider = providerName
+      ? resolveProviderConfig(providerName, getConfig().providers)
+      : undefined;
+    if (providerName && !sdkProvider) {
+      log.warn(`Provider "${providerName}" set for channel ${channelId} but not found in config — using Copilot`);
+    }
+
     // Fetch available models for fallback chain (best-effort — don't block on failure)
     let availableModels: string[] = [];
     let modelList: any[] = [];
     try {
-      modelList = await this.bridge.listModels();
+      modelList = await this.bridge.listModels(getConfig().providers);
       availableModels = modelList.map(m => m.id);
     } catch {
       log.warn('Failed to fetch model list for fallback resolution');
@@ -1356,6 +1373,7 @@ export class SessionManager {
       return withWorkspaceEnv(workingDirectory, () =>
         this.bridge.createSession({
           model,
+          provider: sdkProvider || undefined,
           workingDirectory,
           configDir: defaultConfigDir,
           reasoningEffort: reasoningEffort ?? undefined,
@@ -1422,12 +1440,22 @@ export class SessionManager {
       log.debug(`Hooks resolved for session resume: ${Object.keys(hooks).join(', ')}`);
     }
 
+    // Resolve BYOK provider for resume
+    const providerName = prefs.provider ?? null;
+    let sdkProvider = providerName
+      ? resolveProviderConfig(providerName, getConfig().providers)
+      : undefined;
+    if (providerName && !sdkProvider) {
+      log.warn(`Provider "${providerName}" set for channel ${channelId} but not found in config — using Copilot`);
+    }
+
     const session = await withWorkspaceEnv(workingDirectory, () =>
       this.bridge.resumeSession(sessionId, {
         onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
         onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
         configDir: defaultConfigDir,
         workingDirectory,
+        provider: sdkProvider || undefined,
         reasoningEffort: reasoningEffort ?? undefined,
         mcpServers,
         skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
@@ -1446,7 +1474,7 @@ export class SessionManager {
 
     // Cache context window tokens for /context display (best-effort, non-blocking)
     const resumeModel = prefs.model;
-    this.bridge.listModels().then(models => {
+    this.bridge.listModels(getConfig().providers).then(models => {
       // Guard against model changes before this resolves
       const currentPrefs = this.getEffectivePrefs(channelId);
       if (currentPrefs.model === resumeModel) {

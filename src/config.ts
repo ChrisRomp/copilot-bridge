@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgentConfig, AccessConfig } from './types.js';
+import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgentConfig, AccessConfig, BridgeProviderConfig } from './types.js';
+import type { SDKProviderConfig } from './core/bridge.js';
 import { getDynamicChannel } from './state/store.js';
 import { createLogger } from './logger.js';
 
@@ -117,6 +118,63 @@ function validateAndNormalize(raw: any): AppConfig {
     }
   }
 
+  // Validate providers (optional BYOK config)
+  const validProviderTypes = ['openai', 'azure', 'anthropic'];
+  if (raw.providers !== undefined) {
+    if (raw.providers === null || typeof raw.providers !== 'object' || Array.isArray(raw.providers)) {
+      throw new Error('"providers" must be an object mapping provider names to configs');
+    }
+    for (const [provName, provRaw] of Object.entries(raw.providers)) {
+      if (!provName || /[:\s]/.test(provName)) {
+        throw new Error(`Provider name "${provName}" is invalid — must be non-empty and cannot contain ':' or whitespace`);
+      }
+      const p = provRaw as any;
+      if (!p || typeof p !== 'object' || Array.isArray(p)) {
+        throw new Error(`Provider "${provName}" must be an object`);
+      }
+      if (p.type !== undefined && !validProviderTypes.includes(p.type)) {
+        throw new Error(`Provider "${provName}" type must be one of: ${validProviderTypes.join(', ')}`);
+      }
+      if (!p.baseUrl || typeof p.baseUrl !== 'string') {
+        throw new Error(`Provider "${provName}" requires a "baseUrl" string`);
+      }
+      if (!Array.isArray(p.models) || p.models.length === 0) {
+        throw new Error(`Provider "${provName}" requires a non-empty "models" array`);
+      }
+      for (const m of p.models) {
+        if (!m || typeof m !== 'object' || !m.id || typeof m.id !== 'string') {
+          throw new Error(`Provider "${provName}" models entries must have a string "id"`);
+        }
+        if (m.contextWindow !== undefined && (typeof m.contextWindow !== 'number' || m.contextWindow <= 0 || !Number.isInteger(m.contextWindow))) {
+          throw new Error(`Provider "${provName}" model "${m.id}" contextWindow must be a positive integer`);
+        }
+      }
+      // Validate optional string fields
+      for (const field of ['apiKey', 'apiKeyEnv', 'bearerToken', 'bearerTokenEnv'] as const) {
+        if (p[field] !== undefined && typeof p[field] !== 'string') {
+          throw new Error(`Provider "${provName}" ${field} must be a string`);
+        }
+      }
+      if (p.azure !== undefined) {
+        if (typeof p.azure !== 'object' || Array.isArray(p.azure)) {
+          throw new Error(`Provider "${provName}" azure must be an object`);
+        }
+        if (p.azure.apiVersion !== undefined && typeof p.azure.apiVersion !== 'string') {
+          throw new Error(`Provider "${provName}" azure.apiVersion must be a string`);
+        }
+      }
+      if (p.apiKey && typeof p.apiKey === 'string') {
+        log.warn(`Provider "${provName}": inline apiKey is discouraged — use apiKeyEnv instead`);
+      }
+      if (p.bearerToken && typeof p.bearerToken === 'string') {
+        log.warn(`Provider "${provName}": inline bearerToken is discouraged — use bearerTokenEnv instead`);
+      }
+      if (p.wireApi !== undefined && !['completions', 'responses'].includes(p.wireApi)) {
+        throw new Error(`Provider "${provName}" wireApi must be "completions" or "responses"`);
+      }
+    }
+  }
+
   // Validate logLevel (optional)
   if (raw.logLevel !== undefined) {
     const validLevels = ['debug', 'info', 'warn', 'error'];
@@ -144,7 +202,51 @@ function validateAndNormalize(raw: any): AppConfig {
     infiniteSessions: raw.infiniteSessions === true,
     permissions: raw.permissions,
     interAgent: raw.interAgent,
+    providers: raw.providers,
   };
+}
+
+/**
+ * Resolve a BridgeProviderConfig into the SDK's ProviderConfig format.
+ * Resolves apiKeyEnv/bearerTokenEnv from process.env.
+ * Returns null if the provider name is not found in config.
+ */
+export function resolveProviderConfig(
+  providerName: string,
+  providers?: Record<string, BridgeProviderConfig>,
+): SDKProviderConfig | null {
+  if (!providers) return null;
+  const entry = providers[providerName];
+  if (!entry) return null;
+
+  // Resolve API key
+  let apiKey = entry.apiKey;
+  if (!apiKey && entry.apiKeyEnv) {
+    apiKey = process.env[entry.apiKeyEnv];
+    if (!apiKey) {
+      log.warn(`Provider "${providerName}": env var ${entry.apiKeyEnv} is not set`);
+    }
+  }
+
+  // Resolve bearer token
+  let bearerToken = entry.bearerToken;
+  if (!bearerToken && entry.bearerTokenEnv) {
+    bearerToken = process.env[entry.bearerTokenEnv];
+    if (!bearerToken) {
+      log.warn(`Provider "${providerName}": env var ${entry.bearerTokenEnv} is not set`);
+    }
+  }
+
+  const sdkConfig: SDKProviderConfig = {
+    baseUrl: entry.baseUrl,
+    ...(entry.type ? { type: entry.type } : {}),
+    ...(apiKey ? { apiKey } : {}),
+    ...(bearerToken ? { bearerToken } : {}),
+    ...(entry.wireApi ? { wireApi: entry.wireApi } : {}),
+    ...(entry.azure ? { azure: entry.azure } : {}),
+  };
+
+  return sdkConfig;
 }
 
 export function loadConfig(configPath?: string): AppConfig {
@@ -202,6 +304,21 @@ function diffConfigs(oldCfg: AppConfig, newCfg: AppConfig): { changes: string[];
   // --- Inter-Agent ---
   if (JSON.stringify(oldCfg.interAgent ?? {}) !== JSON.stringify(newCfg.interAgent ?? {})) {
     changes.push('interAgent config updated');
+  }
+
+  // --- Providers (BYOK) ---
+  const oldProviders = oldCfg.providers ?? {};
+  const newProviders = newCfg.providers ?? {};
+  for (const name of new Set([...Object.keys(oldProviders), ...Object.keys(newProviders)])) {
+    const op = oldProviders[name];
+    const np = newProviders[name];
+    if (!op && np) {
+      changes.push(`provider "${name}": added`);
+    } else if (op && !np) {
+      changes.push(`provider "${name}": removed`);
+    } else if (JSON.stringify(op) !== JSON.stringify(np)) {
+      changes.push(`provider "${name}": config updated`);
+    }
   }
 
   // --- Channels ---

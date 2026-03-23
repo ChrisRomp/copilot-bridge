@@ -88,5 +88,25 @@
       "copilot": { "canCall": ["bob"], "canBeCalledBy": ["bob"] },
       "bob": { "canCall": ["copilot"], "canBeCalledBy": ["copilot"] }
     }
+  },
+  "_comment_providers": "Optional: BYOK provider support (use your own API keys with external model providers)",
+  "providers": {
+    "ollama": {
+      "type": "openai",
+      "baseUrl": "http://localhost:11434/v1",
+      "models": [
+        { "id": "qwen3:8b", "name": "Qwen 3 8B" }
+      ]
+    },
+    "work-azure": {
+      "type": "azure",
+      "baseUrl": "https://myco.openai.azure.com",
+      "apiKeyEnv": "AZURE_OPENAI_KEY",
+      "wireApi": "responses",
+      "azure": { "apiVersion": "2024-10-21" },
+      "models": [
+        { "id": "gpt-5.2-codex", "name": "GPT-5.2 Codex" }
+      ]
+    }
   }
 }
