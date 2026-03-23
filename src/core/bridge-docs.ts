@@ -634,7 +634,7 @@ Providers are configured under the \`"providers"\` key in \`config.json\`:
 | \`type\` | yes | \`"openai"\` (OpenAI-compatible) or \`"azure"\` |
 | \`baseUrl\` | yes | API endpoint URL |
 | \`apiKeyEnv\` | no | Environment variable holding the API key (omit for keyless, e.g., local Ollama) |
-| \`wireApi\` | no | Default wire protocol for all models: \`"chat"\` (default) or \`"responses"\`. Can be overridden per model. |
+| \`wireApi\` | no | Default wire protocol for all models: \`"completions"\` (default) or \`"responses"\`. Can be overridden per model. |
 | \`azure\` | azure only | \`{ "apiVersion": "..." }\` |
 | \`models\` | yes | Array of model entries. Each has \`id\` (required), \`name\`, and optional \`wireApi\` override. |
 
@@ -642,7 +642,7 @@ Providers are configured under the \`"providers"\` key in \`config.json\`:
 
 \`wireApi\` can be set at provider level (applies to all models) or per model (overrides provider default).
 
-- \`"chat"\` (Chat Completions API) — works with most models: GPT-4o, GPT-4.1, Llama, Phi, Qwen, etc.
+- \`"completions"\` (Chat Completions API) — works with most models: GPT-4o, GPT-4.1, Llama, Phi, Qwen, etc.
 - \`"responses"\` (Responses API) — **required** for Codex models (\`gpt-5.x-codex-*\`)
 - Models must support **structured function calling** (OpenAI-compatible \`tool_calls\`). Models that emit tool calls as raw text (e.g., DeepSeek, some smaller models) will not work correctly.
 

@@ -915,6 +915,18 @@ export class SessionManager {
         setChannelPrefs(channelId, { model: prevModel, provider: currentProvider });
         throw err;
       }
+    } else if (newProvider && this.wireApiChanged(newProvider, currentPrefs.model ?? '', model)) {
+      // Same provider but wireApi differs between models — need fresh session
+      log.info(`wireApi change for provider ${newProvider}, model ${currentPrefs.model} → ${model} — creating new session`);
+      const prevModel = currentPrefs.model;
+      setChannelPrefs(channelId, { model, provider: newProvider });
+      try {
+        await this.newSession(channelId);
+      } catch (err) {
+        log.warn(`wireApi switch failed, reverting prefs:`, err);
+        setChannelPrefs(channelId, { model: prevModel, provider: currentProvider });
+        throw err;
+      }
     } else {
       // Same provider — use RPC model switch
       const sessionId = this.channelSessions.get(channelId);
@@ -939,6 +951,19 @@ export class SessionManager {
         this.cacheContextWindowTokens(channelId, model, models);
       }
     }).catch(() => { /* best-effort */ });
+  }
+
+  /** Check if two models on the same provider have different wireApi settings. */
+  private wireApiChanged(providerName: string, oldModel: string, newModel: string): boolean {
+    const providers = getConfig().providers;
+    if (!providers) return false;
+    const entry = providers[providerName];
+    if (!entry) return false;
+    const oldEntry = entry.models.find(m => m.id === oldModel);
+    const newEntry = entry.models.find(m => m.id === newModel);
+    const oldWire = oldEntry?.wireApi ?? entry.wireApi;
+    const newWire = newEntry?.wireApi ?? entry.wireApi;
+    return oldWire !== newWire;
   }
 
   /** Switch the agent for a channel's session. */
