@@ -1,5 +1,6 @@
 import { setChannelPrefs, getChannelPrefs, getGlobalSetting, setGlobalSetting } from '../state/store.js';
 import { discoverAgentDefinitions, discoverAgentNames } from './inter-agent.js';
+import { isBotAdminAny } from '../config.js';
 import type { BridgeProviderConfig } from '../types.js';
 
 const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
@@ -443,9 +444,14 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         return { handled: true, action: 'provider_test', payload: canonical, response: `🔄 Testing provider "${canonical}"...` };
       }
 
-      // /provider add|remove — guide to config file
+      // /provider add|remove — guide to config file (admin can help)
       if (/^(add|remove|delete)\b/i.test(args)) {
-        return { handled: true, response: 'Providers are managed in `config.json` under the `"providers"` key.\n↳ Edit the file, then run `/reload config` to apply changes.' };
+        const botName = channelMeta?.bot;
+        const isAdmin = botName ? isBotAdminAny(botName) : false;
+        if (isAdmin) {
+          return { handled: true, response: `Sure — I can help with that. Tell me the provider details (name, base URL, auth, models) and I'll update \`config.json\` for you.` };
+        }
+        return { handled: true, response: 'Providers are managed in `config.json` under the `"providers"` key.\n↳ Ask the **admin** bot to add/remove providers, or edit the file directly, then `/reload config`.' };
       }
 
       return { handled: true, response: '⚠️ Unknown subcommand. Usage:\n  `/provider` — list providers\n  `/provider test <name>` — test connectivity\n  `/model <provider>:<model>` — switch model' };

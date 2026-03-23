@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { handleCommand, type ModelInfo } from './command-handler.js';
+
+// Mock config for admin detection
+vi.mock('../config.js', () => ({
+  isBotAdminAny: (botName: string) => botName === 'admin',
+}));
 
 const channelId = 'test-channel';
 const sessionInfo = { sessionId: 'sess-1', model: 'claude-sonnet-4.6', agent: null };
@@ -83,11 +88,19 @@ describe('/provider test', () => {
 // --- /provider add|remove guidance ---
 
 describe('/provider add|remove', () => {
-  it('guides user to config.json for add', () => {
+  it('guides non-admin user to config.json for add', () => {
     const result = handleCommand(channelId, '/provider add ollama', sessionInfo, prefs, meta, [], undefined, null, providers);
     expect(result.handled).toBe(true);
     expect(result.response).toContain('config.json');
     expect(result.response).toContain('/reload config');
+  });
+
+  it('offers to help when bot is admin', () => {
+    const adminMeta = { workingDirectory: '/tmp', bot: 'admin' };
+    const result = handleCommand(channelId, '/provider add ollama', sessionInfo, prefs, adminMeta, [], undefined, null, providers);
+    expect(result.handled).toBe(true);
+    expect(result.response).toContain('I can help');
+    expect(result.response).not.toContain('Ask the');
   });
 
   it('guides user to config.json for remove', () => {

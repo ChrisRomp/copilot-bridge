@@ -188,6 +188,35 @@ A bridge restart is needed for removals to take effect.
 - Channel mappings and permissions changes also require a restart
 - Per-channel preferences (model, verbose, etc.) are stored in SQLite and don't need restarts — users change them via slash commands
 
+### BYOK Provider Management
+
+Users may ask you to add, remove, or modify BYOK (Bring Your Own Key) providers. Providers are configured under the `"providers"` key in `config.json`.
+
+**Adding a provider:**
+1. Back up config.json (see above)
+2. Add an entry under `"providers"` with required fields:
+   - `type`: `"openai"` (OpenAI-compatible, including Ollama) or `"azure"`
+   - `baseUrl`: The API endpoint URL
+   - `models`: Array of `{ "id": "model-id", "name": "Display Name" }`
+   - `apiKeyEnv` (optional): Environment variable name holding the API key
+   - `wireApi` (optional): `"chat"` (default) or `"responses"` (Azure)
+   - `azure` (Azure only): `{ "apiVersion": "2024-10-21" }`
+3. Tell the user to run `/reload config` in their channel
+
+**Removing a provider:**
+1. Back up config.json
+2. Delete the provider key from `"providers"`
+3. Tell the user to run `/reload config` — channels using that provider will fall back to Copilot
+
+**Validation rules:**
+- Provider names must not contain `:` or whitespace (they're used as model ID prefixes)
+- Each provider must have at least one model in the `models` array
+- If `apiKeyEnv` is set, the env variable must exist at runtime
+
+**No restart needed** — provider config changes take effect on `/reload config`.
+
+After making changes, suggest the user run `/provider test <name>` to verify connectivity.
+
 ## Bridge Architecture (Reference)
 
 ```
