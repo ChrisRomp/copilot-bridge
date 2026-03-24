@@ -921,7 +921,13 @@ export class SessionManager {
         await this.attachSession(channelId, sessionId);
       } catch (attachErr: any) {
         log.warn(`Re-attach failed for ${sessionId}:`, attachErr?.message ?? attachErr);
-        if (!createOnFail) throw err;
+        if (!createOnFail) {
+          // Clear stale session so ensureSession() creates fresh on next call
+          this.channelSessions.delete(channelId);
+          this.sessionChannels.delete(sessionId);
+          clearChannelSession(channelId);
+          throw err;
+        }
         // Last resort: new session
         log.info(`Creating new session for channel ${channelId} after RPC failure...`);
         const newSessionId = await this.newSession(channelId);
