@@ -23,8 +23,11 @@ const log = createLogger('bridge');
 // Active streaming responses, keyed by channelId
 const activeStreams = new Map<string, string>(); // channelId → streamKey
 
-// Channels where the no_reply tool was called — stream is deleted on session.idle
+// Channels where the no_reply tool was called — used to suppress the SDK's
+// second agentic turn (which always fires after a tool call).
 const noReplyChannels = new Set<string>();
+// Tracks whether content was emitted after no_reply (second turn succeeded)
+const noReplyHadContent = new Set<string>();
 
 // Preserve thread context across turn_end stream finalization so auto-started
 // streams stay in the same thread.
@@ -903,11 +906,12 @@ async function handleInboundMessage(
     if (key.startsWith(`${platformName}:`) && msg.userId === a.getBotUserId()) return;
   }
 
-  // Clear stale no_reply flag from previous turn.
+  // Clear stale no_reply flags from previous turn.
   // Note: a late post-no_reply error could theoretically arrive after this
   // clear if the user types very quickly after restart, but nudge errors take
   // ~30s and users rarely type during that window.
   noReplyChannels.delete(msg.channelId);
+  noReplyHadContent.delete(msg.channelId);
 
   // Check user-level access control (reads live config — hot-reloadable)
   const botInfo = getPlatformBots(platformName).get(botName);
@@ -2082,10 +2086,13 @@ async function handleSessionEvent(
   // Suppress errors from the second agentic turn after no_reply tool.
   // The SDK always starts another turn after a tool call; that turn's model
   // call may fail but the session remains functional.
-  if (formatted.type === 'error') {
-    if (noReplyChannels.has(channelId)) {
-      log.info(`Suppressing post-no_reply error on ${channelId.slice(0, 8)}...`);
+  // Scoped to the specific SDK error to avoid masking unrelated failures.
+  if (formatted.type === 'error' && noReplyChannels.has(channelId)) {
+    const msg = event.data?.message ?? '';
+    if (typeof msg === 'string' && msg.includes('Failed to get response from the AI model')) {
+      log.info(`Suppressing post-no_reply model error on ${channelId.slice(0, 8)}...`);
       noReplyChannels.delete(channelId);
+      noReplyHadContent.delete(channelId);
       return;
     }
   }
@@ -2099,6 +2106,11 @@ async function handleSessionEvent(
       // Content arriving means session is still active — cancel any idle debounce
       cancelIdleDebounce(channelId);
       if (!isBusy(channelId)) markBusy(channelId);
+
+      // Track if content arrives after no_reply (second turn succeeded)
+      if (noReplyChannels.has(channelId) && formatted.content?.trim()) {
+        noReplyHadContent.add(channelId);
+      }
 
       // Suppress NO_REPLY responses — agent decided no response was needed.
       // This can happen outside quiet mode when the agent determines a user
@@ -2267,13 +2279,25 @@ async function handleSessionEvent(
         initialStreamPosted.delete(channelId);
         channelThreadRoots.delete(channelId);
 
-         // If no_reply tool was called, delete the stream instead of finalizing
+         // If no_reply tool was called, handle stream based on whether
+        // the SDK's second turn produced any content.
         if (noReplyChannels.has(channelId)) {
-          if (streamKey) {
+          if (noReplyHadContent.has(channelId)) {
+            // Second turn succeeded and produced content — finalize normally
+            // (content will already have been suppressed by quiet mode or
+            // the text NO_REPLY fallback in most cases)
+            log.info(`no_reply: second turn had content, finalizing stream for ${channelId.slice(0, 8)}...`);
+            if (streamKey) {
+              await streaming.finalizeStream(streamKey);
+              activeStreams.delete(channelId);
+            }
+          } else if (streamKey) {
+            // No content from second turn — delete the stream silently
             log.info(`no_reply: deleting stream for ${channelId.slice(0, 8)}...`);
             await streaming.deleteStream(streamKey);
             activeStreams.delete(channelId);
           }
+          noReplyHadContent.delete(channelId);
           // Don't clear noReplyChannels here — the SDK may start a second
           // agentic turn that errors. We clear it on the error or next message.
         } else if (streamKey) {
