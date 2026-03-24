@@ -25,6 +25,7 @@ import { tryWithFallback, isModelError, buildFallbackChain } from './model-fallb
 import type { McpServerInfo } from './command-handler.js';
 import { loadHooks, getHooksInfo, type SessionHooks, type HookInfo } from './hooks-loader.js';
 import { getBridgeDocs } from './bridge-docs.js';
+import type { SystemMessageCustomizeConfig } from '@github/copilot-sdk';
 import type {
   ChannelAdapter, InboundMessage, PendingPermission, PendingUserInput, PendingPlanExit,
 } from '../types.js';
@@ -32,7 +33,7 @@ import type {
 const log = createLogger('session');
 
 /** Custom tools auto-approved without interactive prompt (read-only or enforce workspace boundaries internally). */
-export const BRIDGE_CUSTOM_TOOLS = ['send_file', 'show_file_in_chat', 'ask_agent', 'schedule', 'fetch_copilot_bridge_documentation'];
+export const BRIDGE_CUSTOM_TOOLS = ['send_file', 'show_file_in_chat', 'ask_agent', 'schedule', 'fetch_copilot_bridge_documentation', 'no_reply'];
 
 type SessionEventHandler = (sessionId: string, channelId: string, event: any) => void;
 
@@ -1409,6 +1410,40 @@ export class SessionManager {
     return getWorkspacePath(botName);
   }
 
+  /** Build the system message config for session create/resume.
+   *  Appends bridge-specific instructions to the SDK's custom_instructions section
+   *  so agents get channel communication context without polluting AGENTS.md. */
+  private buildSystemMessage(): SystemMessageCustomizeConfig {
+    const content = [
+      '<bridge_instructions>',
+      'You are communicating through copilot-bridge, a messaging bridge to a chat platform (e.g., Mattermost, Slack).',
+      '',
+      '## Channel Communication',
+      '- Your responses are streamed back to the chat channel in real time',
+      '- Slash commands (e.g., /new, /model, /verbose, /plan) are intercepted by the bridge — you will never see them',
+      '- The user may be on mobile — keep responses concise when possible',
+      '',
+      '## Environment Secrets',
+      '- A `.env` file in your workspace is loaded into your shell environment at session start',
+      '- **Never read, cat, or display `.env` contents** — secret values must stay out of chat',
+      '- Reference secrets by variable name only (e.g., `$APP_TOKEN`)',
+      '- To check if a key exists: `grep -q \'^KEY=\' .env 2>/dev/null`',
+      '- Never use cat, grep -v, sed, or any command that would output .env values',
+      '',
+      '## No-Reply Convention',
+      '- When you have nothing meaningful to add to a conversation, call the `no_reply` tool instead of sending text',
+      '- This is preferred over typing "NO_REPLY" or similar text responses',
+      '</bridge_instructions>',
+    ].join('\n');
+
+    return {
+      mode: 'customize' as const,
+      sections: {
+        custom_instructions: { action: 'append' as const, content },
+      },
+    };
+  }
+
   private async createNewSession(channelId: string): Promise<string> {
     const prefs = this.getEffectivePrefs(channelId);
     const workingDirectory = this.resolveWorkingDirectory(channelId);
@@ -1466,6 +1501,7 @@ export class SessionManager {
           tools: customTools.length > 0 ? customTools : undefined,
           hooks,
           infiniteSessions: getConfig().infiniteSessions,
+          systemMessage: this.buildSystemMessage(),
         })
       );
     };
@@ -1572,6 +1608,7 @@ export class SessionManager {
         tools: customTools.length > 0 ? customTools : undefined,
         hooks,
         infiniteSessions: getConfig().infiniteSessions,
+        systemMessage: this.buildSystemMessage(),
       })
     );
 
@@ -2312,6 +2349,28 @@ export class SessionManager {
 
     // Bridge documentation tool
     tools.push(this.buildBridgeDocsTool(channelId));
+
+    // No-reply tool: agent calls this instead of emitting "NO_REPLY" text
+    tools.push({
+      name: 'no_reply',
+      description: 'Signal that no response is needed for the current message. Call this instead of sending text when you have nothing meaningful to add to the conversation.',
+      parameters: { type: 'object', properties: {} },
+      skipPermission: true,
+      handler: async () => {
+        log.info(`no_reply tool called for channel ${channelId.slice(0, 8)}...`);
+        return { content: 'Acknowledged. No response sent.' };
+      },
+    });
+
+    // Mark safe bridge tools as skip-permission (they enforce their own boundaries).
+    // Admin-only tools (create_project, grant_path_access, revoke_path_access) are
+    // intentionally left on the normal permission path.
+    const skipSet = new Set(BRIDGE_CUSTOM_TOOLS);
+    for (const tool of tools) {
+      if (skipSet.has(tool.name) && !('skipPermission' in tool)) {
+        tool.skipPermission = true;
+      }
+    }
 
     if (tools.length > 0) {
       log.info(`Built ${tools.length} custom tool(s) for channel ${channelId.slice(0, 8)}...`);
