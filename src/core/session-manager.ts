@@ -113,6 +113,12 @@ async function withWorkspaceEnv<T>(workingDirectory: string, fn: () => Promise<T
   }
 }
 
+/** Detect "Session not found" errors from the SDK backend. */
+export function isSessionNotFoundError(err: any): boolean {
+  const msg = String(err?.message ?? err).toLowerCase();
+  return msg.includes('session not found') || msg.includes('session_not_found');
+}
+
 /**
  * Load MCP server configs from ~/.copilot/mcp-config.json and installed plugins.
  * Merges them into a single Record, with user config taking precedence over plugins.
@@ -609,7 +615,7 @@ export class SessionManager {
     const sessionId = this.channelSessions.get(channelId);
     if (!sessionId) return [];
     try {
-      return await this.bridge.listTools();
+      return await this.withSessionRetry(channelId, () => this.bridge.listTools());
     } catch (err) {
       log.warn(`Failed to list tools for channel ${channelId}:`, err);
       return [];
@@ -894,6 +900,36 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Wrap an RPC call with session re-attach recovery.
+   * If the call fails with "Session not found", re-attaches the session and retries.
+   * If re-attach also fails, creates a new session and retries once more.
+   */
+  private async withSessionRetry<T>(channelId: string, fn: (sessionId: string) => Promise<T>): Promise<T> {
+    const { sessionId } = await this.ensureSession(channelId);
+    try {
+      return await fn(sessionId);
+    } catch (err: any) {
+      if (!isSessionNotFoundError(err)) throw err;
+
+      log.info(`Session ${sessionId} not found on RPC — attempting re-attach...`);
+      try {
+        const unsub = this.sessionUnsubscribes.get(sessionId);
+        if (unsub) { unsub(); this.sessionUnsubscribes.delete(sessionId); }
+        try { await this.bridge.destroySession(sessionId); } catch { /* best-effort */ }
+        await this.attachSession(channelId, sessionId);
+        return await fn(sessionId);
+      } catch (retryErr: any) {
+        log.warn(`Re-attach failed for ${sessionId}:`, retryErr?.message ?? retryErr);
+      }
+
+      // Last resort: new session
+      log.info(`Creating new session for channel ${channelId} after RPC failure...`);
+      const newSessionId = await this.newSession(channelId);
+      return await fn(newSessionId);
+    }
+  }
+
   /** Switch the model for a channel's session. */
   async switchModel(channelId: string, model: string, provider?: string | null): Promise<void> {
     const currentPrefs = this.getEffectivePrefs(channelId);
@@ -928,15 +964,8 @@ export class SessionManager {
         throw err;
       }
     } else {
-      // Same provider — use RPC model switch
-      const sessionId = this.channelSessions.get(channelId);
-      if (sessionId) {
-        try {
-          await this.bridge.switchSessionModel(sessionId, model);
-        } catch (err) {
-          log.warn(`RPC model switch failed:`, err);
-        }
-      }
+      // Same provider — use RPC model switch (with session retry)
+      await this.withSessionRetry(channelId, (sid) => this.bridge.switchSessionModel(sid, model));
       setChannelPrefs(channelId, { model, provider: newProvider });
     }
 
@@ -968,16 +997,13 @@ export class SessionManager {
 
   /** Switch the agent for a channel's session. */
   async switchAgent(channelId: string, agent: string | null): Promise<void> {
-    const { sessionId } = await this.ensureSession(channelId);
-    try {
+    await this.withSessionRetry(channelId, async (sid) => {
       if (agent) {
-        await this.bridge.selectAgent(sessionId, agent);
+        await this.bridge.selectAgent(sid, agent);
       } else {
-        await this.bridge.deselectAgent(sessionId);
+        await this.bridge.deselectAgent(sid);
       }
-    } catch (err) {
-      log.warn(`RPC agent switch failed:`, err);
-    }
+    });
     setChannelPrefs(channelId, { agent });
   }
 
@@ -1018,7 +1044,7 @@ export class SessionManager {
     const sessionId = this.channelSessions.get(channelId);
     if (sessionId) {
       try {
-        const result = await this.bridge.getSessionMode(sessionId);
+        const result = await this.withSessionRetry(channelId, (sid) => this.bridge.getSessionMode(sid));
         return result.mode;
       } catch { /* fall through to prefs */ }
     }
@@ -1028,8 +1054,7 @@ export class SessionManager {
 
   /** Set the session mode (interactive, plan, autopilot). Persists to channel prefs. Does not change yolo/permission state. */
   async setSessionMode(channelId: string, mode: 'interactive' | 'plan' | 'autopilot'): Promise<string> {
-    const { sessionId } = await this.ensureSession(channelId);
-    const result = await this.bridge.setSessionMode(sessionId, mode);
+    const result = await this.withSessionRetry(channelId, (sid) => this.bridge.setSessionMode(sid, mode));
     setChannelPrefs(channelId, { sessionMode: result.mode });
     return result.mode;
   }
@@ -1039,7 +1064,7 @@ export class SessionManager {
     const sessionId = this.channelSessions.get(channelId);
     if (!sessionId) return { exists: false, content: null };
     try {
-      const result = await this.bridge.readPlan(sessionId);
+      const result = await this.withSessionRetry(channelId, (sid) => this.bridge.readPlan(sid));
       return { exists: result.exists, content: result.content };
     } catch {
       return { exists: false, content: null };
@@ -1051,7 +1076,7 @@ export class SessionManager {
     const sessionId = this.channelSessions.get(channelId);
     if (!sessionId) return false;
     try {
-      await this.bridge.deletePlan(sessionId);
+      await this.withSessionRetry(channelId, (sid) => this.bridge.deletePlan(sid));
       return true;
     } catch {
       return false;
