@@ -615,7 +615,7 @@ export class SessionManager {
     const sessionId = this.channelSessions.get(channelId);
     if (!sessionId) return [];
     try {
-      return await this.withSessionRetry(channelId, () => this.bridge.listTools());
+      return await this.withSessionRetry(channelId, () => this.bridge.listTools(), false);
     } catch (err) {
       log.warn(`Failed to list tools for channel ${channelId}:`, err);
       return [];
@@ -903,9 +903,10 @@ export class SessionManager {
   /**
    * Wrap an RPC call with session re-attach recovery.
    * If the call fails with "Session not found", re-attaches the session and retries.
-   * If re-attach also fails, creates a new session and retries once more.
+   * If re-attach also fails, creates a new session and retries once more
+   * (unless createOnFail is false, in which case the error propagates).
    */
-  private async withSessionRetry<T>(channelId: string, fn: (sessionId: string) => Promise<T>): Promise<T> {
+  private async withSessionRetry<T>(channelId: string, fn: (sessionId: string) => Promise<T>, createOnFail = true): Promise<T> {
     const { sessionId } = await this.ensureSession(channelId);
     try {
       return await fn(sessionId);
@@ -918,15 +919,16 @@ export class SessionManager {
         if (unsub) { unsub(); this.sessionUnsubscribes.delete(sessionId); }
         try { await this.bridge.destroySession(sessionId); } catch { /* best-effort */ }
         await this.attachSession(channelId, sessionId);
-        return await fn(sessionId);
-      } catch (retryErr: any) {
-        log.warn(`Re-attach failed for ${sessionId}:`, retryErr?.message ?? retryErr);
+      } catch (attachErr: any) {
+        log.warn(`Re-attach failed for ${sessionId}:`, attachErr?.message ?? attachErr);
+        if (!createOnFail) throw err;
+        // Last resort: new session
+        log.info(`Creating new session for channel ${channelId} after RPC failure...`);
+        const newSessionId = await this.newSession(channelId);
+        return await fn(newSessionId);
       }
-
-      // Last resort: new session
-      log.info(`Creating new session for channel ${channelId} after RPC failure...`);
-      const newSessionId = await this.newSession(channelId);
-      return await fn(newSessionId);
+      // Re-attach succeeded — retry fn; let non-session errors propagate
+      return await fn(sessionId);
     }
   }
 
@@ -1044,7 +1046,7 @@ export class SessionManager {
     const sessionId = this.channelSessions.get(channelId);
     if (sessionId) {
       try {
-        const result = await this.withSessionRetry(channelId, (sid) => this.bridge.getSessionMode(sid));
+        const result = await this.withSessionRetry(channelId, (sid) => this.bridge.getSessionMode(sid), false);
         return result.mode;
       } catch { /* fall through to prefs */ }
     }
@@ -1064,7 +1066,7 @@ export class SessionManager {
     const sessionId = this.channelSessions.get(channelId);
     if (!sessionId) return { exists: false, content: null };
     try {
-      const result = await this.withSessionRetry(channelId, (sid) => this.bridge.readPlan(sid));
+      const result = await this.withSessionRetry(channelId, (sid) => this.bridge.readPlan(sid), false);
       return { exists: result.exists, content: result.content };
     } catch {
       return { exists: false, content: null };
@@ -1076,7 +1078,7 @@ export class SessionManager {
     const sessionId = this.channelSessions.get(channelId);
     if (!sessionId) return false;
     try {
-      await this.withSessionRetry(channelId, (sid) => this.bridge.deletePlan(sid));
+      await this.withSessionRetry(channelId, (sid) => this.bridge.deletePlan(sid), false);
       return true;
     } catch {
       return false;
