@@ -45,7 +45,6 @@ export class CopilotBridge {
   constructor() {
     this.client = new CopilotClient({
       autoStart: true,
-      autoRestart: true,
     });
   }
 
