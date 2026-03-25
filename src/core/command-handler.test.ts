@@ -28,6 +28,35 @@ describe('parseCommand', () => {
   });
 });
 
+// --- /reload subcommands ---
+
+describe('/reload subcommands', () => {
+  it('/reload returns reload_session', () => {
+    const result = handleCommand('ch1', '/reload');
+    expect(result.action).toBe('reload_session');
+  });
+
+  it('/reload config returns reload_config', () => {
+    const result = handleCommand('ch1', '/reload config');
+    expect(result.action).toBe('reload_config');
+  });
+
+  it('/reload mcp returns reload_mcp', () => {
+    const result = handleCommand('ch1', '/reload mcp');
+    expect(result.action).toBe('reload_mcp');
+  });
+
+  it('/reload skills returns reload_skills', () => {
+    const result = handleCommand('ch1', '/reload skills');
+    expect(result.action).toBe('reload_skills');
+  });
+
+  it('/reload MCP is case-insensitive', () => {
+    const result = handleCommand('ch1', '/reload MCP');
+    expect(result.action).toBe('reload_mcp');
+  });
+});
+
 // --- /agent validation ---
 
 describe('/agent command', () => {

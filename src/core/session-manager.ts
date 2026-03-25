@@ -939,6 +939,49 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Reload MCP servers on the active session via RPC (no full session restart).
+   * Falls back to full reloadSession() if no active session or RPC fails.
+   */
+  async reloadMcp(channelId: string): Promise<void> {
+    const sessionId = this.channelSessions.get(channelId) ?? getChannelSession(channelId);
+    if (!sessionId) throw new Error('No active session');
+    const session = this.bridge.getSession(sessionId);
+    if (!session) throw new Error('Session not found');
+    // Re-read global MCP config so changes are picked up
+    this.mcpServers = loadMcpServers();
+    await session.rpc.mcp.reload();
+    log.info(`MCP servers reloaded via RPC for channel ${channelId.slice(0, 8)}...`);
+  }
+
+  /**
+   * Reload skills on the active session via RPC (no full session restart).
+   */
+  async reloadSkills(channelId: string): Promise<void> {
+    const sessionId = this.channelSessions.get(channelId) ?? getChannelSession(channelId);
+    if (!sessionId) throw new Error('No active session');
+    const session = this.bridge.getSession(sessionId);
+    if (!session) throw new Error('Session not found');
+    await session.rpc.skills.reload();
+    log.info(`Skills reloaded via RPC for channel ${channelId.slice(0, 8)}...`);
+  }
+
+  /**
+   * Enable or disable a skill on the active session via RPC (instant, no reload needed).
+   */
+  async toggleSkillRpc(channelId: string, skillName: string, action: 'enable' | 'disable'): Promise<void> {
+    const sessionId = this.channelSessions.get(channelId) ?? getChannelSession(channelId);
+    if (!sessionId) throw new Error('No active session');
+    const session = this.bridge.getSession(sessionId);
+    if (!session) throw new Error('Session not found');
+    if (action === 'enable') {
+      await session.rpc.skills.enable({ name: skillName });
+    } else {
+      await session.rpc.skills.disable({ name: skillName });
+    }
+    log.info(`Skill "${skillName}" ${action}d via RPC for channel ${channelId.slice(0, 8)}...`);
+  }
+
   /** Switch the model for a channel's session. */
   async switchModel(channelId: string, model: string, provider?: string | null): Promise<void> {
     const currentPrefs = this.getEffectivePrefs(channelId);
@@ -1014,6 +1057,19 @@ export class SessionManager {
       }
     });
     setChannelPrefs(channelId, { agent });
+  }
+
+  /**
+   * Set reasoning effort on the active session via setModel() RPC.
+   * Uses the current model so only the reasoning effort changes — no full session reload needed.
+   */
+  async setReasoningEffort(channelId: string, effort: string): Promise<void> {
+    const prefs = this.getEffectivePrefs(channelId);
+    const model = prefs.model;
+    await this.withSessionRetry(channelId, (sid) =>
+      this.bridge.switchSessionModel(sid, model, { reasoningEffort: effort })
+    );
+    setChannelPrefs(channelId, { reasoningEffort: effort });
   }
 
   /** Get effective preferences for a channel (config merged with runtime overrides). */
@@ -1493,6 +1549,7 @@ export class SessionManager {
           workingDirectory,
           configDir: defaultConfigDir,
           reasoningEffort: reasoningEffort ?? undefined,
+          agent: prefs.agent ?? undefined,
           mcpServers: resolvedMcpServers,
           skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
           disabledSkills,
@@ -1602,6 +1659,7 @@ export class SessionManager {
         workingDirectory,
         provider: sdkProvider || undefined,
         reasoningEffort: reasoningEffort ?? undefined,
+        agent: prefs.agent ?? undefined,
         mcpServers,
         skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
         disabledSkills,

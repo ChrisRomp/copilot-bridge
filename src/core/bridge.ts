@@ -75,6 +75,7 @@ export class CopilotBridge {
     workingDirectory?: string;
     configDir?: string;
     reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+    agent?: string;
     mcpServers?: Record<string, MCPServerConfig>;
     skillDirectories?: string[];
     disabledSkills?: string[];
@@ -94,6 +95,7 @@ export class CopilotBridge {
       workingDirectory: opts.workingDirectory,
       configDir: opts.configDir,
       reasoningEffort: opts.reasoningEffort,
+      agent: opts.agent,
       mcpServers: opts.mcpServers,
       skillDirectories: opts.skillDirectories,
       disabledSkills: opts.disabledSkills,
@@ -121,6 +123,7 @@ export class CopilotBridge {
       workingDirectory?: string;
       provider?: SDKProviderConfig;
       reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+      agent?: string;
       mcpServers?: Record<string, MCPServerConfig>;
       skillDirectories?: string[];
       disabledSkills?: string[];
@@ -144,6 +147,7 @@ export class CopilotBridge {
       workingDirectory: opts?.workingDirectory,
       provider: opts?.provider,
       reasoningEffort: opts?.reasoningEffort,
+      agent: opts?.agent,
       mcpServers: opts?.mcpServers,
       skillDirectories: opts?.skillDirectories,
       disabledSkills: opts?.disabledSkills,
@@ -263,10 +267,13 @@ export class CopilotBridge {
     return session.rpc.model.getCurrent();
   }
 
-  async switchSessionModel(id: string, modelId: string): Promise<void> {
+  async switchSessionModel(id: string, modelId: string, options?: { reasoningEffort?: string }): Promise<void> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Session ${id} not active`);
-    await session.setModel(modelId);
+    const opts = options?.reasoningEffort
+      ? { reasoningEffort: options.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' }
+      : undefined;
+    await session.setModel(modelId, opts);
   }
 
   async listAgents(id: string): Promise<any> {

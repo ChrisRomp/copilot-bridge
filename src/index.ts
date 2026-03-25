@@ -1093,6 +1093,28 @@ async function handleInboundMessage(
         await adapter.updateMessage(msg.channelId, ackId, reloadMsg);
         break;
       }
+      case 'reload_mcp': {
+        const mcpAck = await adapter.sendMessage(msg.channelId, '⏳ Reloading MCP servers...', { threadRootId: threadRoot });
+        try {
+          await sessionManager.reloadMcp(msg.channelId);
+          await adapter.updateMessage(msg.channelId, mcpAck, '✅ MCP servers reloaded.');
+        } catch (err: any) {
+          log.warn(`MCP reload failed for ${msg.channelId}:`, err);
+          await adapter.updateMessage(msg.channelId, mcpAck, `❌ MCP reload failed: ${err?.message ?? err}`);
+        }
+        break;
+      }
+      case 'reload_skills': {
+        const skillsAck = await adapter.sendMessage(msg.channelId, '⏳ Reloading skills...', { threadRootId: threadRoot });
+        try {
+          await sessionManager.reloadSkills(msg.channelId);
+          await adapter.updateMessage(msg.channelId, skillsAck, '✅ Skills reloaded.');
+        } catch (err: any) {
+          log.warn(`Skills reload failed for ${msg.channelId}:`, err);
+          await adapter.updateMessage(msg.channelId, skillsAck, `❌ Skills reload failed: ${err?.message ?? err}`);
+        }
+        break;
+      }
       case 'resume_session': {
         const oldResumeStream = activeStreams.get(msg.channelId);
         if (oldResumeStream) {
@@ -1201,13 +1223,11 @@ async function handleInboundMessage(
         }
         const ackId = await adapter.sendMessage(msg.channelId, `🧠 Setting reasoning effort to **${cmdResult.payload}**...`, { threadRootId: threadRoot });
         try {
-          const newId = await sessionManager.reloadSession(msg.channelId);
-          const wasNew = newId !== reasoningSessionId;
-          const suffix = wasNew ? ' (previous session expired — new session created)' : '';
-          await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort set to **${cmdResult.payload}**.${suffix}`);
+          await sessionManager.setReasoningEffort(msg.channelId, cmdResult.payload as string);
+          await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort set to **${cmdResult.payload}**.`);
         } catch (err: any) {
-          log.error(`Failed to reload session for reasoning on ${msg.channelId.slice(0, 8)}...:`, err);
-          await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort saved as **${cmdResult.payload}** but session reload failed. Use \`/reload\` to apply.`);
+          log.error(`Failed to set reasoning effort on ${msg.channelId.slice(0, 8)}...:`, err);
+          await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort saved as **${cmdResult.payload}** but RPC failed. Use \`/reload\` to apply.`);
         }
         break;
       }
@@ -1439,10 +1459,18 @@ async function handleInboundMessage(
           if (toggleAction === 'disable') {
             const allNames = [...new Set(skills.map(s => s.name))];
             setChannelPrefs(msg.channelId, { disabledSkills: allNames });
-            await adapter.sendMessage(msg.channelId, `🔴 Disabled all ${allNames.length} skills. Use \`/reload\` to apply.`, { threadRootId: threadRoot });
+            // Apply via RPC for each skill
+            for (const name of allNames) {
+              try { await sessionManager.toggleSkillRpc(msg.channelId, name, 'disable'); } catch { /* best-effort */ }
+            }
+            await adapter.sendMessage(msg.channelId, `🔴 Disabled all ${allNames.length} skills.`, { threadRootId: threadRoot });
           } else {
+            const allNames = [...currentDisabled];
             setChannelPrefs(msg.channelId, { disabledSkills: [] });
-            await adapter.sendMessage(msg.channelId, `🟢 Enabled all skills. Use \`/reload\` to apply.`, { threadRootId: threadRoot });
+            for (const name of allNames) {
+              try { await sessionManager.toggleSkillRpc(msg.channelId, name, 'enable'); } catch { /* best-effort */ }
+            }
+            await adapter.sendMessage(msg.channelId, `🟢 Enabled all skills.`, { threadRootId: threadRoot });
           }
           break;
         }
@@ -1475,6 +1503,10 @@ async function handleInboundMessage(
 
         if (matched.length > 0) {
           setChannelPrefs(msg.channelId, { disabledSkills: [...currentDisabled] });
+          // Apply each toggle via RPC (best-effort — pref is already persisted)
+          for (const name of matched) {
+            try { await sessionManager.toggleSkillRpc(msg.channelId, name, toggleAction); } catch { /* best-effort */ }
+          }
         }
 
         const lines: string[] = [];
@@ -1488,9 +1520,6 @@ async function handleInboundMessage(
         }
         if (notFound.length > 0) {
           lines.push(`❌ No match: ${notFound.map(n => `"${n}"`).join(', ')}`);
-        }
-        if (matched.length > 0) {
-          lines.push('Use `/reload` to apply.');
         }
         await adapter.sendMessage(msg.channelId, lines.join(' '), { threadRootId: threadRoot });
         break;
