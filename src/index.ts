@@ -2069,6 +2069,14 @@ async function handleSessionEvent(
       }
       if (event.type === 'assistant.message') {
         const content = formatted.content?.trim();
+        // Check if this message includes a no_reply tool request — the SDK may
+        // bundle tool requests with content and then skip tool execution entirely,
+        // so we must detect no_reply here (not just in tool.execution_start)
+        const toolRequests = event.data?.toolRequests as Array<{ name?: string }> | undefined;
+        const hasNoReply = toolRequests?.some(t => t.name === 'no_reply');
+        if (hasNoReply) {
+          noReplyChannels.add(channelId);
+        }
         // Skip empty assistant.message events (tool-call signals)
         if (!content) return;
         // Non-empty — check for NO_REPLY
@@ -2145,6 +2153,12 @@ async function handleSessionEvent(
       // This can happen outside quiet mode when the agent determines a user
       // message doesn't require a reply.
       if (event.type === 'assistant.message') {
+        // Detect no_reply in tool requests bundled with the message — the SDK
+        // may skip tool execution when content is present alongside tool calls
+        const toolReqs = event.data?.toolRequests as Array<{ name?: string }> | undefined;
+        if (toolReqs?.some(t => t.name === 'no_reply')) {
+          noReplyChannels.add(channelId);
+        }
         const trimmed = formatted.content?.trim();
         if (trimmed === 'NO_REPLY' || trimmed === '`NO_REPLY`') {
           log.info(`Filtered NO_REPLY on channel ${channelId.slice(0, 8)}...`);
