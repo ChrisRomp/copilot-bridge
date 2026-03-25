@@ -51,7 +51,7 @@ const channelLocks = new Map<string, Promise<void>>();
 const eventLocks = new Map<string, Promise<void>>();
 
 // Channels in "quiet mode" — all streaming output suppressed until we determine
-// whether the response is NO_REPLY. Used for startup nudges and scheduled tasks.
+// whether the response is NO_REPLY. Used for scheduled tasks and silent cron jobs.
 // State managed in src/core/quiet-mode.ts
 
 // Bot adapters keyed by "platform:botName" for channel→adapter lookup
@@ -522,7 +522,7 @@ async function main(): Promise<void> {
           registered++;
           log.info(`Auto-registered DM channel ${dm.channelId.slice(0, 8)}... for bot "${botName}"`);
         } else {
-          // Mark pre-configured DM channels so nudge logic can identify them
+          // Mark pre-configured DM channels so restart notice logic can identify them
           markChannelAsDM(dm.channelId);
         }
       }
@@ -588,10 +588,8 @@ async function main(): Promise<void> {
     },
   });
 
-  // Nudge admin bot sessions that may have been mid-task before restart
-  nudgeAdminSessions(sessionManager).catch(err =>
-    log.error('Admin nudge failed:', err)
-  );
+  // Post restart notice to admin DM channels (no session creation needed)
+  postRestartNotices();
 
   // Graceful shutdown
   const shutdown = async () => {
@@ -908,7 +906,7 @@ async function handleInboundMessage(
 
   // Clear stale no_reply flags from previous turn.
   // Note: a late post-no_reply error could theoretically arrive after this
-  // clear if the user types very quickly after restart, but nudge errors take
+  // clear if the user types very quickly after restart, but post-no_reply errors take
   // ~30s and users rarely type during that window.
   noReplyChannels.delete(msg.channelId);
   noReplyHadContent.delete(msg.channelId);
@@ -2410,47 +2408,23 @@ async function finalizeActivityFeed(channelId: string, adapter: ChannelAdapter):
   activityFeeds.delete(channelId);
 }
 
-// --- Admin Session Nudge ---
+// --- Startup Restart Notice ---
 
-const NUDGE_PROMPT = `The bridge service was just restarted. If you were in the middle of a task, review your conversation history and continue where you left off. If you were not mid-task, call the no_reply tool.`;
-
-async function nudgeAdminSessions(sessionManager: SessionManager): Promise<void> {
+/** Post a restart notice to admin DM channels (no session creation or LLM interaction). */
+function postRestartNotices(): void {
   const allSessions = getAllChannelSessions();
-  if (allSessions.length === 0) return;
-
   for (const { channelId } of allSessions) {
-    // Only nudge channels belonging to admin bots
     if (!isConfiguredChannel(channelId)) continue;
     const channelConfig = getChannelConfig(channelId);
     const botName = getChannelBotName(channelId);
     if (!isBotAdmin(channelConfig.platform, botName)) continue;
+    if (!channelConfig.isDM) continue;
 
-    try {
-      log.info(`Nudging admin session for bot "${botName}" on channel ${channelId.slice(0, 8)}...`);
-      const resolved = getAdapterForChannel(channelId);
-      if (!resolved) {
-        log.warn(`No adapter for channel ${channelId.slice(0, 8)}... — skipping nudge`);
-        continue;
-      }
-      // Only post the visible restart notice in DM channels
-      if (channelConfig.isDM) {
-        resolved.adapter.sendMessage(channelId, '🔄 Bridge restarted.').catch(e =>
-          log.warn(`Failed to post restart notice on ${channelId.slice(0, 8)}...:`, e)
-        );
-      }
-      const clearQuiet = enterQuietMode(channelId);
-      try {
-        markBusy(channelId);
-        await sessionManager.sendMessage(channelId, NUDGE_PROMPT);
-        await waitForChannelIdle(channelId);
-      } finally {
-        clearQuiet();
-      }
-    } catch (err) {
-      exitQuietMode(channelId);
-      markIdleImmediate(channelId);
-      log.warn(`Failed to nudge admin session on channel ${channelId.slice(0, 8)}...:`, err);
-    }
+    const resolved = getAdapterForChannel(channelId);
+    if (!resolved) continue;
+    resolved.adapter.sendMessage(channelId, '🔄 Bridge restarted.').catch(e =>
+      log.warn(`Failed to post restart notice on ${channelId.slice(0, 8)}...:`, e)
+    );
   }
 }
 

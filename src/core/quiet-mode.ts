@@ -1,6 +1,6 @@
 /**
  * Quiet mode — suppresses all streaming output until we determine whether
- * a response is NO_REPLY. Used for startup nudges and scheduled tasks.
+ * a response is NO_REPLY. Used for scheduled tasks and silent cron jobs.
  */
 import { createLogger } from '../logger.js';
 
