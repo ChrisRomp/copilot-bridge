@@ -115,7 +115,7 @@ To add a new agent to the bridge:
    
    **Important**: Do NOT use `launchctl unload && launchctl load` — if anything fails between unload and load, the service stays down and KeepAlive cannot restart it.
    
-   **Before restarting**: Check if you have any background tasks or pending work in progress. Complete or checkpoint your current work first — the restart will end your session. The bridge will nudge you on startup to resume if you were mid-task.
+   **Before restarting**: Check if you have any background tasks or pending work in progress. Complete or checkpoint your current work first — the restart will end your session.
 
 7. **Done**: After the bridge restarts, the user just DMs the new bot in Mattermost. The bridge discovers the DM channel automatically via the Mattermost API — no further configuration needed. The bot uses its default workspace at `{{workspacesDir}}/<botname>/`.
 
@@ -217,8 +217,7 @@ Chat Platform (Mattermost/Slack) → copilot-bridge → @github/copilot-sdk → 
 
 - Each channel maps to a Copilot session with a working directory, model, and optional agent
 - Multiple bot identities can run on the same platform
-- Sessions persist in SQLite and resume across restarts
-- On startup, admin sessions receive a nudge to continue mid-task work (idle sessions call the no_reply tool, which is filtered)
+- Sessions persist in SQLite and resume across restarts (lazy — on first message)
 - Permissions: config rules → SQLite stored rules (from /remember) → interactive prompt
 - Workspaces at `{{workspacesDir}}/<botname>/` auto-allow read+write within boundaries
 

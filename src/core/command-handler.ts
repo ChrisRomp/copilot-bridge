@@ -41,7 +41,7 @@ export interface ModelInfo {
 export interface CommandResult {
   handled: boolean;
   response?: string;
-  action?: 'new_session' | 'reload_session' | 'reload_config' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
+  action?: 'new_session' | 'reload_session' | 'reload_config' | 'reload_mcp' | 'reload_skills' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
            'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_deny' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills' | 'skill_toggle' | 'mcp' | 'plan' | 'implement' | 'provider_test';
   payload?: any;
 }
@@ -341,12 +341,19 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
     case 'cancel':
       return { handled: true, action: 'stop_session', response: '🛑 Stopping current task...' };
 
-    case 'reload':
-      if (parsed.args?.trim().toLowerCase() === 'config') {
+    case 'reload': {
+      const arg = parsed.args?.trim().toLowerCase();
+      if (arg === 'config') {
         return { handled: true, action: 'reload_config', response: '🔄 Reloading config...' };
       }
+      if (arg === 'mcp') {
+        return { handled: true, action: 'reload_mcp', response: '🔄 Reloading MCP servers...' };
+      }
+      if (arg === 'skills') {
+        return { handled: true, action: 'reload_skills', response: '🔄 Reloading skills...' };
+      }
       return { handled: true, action: 'reload_session', response: '🔄 Reloading session...' };
-
+    }
     case 'resume': {
       if (!parsed.args) {
         // No args = list available sessions for this channel's working directory
@@ -715,6 +722,8 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
           '`/stop` — Stop the current task (alias: `/cancel`)',
           '`/reload` — Reload session (re-reads AGENTS.md, workspace config)',
           '`/reload config` — Hot-reload config.json',
+          '`/reload mcp` — Reload MCP servers (no session restart)',
+          '`/reload skills` — Reload skills (no session restart)',
           '`/resume [id]` — Resume current session (or a past one by ID)',
           '`/model [name]` — List models or switch model (fuzzy match)',
           '`/agent <name>` — Switch custom agent (empty to deselect)',

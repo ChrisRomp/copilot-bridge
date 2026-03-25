@@ -51,7 +51,7 @@ const channelLocks = new Map<string, Promise<void>>();
 const eventLocks = new Map<string, Promise<void>>();
 
 // Channels in "quiet mode" — all streaming output suppressed until we determine
-// whether the response is NO_REPLY. Used for startup nudges and scheduled tasks.
+// whether the response is NO_REPLY. Used for scheduled tasks and silent cron jobs.
 // State managed in src/core/quiet-mode.ts
 
 // Bot adapters keyed by "platform:botName" for channel→adapter lookup
@@ -522,7 +522,7 @@ async function main(): Promise<void> {
           registered++;
           log.info(`Auto-registered DM channel ${dm.channelId.slice(0, 8)}... for bot "${botName}"`);
         } else {
-          // Mark pre-configured DM channels so nudge logic can identify them
+          // Mark pre-configured DM channels so restart notice logic can identify them
           markChannelAsDM(dm.channelId);
         }
       }
@@ -588,10 +588,8 @@ async function main(): Promise<void> {
     },
   });
 
-  // Nudge admin bot sessions that may have been mid-task before restart
-  nudgeAdminSessions(sessionManager).catch(err =>
-    log.error('Admin nudge failed:', err)
-  );
+  // Post restart notice to admin DM channels (no session creation needed)
+  postRestartNotices();
 
   // Graceful shutdown
   const shutdown = async () => {
@@ -908,7 +906,7 @@ async function handleInboundMessage(
 
   // Clear stale no_reply flags from previous turn.
   // Note: a late post-no_reply error could theoretically arrive after this
-  // clear if the user types very quickly after restart, but nudge errors take
+  // clear if the user types very quickly after restart, but post-no_reply errors take
   // ~30s and users rarely type during that window.
   noReplyChannels.delete(msg.channelId);
   noReplyHadContent.delete(msg.channelId);
@@ -1017,7 +1015,7 @@ async function handleInboundMessage(
     const threadRoot = resolveThreadRoot(msg, threadRequested, channelConfig);
 
     // Send response before action, except for actions that send their own ack after completing
-    const deferResponse = cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent' || cmdResult.action === 'set_reasoning';
+    const deferResponse = cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent' || cmdResult.action === 'set_reasoning' || cmdResult.action === 'reload_mcp' || cmdResult.action === 'reload_skills';
     if (cmdResult.response && !deferResponse) {
       await adapter.sendMessage(msg.channelId, cmdResult.response, { threadRootId: threadRoot });
     }
@@ -1091,6 +1089,28 @@ async function handleInboundMessage(
           ? `⚠️ Previous session not found — created new session (\`${sessionId.slice(0, 8)}…\`).`
           : `✅ Session reloaded (\`${sessionId.slice(0, 8)}…\`). Config and AGENTS.md re-read.`;
         await adapter.updateMessage(msg.channelId, ackId, reloadMsg);
+        break;
+      }
+      case 'reload_mcp': {
+        const mcpAck = await adapter.sendMessage(msg.channelId, '⏳ Reloading MCP servers...', { threadRootId: threadRoot });
+        try {
+          await sessionManager.reloadMcp(msg.channelId);
+          await adapter.updateMessage(msg.channelId, mcpAck, '✅ MCP servers reloaded.');
+        } catch (err: any) {
+          log.warn(`MCP reload failed for ${msg.channelId}:`, err);
+          await adapter.updateMessage(msg.channelId, mcpAck, `❌ MCP reload failed: ${err?.message ?? err}`);
+        }
+        break;
+      }
+      case 'reload_skills': {
+        const skillsAck = await adapter.sendMessage(msg.channelId, '⏳ Reloading skills...', { threadRootId: threadRoot });
+        try {
+          await sessionManager.reloadSkills(msg.channelId);
+          await adapter.updateMessage(msg.channelId, skillsAck, '✅ Skills reloaded.');
+        } catch (err: any) {
+          log.warn(`Skills reload failed for ${msg.channelId}:`, err);
+          await adapter.updateMessage(msg.channelId, skillsAck, `❌ Skills reload failed: ${err?.message ?? err}`);
+        }
         break;
       }
       case 'resume_session': {
@@ -1201,13 +1221,11 @@ async function handleInboundMessage(
         }
         const ackId = await adapter.sendMessage(msg.channelId, `🧠 Setting reasoning effort to **${cmdResult.payload}**...`, { threadRootId: threadRoot });
         try {
-          const newId = await sessionManager.reloadSession(msg.channelId);
-          const wasNew = newId !== reasoningSessionId;
-          const suffix = wasNew ? ' (previous session expired — new session created)' : '';
-          await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort set to **${cmdResult.payload}**.${suffix}`);
+          await sessionManager.setReasoningEffort(msg.channelId, cmdResult.payload as string);
+          await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort set to **${cmdResult.payload}**.`);
         } catch (err: any) {
-          log.error(`Failed to reload session for reasoning on ${msg.channelId.slice(0, 8)}...:`, err);
-          await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort saved as **${cmdResult.payload}** but session reload failed. Use \`/reload\` to apply.`);
+          log.error(`Failed to set reasoning effort on ${msg.channelId.slice(0, 8)}...:`, err);
+          await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort saved as **${cmdResult.payload}** but RPC failed. Use \`/reload\` to apply.`);
         }
         break;
       }
@@ -1439,10 +1457,18 @@ async function handleInboundMessage(
           if (toggleAction === 'disable') {
             const allNames = [...new Set(skills.map(s => s.name))];
             setChannelPrefs(msg.channelId, { disabledSkills: allNames });
-            await adapter.sendMessage(msg.channelId, `🔴 Disabled all ${allNames.length} skills. Use \`/reload\` to apply.`, { threadRootId: threadRoot });
+            // Apply via RPC for each skill
+            for (const name of allNames) {
+              try { await sessionManager.toggleSkillRpc(msg.channelId, name, 'disable'); } catch { /* best-effort */ }
+            }
+            await adapter.sendMessage(msg.channelId, `🔴 Disabled all ${allNames.length} skills.`, { threadRootId: threadRoot });
           } else {
+            const allNames = [...currentDisabled];
             setChannelPrefs(msg.channelId, { disabledSkills: [] });
-            await adapter.sendMessage(msg.channelId, `🟢 Enabled all skills. Use \`/reload\` to apply.`, { threadRootId: threadRoot });
+            for (const name of allNames) {
+              try { await sessionManager.toggleSkillRpc(msg.channelId, name, 'enable'); } catch { /* best-effort */ }
+            }
+            await adapter.sendMessage(msg.channelId, `🟢 Enabled all skills.`, { threadRootId: threadRoot });
           }
           break;
         }
@@ -1475,6 +1501,10 @@ async function handleInboundMessage(
 
         if (matched.length > 0) {
           setChannelPrefs(msg.channelId, { disabledSkills: [...currentDisabled] });
+          // Apply each toggle via RPC (best-effort — pref is already persisted)
+          for (const name of matched) {
+            try { await sessionManager.toggleSkillRpc(msg.channelId, name, toggleAction); } catch { /* best-effort */ }
+          }
         }
 
         const lines: string[] = [];
@@ -1488,9 +1518,6 @@ async function handleInboundMessage(
         }
         if (notFound.length > 0) {
           lines.push(`❌ No match: ${notFound.map(n => `"${n}"`).join(', ')}`);
-        }
-        if (matched.length > 0) {
-          lines.push('Use `/reload` to apply.');
         }
         await adapter.sendMessage(msg.channelId, lines.join(' '), { threadRootId: threadRoot });
         break;
@@ -2040,6 +2067,14 @@ async function handleSessionEvent(
       }
       if (event.type === 'assistant.message') {
         const content = formatted.content?.trim();
+        // Check if this message includes a no_reply tool request — the SDK may
+        // bundle tool requests with content and then skip tool execution entirely,
+        // so we must detect no_reply here (not just in tool.execution_start)
+        const toolRequests = event.data?.toolRequests as Array<{ name?: string }> | undefined;
+        const hasNoReply = toolRequests?.some(t => t.name === 'no_reply');
+        if (hasNoReply) {
+          noReplyChannels.add(channelId);
+        }
         // Skip empty assistant.message events (tool-call signals)
         if (!content) return;
         // Non-empty — check for NO_REPLY
@@ -2116,6 +2151,12 @@ async function handleSessionEvent(
       // This can happen outside quiet mode when the agent determines a user
       // message doesn't require a reply.
       if (event.type === 'assistant.message') {
+        // Detect no_reply in tool requests bundled with the message — the SDK
+        // may skip tool execution when content is present alongside tool calls
+        const toolReqs = event.data?.toolRequests as Array<{ name?: string }> | undefined;
+        if (toolReqs?.some(t => t.name === 'no_reply')) {
+          noReplyChannels.add(channelId);
+        }
         const trimmed = formatted.content?.trim();
         if (trimmed === 'NO_REPLY' || trimmed === '`NO_REPLY`') {
           log.info(`Filtered NO_REPLY on channel ${channelId.slice(0, 8)}...`);
@@ -2367,47 +2408,23 @@ async function finalizeActivityFeed(channelId: string, adapter: ChannelAdapter):
   activityFeeds.delete(channelId);
 }
 
-// --- Admin Session Nudge ---
+// --- Startup Restart Notice ---
 
-const NUDGE_PROMPT = `The bridge service was just restarted. If you were in the middle of a task, review your conversation history and continue where you left off. If you were not mid-task, call the no_reply tool.`;
-
-async function nudgeAdminSessions(sessionManager: SessionManager): Promise<void> {
+/** Post a restart notice to admin DM channels (no session creation or LLM interaction). */
+function postRestartNotices(): void {
   const allSessions = getAllChannelSessions();
-  if (allSessions.length === 0) return;
-
   for (const { channelId } of allSessions) {
-    // Only nudge channels belonging to admin bots
     if (!isConfiguredChannel(channelId)) continue;
     const channelConfig = getChannelConfig(channelId);
     const botName = getChannelBotName(channelId);
     if (!isBotAdmin(channelConfig.platform, botName)) continue;
+    if (!channelConfig.isDM) continue;
 
-    try {
-      log.info(`Nudging admin session for bot "${botName}" on channel ${channelId.slice(0, 8)}...`);
-      const resolved = getAdapterForChannel(channelId);
-      if (!resolved) {
-        log.warn(`No adapter for channel ${channelId.slice(0, 8)}... — skipping nudge`);
-        continue;
-      }
-      // Only post the visible restart notice in DM channels
-      if (channelConfig.isDM) {
-        resolved.adapter.sendMessage(channelId, '🔄 Bridge restarted.').catch(e =>
-          log.warn(`Failed to post restart notice on ${channelId.slice(0, 8)}...:`, e)
-        );
-      }
-      const clearQuiet = enterQuietMode(channelId);
-      try {
-        markBusy(channelId);
-        await sessionManager.sendMessage(channelId, NUDGE_PROMPT);
-        await waitForChannelIdle(channelId);
-      } finally {
-        clearQuiet();
-      }
-    } catch (err) {
-      exitQuietMode(channelId);
-      markIdleImmediate(channelId);
-      log.warn(`Failed to nudge admin session on channel ${channelId.slice(0, 8)}...:`, err);
-    }
+    const resolved = getAdapterForChannel(channelId);
+    if (!resolved) continue;
+    resolved.adapter.sendMessage(channelId, '🔄 Bridge restarted.').catch(e =>
+      log.warn(`Failed to post restart notice on ${channelId.slice(0, 8)}...:`, e)
+    );
   }
 }
 
