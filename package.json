@@ -42,7 +42,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@github/copilot-sdk": "^0.1.32",
+    "@github/copilot-sdk": "^0.2.0",
     "@mattermost/client": "^10.3.0",
     "@mattermost/types": "^10.3.0",
     "@slack/bolt": "^4.6.0",
