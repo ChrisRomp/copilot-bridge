@@ -13,7 +13,7 @@ const log = createLogger('bridge-docs');
 
 const TOPICS = [
   'overview', 'commands', 'config', 'mcp', 'permissions', 'workspaces',
-  'hooks', 'skills', 'inter-agent', 'scheduling', 'providers', 'troubleshooting', 'status',
+  'hooks', 'skills', 'inter-agent', 'scheduling', 'providers', 'telemetry', 'troubleshooting', 'status',
 ] as const;
 
 export type DocTopic = typeof TOPICS[number];
@@ -184,6 +184,7 @@ ${editNote}
 | \`permissions\` | object | Permission rules (allow/deny patterns) |
 | \`interAgent\` | object | Inter-agent communication settings |
 | \`providers\` | object | BYOK provider configs (use \`fetch_copilot_bridge_documentation({ topic: "providers" })\` for details) |
+| \`telemetry\` | object | OpenTelemetry trace export config (use \`fetch_copilot_bridge_documentation({ topic: "telemetry" })\` for details) |
 
 ## Defaults Section (per-channel overridable)
 
@@ -701,6 +702,75 @@ If the agent outputs raw XML/JSON instead of running tools, the model doesn't su
 }
 
 // ---------------------------------------------------------------------------
+// Topic: telemetry
+// ---------------------------------------------------------------------------
+
+function topicTelemetry(isAdmin: boolean): string {
+  const editNote = isAdmin
+    ? 'Add the `telemetry` section to `~/.copilot-bridge/config.json`.'
+    : 'Telemetry configuration requires editing `config.json`. Ask your administrator.';
+
+  return `# OpenTelemetry Telemetry
+
+The bridge can export OpenTelemetry traces from the Copilot CLI subprocess. The CLI auto-instruments model calls, tool execution, and session lifecycle following the OTel GenAI semantic conventions. Token usage (input/output tokens) is included in span attributes.
+
+${editNote}
+
+## Configuration
+
+Add a \`telemetry\` section to \`config.json\`:
+
+\`\`\`json
+{
+  "telemetry": {
+    "otlpEndpoint": "http://localhost:4318",
+    "sourceName": "copilot-bridge",
+    "captureContent": false,
+    "authEnv": "OTEL_AUTH"
+  }
+}
+\`\`\`
+
+## Config Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| \`otlpEndpoint\` | string | OTLP HTTP endpoint URL for trace export |
+| \`exporterType\` | string | \`"otlp-http"\` (default) or \`"file"\` |
+| \`filePath\` | string | JSON-lines trace output path (for file exporter) |
+| \`sourceName\` | string | Instrumentation scope name (default: \`"copilot-bridge"\`) |
+| \`captureContent\` | boolean | Include message content (prompts/responses) in traces |
+| \`authEnv\` | string | Env var name holding the Authorization header value |
+
+## Authentication
+
+For endpoints requiring auth (e.g., OpenObserve, Grafana Cloud), set the \`authEnv\` field to the name of an env var containing the full Authorization header value:
+
+1. Add the credential to a workspace \`.env\` file: \`OTEL_AUTH=Basic <base64-encoded-credentials>\`
+2. Set \`"authEnv": "OTEL_AUTH"\` in the telemetry config
+3. The bridge resolves the value from \`process.env\` or workspace \`.env\` files and passes it as the \`OTEL_EXPORTER_OTLP_HEADERS\` header, scoped to the CLI subprocess only
+
+## What Gets Traced
+
+The CLI emits spans for:
+- **Model calls** — including token counts (\`gen_ai.usage.input_tokens\`, \`gen_ai.usage.output_tokens\`)
+- **Tool execution** — each tool call with timing
+- **Session lifecycle** — create, resume, idle
+
+## Notes
+
+- Telemetry config changes require a bridge restart (\`/reload config\` will report this)
+- The bridge itself does not emit spans — only the CLI subprocess is instrumented
+- Compatible with any OTLP HTTP collector: OpenObserve, Jaeger, Grafana Tempo, etc.
+
+## Source
+
+- Config: \`src/types.ts\` (BridgeTelemetryConfig), \`src/config.ts\` (validation)
+- Resolution: \`src/index.ts\` (resolveTelemetryConfig)
+- SDK integration: \`src/core/bridge.ts\` (CopilotClient constructor)`;
+}
+
+// ---------------------------------------------------------------------------
 // Topic: troubleshooting
 // ---------------------------------------------------------------------------
 
@@ -843,6 +913,7 @@ ${topicList()}`;
     case 'inter-agent': return topicInterAgent();
     case 'scheduling': return topicScheduling();
     case 'providers': return topicProviders(req.isAdmin);
+    case 'telemetry': return topicTelemetry(req.isAdmin);
     case 'troubleshooting': return topicTroubleshooting(req.isAdmin);
     case 'status': return topicStatus({ channelId: req.channelId, model: req.model, sessionId: req.sessionId });
   }

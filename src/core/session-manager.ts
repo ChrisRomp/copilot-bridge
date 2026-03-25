@@ -2591,8 +2591,8 @@ export class SessionManager {
         properties: {
           topic: {
             type: 'string',
-            enum: ['overview', 'commands', 'config', 'mcp', 'permissions', 'workspaces', 'hooks', 'skills', 'inter-agent', 'scheduling', 'providers', 'troubleshooting', 'status'],
-            description: "Topic to query. 'overview' = what the bridge is and key features. 'commands' = common slash commands. 'config' = configuration options. 'mcp' = MCP server setup. 'permissions' = permission system. 'workspaces' = workspace structure. 'hooks' = tool hooks. 'skills' = skill discovery. 'inter-agent' = bot-to-bot communication. 'scheduling' = task scheduling. 'providers' = BYOK provider setup and commands. 'troubleshooting' = common issues. 'status' = live system state.",
+            enum: ['overview', 'commands', 'config', 'mcp', 'permissions', 'workspaces', 'hooks', 'skills', 'inter-agent', 'scheduling', 'providers', 'telemetry', 'troubleshooting', 'status'],
+            description: "Topic to query. 'overview' = what the bridge is and key features. 'commands' = common slash commands. 'config' = configuration options. 'mcp' = MCP server setup. 'permissions' = permission system. 'workspaces' = workspace structure. 'hooks' = tool hooks. 'skills' = skill discovery. 'inter-agent' = bot-to-bot communication. 'scheduling' = task scheduling. 'providers' = BYOK provider setup and commands. 'telemetry' = OpenTelemetry trace export. 'troubleshooting' = common issues. 'status' = live system state.",
           },
         },
         required: [],
