@@ -941,13 +941,17 @@ export class SessionManager {
 
   /**
    * Reload MCP servers on the active session via RPC (no full session restart).
-   * Falls back to full reloadSession() if no active session or RPC fails.
+   * Tells the SDK to re-read its MCP config (e.g., workspace mcp-config.json changes).
+   * Falls back to full reloadSession() if no active session exists yet.
    */
   async reloadMcp(channelId: string): Promise<void> {
     const sessionId = this.channelSessions.get(channelId) ?? getChannelSession(channelId);
-    if (!sessionId) throw new Error('No active session');
-    const session = this.bridge.getSession(sessionId);
-    if (!session) throw new Error('Session not found');
+    const session = sessionId ? this.bridge.getSession(sessionId) : undefined;
+    if (!session) {
+      log.info(`No active session for ${channelId.slice(0, 8)}... — falling back to full reload`);
+      await this.reloadSession(channelId);
+      return;
+    }
     // Re-read global MCP config so changes are picked up
     this.mcpServers = loadMcpServers();
     await session.rpc.mcp.reload();
@@ -956,24 +960,29 @@ export class SessionManager {
 
   /**
    * Reload skills on the active session via RPC (no full session restart).
+   * Tells the SDK to re-read skill directories already configured on the session.
+   * Falls back to full reloadSession() if no active session exists yet.
    */
   async reloadSkills(channelId: string): Promise<void> {
     const sessionId = this.channelSessions.get(channelId) ?? getChannelSession(channelId);
-    if (!sessionId) throw new Error('No active session');
-    const session = this.bridge.getSession(sessionId);
-    if (!session) throw new Error('Session not found');
+    const session = sessionId ? this.bridge.getSession(sessionId) : undefined;
+    if (!session) {
+      log.info(`No active session for ${channelId.slice(0, 8)}... — falling back to full reload`);
+      await this.reloadSession(channelId);
+      return;
+    }
     await session.rpc.skills.reload();
     log.info(`Skills reloaded via RPC for channel ${channelId.slice(0, 8)}...`);
   }
 
   /**
    * Enable or disable a skill on the active session via RPC (instant, no reload needed).
+   * Silently no-ops if no active session (pref is already persisted).
    */
   async toggleSkillRpc(channelId: string, skillName: string, action: 'enable' | 'disable'): Promise<void> {
     const sessionId = this.channelSessions.get(channelId) ?? getChannelSession(channelId);
-    if (!sessionId) throw new Error('No active session');
-    const session = this.bridge.getSession(sessionId);
-    if (!session) throw new Error('Session not found');
+    const session = sessionId ? this.bridge.getSession(sessionId) : undefined;
+    if (!session) return; // Pref already persisted; will apply on next session create
     if (action === 'enable') {
       await session.rpc.skills.enable({ name: skillName });
     } else {
