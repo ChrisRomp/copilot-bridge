@@ -210,6 +210,9 @@ function validateAndNormalize(raw: any): AppConfig {
     if (t.authEnv !== undefined && typeof t.authEnv !== 'string') {
       throw new Error('telemetry.authEnv must be a string (env var name)');
     }
+    if (t.filePath && t.exporterType !== 'file') {
+      log.warn('telemetry.filePath is set but exporterType is not "file" — traces will not be written to disk');
+    }
   }
 
   // Apply defaults
