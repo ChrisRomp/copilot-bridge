@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgentConfig, AccessConfig, BridgeProviderConfig, BridgeTelemetryConfig } from './types.js';
+import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgentConfig, AccessConfig, BridgeProviderConfig } from './types.js';
 import type { SDKProviderConfig } from './core/bridge.js';
 import { getDynamicChannel } from './state/store.js';
 import { createLogger } from './logger.js';

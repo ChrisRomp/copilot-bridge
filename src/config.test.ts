@@ -811,3 +811,67 @@ describe('logLevel config validation', () => {
     expect2(config.logLevel).toBeUndefined();
   });
 });
+
+describe('telemetry config validation', () => {
+  let tmpDir: string;
+  let configFile: string;
+
+  beforeEach(() => {
+    _resetConfigForTest();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telemetry-test-'));
+    configFile = path.join(tmpDir, 'config.json');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('accepts valid telemetry config', () => {
+    const cfg = makeConfig({
+      telemetry: { otlpEndpoint: 'http://localhost:4318', sourceName: 'test', captureContent: true, authEnv: 'OTEL_AUTH' },
+    });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    const config = loadConfig(configFile);
+    expect2(config.telemetry?.otlpEndpoint).toBe('http://localhost:4318');
+    expect2(config.telemetry?.sourceName).toBe('test');
+    expect2(config.telemetry?.captureContent).toBe(true);
+  });
+
+  it('accepts config without telemetry', () => {
+    const cfg = makeConfig();
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    const config = loadConfig(configFile);
+    expect2(config.telemetry).toBeUndefined();
+  });
+
+  it('rejects non-object telemetry', () => {
+    const cfg = makeConfig({ telemetry: 'bad' });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    expect2(() => loadConfig(configFile)).toThrow(/"telemetry" must be an object/);
+  });
+
+  it('rejects invalid exporterType', () => {
+    const cfg = makeConfig({ telemetry: { exporterType: 'grpc' } });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    expect2(() => loadConfig(configFile)).toThrow(/exporterType must be/);
+  });
+
+  it('rejects non-boolean captureContent', () => {
+    const cfg = makeConfig({ telemetry: { otlpEndpoint: 'http://localhost:4318', captureContent: 'yes' } });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    expect2(() => loadConfig(configFile)).toThrow(/captureContent must be a boolean/);
+  });
+
+  it('detects telemetry changes as restart-required on reload', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig()));
+    loadConfig(configFile);
+
+    const updated = makeConfig({ telemetry: { otlpEndpoint: 'http://localhost:4318' } });
+    fs.writeFileSync(configFile, JSON.stringify(updated));
+
+    const result = reloadConfig();
+    expect2(result.success).toBe(true);
+    expect2(result.changes.some((c: string) => c.includes('telemetry'))).toBe(true);
+    expect2(result.restartNeeded.some((r: string) => r.includes('telemetry'))).toBe(true);
+  });
+});

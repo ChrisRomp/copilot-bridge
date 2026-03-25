@@ -16,7 +16,7 @@ import { enterQuietMode, exitQuietMode, isQuiet } from './core/quiet-mode.js';
 import { createLogger, setLogLevel } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig, BridgeTelemetryConfig } from './types.js';
+import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig } from './types.js';
 
 const log = createLogger('bridge');
 
@@ -321,12 +321,12 @@ async function resolveSlackAccessUsers(config: AppConfig): Promise<void> {
 }
 
 /** Resolve bridge telemetry config into SDK TelemetryConfig + scoped env for auth. */
-function resolveTelemetryConfig(config: AppConfig): { telemetry?: import('@github/copilot-sdk').TelemetryConfig; env?: Record<string, string | undefined> } {
+function resolveTelemetryConfig(config: AppConfig): { telemetry?: import('@github/copilot-sdk').TelemetryConfig; env?: NodeJS.ProcessEnv } {
   const t = config.telemetry;
   if (!t?.otlpEndpoint && !t?.filePath) return {};
 
   // Build a scoped env with the auth header (avoids leaking to unrelated child processes)
-  let env: Record<string, string | undefined> | undefined;
+  let env: NodeJS.ProcessEnv | undefined;
   if (t.authEnv) {
     let authValue = process.env[t.authEnv];
     if (!authValue) {
