@@ -186,6 +186,35 @@ function validateAndNormalize(raw: any): AppConfig {
     }
   }
 
+  // Validate telemetry config (optional)
+  if (raw.telemetry !== undefined) {
+    if (raw.telemetry === null || typeof raw.telemetry !== 'object' || Array.isArray(raw.telemetry)) {
+      throw new Error('"telemetry" must be an object');
+    }
+    const t = raw.telemetry;
+    if (t.otlpEndpoint !== undefined && typeof t.otlpEndpoint !== 'string') {
+      throw new Error('telemetry.otlpEndpoint must be a string');
+    }
+    if (t.exporterType !== undefined && !['otlp-http', 'file'].includes(t.exporterType)) {
+      throw new Error('telemetry.exporterType must be "otlp-http" or "file"');
+    }
+    if (t.filePath !== undefined && typeof t.filePath !== 'string') {
+      throw new Error('telemetry.filePath must be a string');
+    }
+    if (t.sourceName !== undefined && typeof t.sourceName !== 'string') {
+      throw new Error('telemetry.sourceName must be a string');
+    }
+    if (t.captureContent !== undefined && typeof t.captureContent !== 'boolean') {
+      throw new Error('telemetry.captureContent must be a boolean');
+    }
+    if (t.authEnv !== undefined && typeof t.authEnv !== 'string') {
+      throw new Error('telemetry.authEnv must be a string (env var name)');
+    }
+    if (t.filePath && t.exporterType !== 'file') {
+      log.warn('telemetry.filePath is set but exporterType is not "file" — traces will not be written to disk');
+    }
+  }
+
   // Apply defaults
   const defaults = {
     model: 'claude-sonnet-4.6',
@@ -206,6 +235,7 @@ function validateAndNormalize(raw: any): AppConfig {
     permissions: raw.permissions,
     interAgent: raw.interAgent,
     providers: raw.providers,
+    telemetry: raw.telemetry,
   };
 }
 
@@ -328,6 +358,12 @@ function diffConfigs(oldCfg: AppConfig, newCfg: AppConfig): { changes: string[];
     } else if (JSON.stringify(op) !== JSON.stringify(np)) {
       changes.push(`provider "${name}": config updated`);
     }
+  }
+
+  // --- Telemetry ---
+  if (JSON.stringify(oldCfg.telemetry ?? {}) !== JSON.stringify(newCfg.telemetry ?? {})) {
+    changes.push('telemetry config updated');
+    restartNeeded.push('telemetry config changed (requires restart)');
   }
 
   // --- Channels ---

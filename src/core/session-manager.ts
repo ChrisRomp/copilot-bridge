@@ -44,7 +44,7 @@ let envLock: Promise<void> = Promise.resolve();
  * Parse a .env file into a key-value map.
  * Handles KEY=VALUE, KEY="VALUE", KEY='VALUE', comments, and blank lines.
  */
-function parseEnvFile(filePath: string): Record<string, string> {
+export function parseEnvFile(filePath: string): Record<string, string> {
   try {
     const content = fs.readFileSync(filePath, 'utf-8');
     const vars: Record<string, string> = {};
@@ -2591,8 +2591,8 @@ export class SessionManager {
         properties: {
           topic: {
             type: 'string',
-            enum: ['overview', 'commands', 'config', 'mcp', 'permissions', 'workspaces', 'hooks', 'skills', 'inter-agent', 'scheduling', 'providers', 'troubleshooting', 'status'],
-            description: "Topic to query. 'overview' = what the bridge is and key features. 'commands' = common slash commands. 'config' = configuration options. 'mcp' = MCP server setup. 'permissions' = permission system. 'workspaces' = workspace structure. 'hooks' = tool hooks. 'skills' = skill discovery. 'inter-agent' = bot-to-bot communication. 'scheduling' = task scheduling. 'providers' = BYOK provider setup and commands. 'troubleshooting' = common issues. 'status' = live system state.",
+            enum: ['overview', 'commands', 'config', 'mcp', 'permissions', 'workspaces', 'hooks', 'skills', 'inter-agent', 'scheduling', 'providers', 'telemetry', 'troubleshooting', 'status'],
+            description: "Topic to query. 'overview' = what the bridge is and key features. 'commands' = common slash commands. 'config' = configuration options. 'mcp' = MCP server setup. 'permissions' = permission system. 'workspaces' = workspace structure. 'hooks' = tool hooks. 'skills' = skill discovery. 'inter-agent' = bot-to-bot communication. 'scheduling' = task scheduling. 'providers' = BYOK provider setup and commands. 'telemetry' = OpenTelemetry trace export. 'troubleshooting' = common issues. 'status' = live system state.",
           },
         },
         required: [],

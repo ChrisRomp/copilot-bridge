@@ -14,6 +14,7 @@ import {
   type SystemMessageConfig,
   type SessionLifecycleHandler,
   type Tool,
+  type TelemetryConfig,
 } from '@github/copilot-sdk';
 import type { SessionHooks } from './hooks-loader.js';
 import type { BridgeProviderConfig } from '../types.js';
@@ -42,9 +43,11 @@ export class CopilotBridge {
 
   onLifecycleEvent?: SessionLifecycleHandler;
 
-  constructor() {
+  constructor(options?: { telemetry?: TelemetryConfig; env?: NodeJS.ProcessEnv }) {
     this.client = new CopilotClient({
       autoStart: true,
+      telemetry: options?.telemetry,
+      env: options?.env,
     });
   }
 
