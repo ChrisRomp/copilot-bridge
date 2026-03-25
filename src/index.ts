@@ -16,7 +16,7 @@ import { enterQuietMode, exitQuietMode, isQuiet } from './core/quiet-mode.js';
 import { createLogger, setLogLevel } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig } from './types.js';
+import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig, BridgeTelemetryConfig } from './types.js';
 
 const log = createLogger('bridge');
 
@@ -320,6 +320,45 @@ async function resolveSlackAccessUsers(config: AppConfig): Promise<void> {
   }
 }
 
+/** Resolve bridge telemetry config into SDK TelemetryConfig + set auth env var. */
+function resolveTelemetryConfig(config: AppConfig): import('@github/copilot-sdk').TelemetryConfig | undefined {
+  const t = config.telemetry;
+  if (!t?.otlpEndpoint && !t?.filePath) return undefined;
+
+  // Resolve auth header: check process.env first, then workspace .env files
+  if (t.authEnv) {
+    let authValue = process.env[t.authEnv];
+    if (!authValue) {
+      // Try loading from workspace .env files (bridge process doesn't inherit them)
+      for (const ch of config.channels) {
+        try {
+          const envPath = path.join(ch.workingDirectory, '.env');
+          const envContent = fs.readFileSync(envPath, 'utf-8');
+          const match = envContent.match(new RegExp(`^${t.authEnv}=(.+)$`, 'm'));
+          if (match) { authValue = match[1]; break; }
+        } catch { /* skip missing .env */ }
+      }
+    }
+    if (authValue) {
+      process.env.OTEL_EXPORTER_OTLP_HEADERS = `Authorization=${authValue}`;
+      log.info('OTel auth header configured');
+    } else {
+      log.warn(`Telemetry authEnv "${t.authEnv}" not found in environment or workspace .env files`);
+    }
+  }
+
+  const sdkConfig: import('@github/copilot-sdk').TelemetryConfig = {
+    otlpEndpoint: t.otlpEndpoint,
+    sourceName: t.sourceName ?? 'copilot-bridge',
+    captureContent: t.captureContent,
+    exporterType: t.exporterType,
+    filePath: t.filePath,
+  };
+
+  log.info(`OTel telemetry enabled → ${t.otlpEndpoint ?? t.filePath}`);
+  return sdkConfig;
+}
+
 async function main(): Promise<void> {
   log.info('copilot-bridge starting...');
 
@@ -359,7 +398,8 @@ async function main(): Promise<void> {
   configWatcher.start();
 
   // Initialize Copilot SDK bridge
-  const bridge = new CopilotBridge();
+  const telemetryConfig = resolveTelemetryConfig(config);
+  const bridge = new CopilotBridge(telemetryConfig);
   await bridge.start();
   log.info('Copilot SDK connected');
 

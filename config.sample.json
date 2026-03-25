@@ -108,5 +108,11 @@
         { "id": "gpt-5.2-codex", "name": "GPT-5.2 Codex", "wireApi": "responses" }
       ]
     }
+  },
+  "telemetry": {
+    "otlpEndpoint": "http://localhost:4318",
+    "sourceName": "copilot-bridge",
+    "captureContent": false,
+    "authEnv": "OTEL_AUTH"
   }
 }

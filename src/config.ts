@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgentConfig, AccessConfig, BridgeProviderConfig } from './types.js';
+import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgentConfig, AccessConfig, BridgeProviderConfig, BridgeTelemetryConfig } from './types.js';
 import type { SDKProviderConfig } from './core/bridge.js';
 import { getDynamicChannel } from './state/store.js';
 import { createLogger } from './logger.js';
@@ -186,6 +186,32 @@ function validateAndNormalize(raw: any): AppConfig {
     }
   }
 
+  // Validate telemetry config (optional)
+  if (raw.telemetry !== undefined) {
+    if (raw.telemetry === null || typeof raw.telemetry !== 'object' || Array.isArray(raw.telemetry)) {
+      throw new Error('"telemetry" must be an object');
+    }
+    const t = raw.telemetry;
+    if (t.otlpEndpoint !== undefined && typeof t.otlpEndpoint !== 'string') {
+      throw new Error('telemetry.otlpEndpoint must be a string');
+    }
+    if (t.exporterType !== undefined && !['otlp-http', 'file'].includes(t.exporterType)) {
+      throw new Error('telemetry.exporterType must be "otlp-http" or "file"');
+    }
+    if (t.filePath !== undefined && typeof t.filePath !== 'string') {
+      throw new Error('telemetry.filePath must be a string');
+    }
+    if (t.sourceName !== undefined && typeof t.sourceName !== 'string') {
+      throw new Error('telemetry.sourceName must be a string');
+    }
+    if (t.captureContent !== undefined && typeof t.captureContent !== 'boolean') {
+      throw new Error('telemetry.captureContent must be a boolean');
+    }
+    if (t.authEnv !== undefined && typeof t.authEnv !== 'string') {
+      throw new Error('telemetry.authEnv must be a string (env var name)');
+    }
+  }
+
   // Apply defaults
   const defaults = {
     model: 'claude-sonnet-4.6',
@@ -206,6 +232,7 @@ function validateAndNormalize(raw: any): AppConfig {
     permissions: raw.permissions,
     interAgent: raw.interAgent,
     providers: raw.providers,
+    telemetry: raw.telemetry,
   };
 }
 

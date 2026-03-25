@@ -68,6 +68,16 @@ export interface BridgeProviderConfig {
 }
 
 // Full app config
+// Telemetry configuration for OpenTelemetry tracing
+export interface BridgeTelemetryConfig {
+  otlpEndpoint?: string;       // OTLP HTTP endpoint URL
+  exporterType?: 'otlp-http' | 'file';
+  filePath?: string;           // JSON-lines trace output path (for file exporter)
+  sourceName?: string;         // instrumentation scope name (default: "copilot-bridge")
+  captureContent?: boolean;    // capture message content in traces
+  authEnv?: string;            // env var name holding the Authorization header value
+}
+
 export interface AppConfig {
   platforms: Record<string, PlatformConfig>;
   channels: ChannelConfig[];
@@ -86,6 +96,7 @@ export interface AppConfig {
   permissions?: PermissionsConfig;
   interAgent?: InterAgentConfig;
   providers?: Record<string, BridgeProviderConfig>;
+  telemetry?: BridgeTelemetryConfig;
 }
 
 // Inter-agent communication config
