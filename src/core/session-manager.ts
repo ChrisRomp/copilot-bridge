@@ -942,7 +942,8 @@ export class SessionManager {
   /**
    * Reload MCP servers on the active session via RPC (no full session restart).
    * Tells the SDK to re-read its MCP config (e.g., workspace mcp-config.json changes).
-   * Falls back to full reloadSession() if no active session exists yet.
+   * Falls back to full reloadSession() if no active session exists yet or if the
+   * session is stale (backend no longer recognizes it).
    */
   async reloadMcp(channelId: string): Promise<void> {
     const sessionId = this.channelSessions.get(channelId) ?? getChannelSession(channelId);
@@ -952,16 +953,25 @@ export class SessionManager {
       await this.reloadSession(channelId);
       return;
     }
-    // Re-read global MCP config so changes are picked up
     this.mcpServers = loadMcpServers();
-    await session.rpc.mcp.reload();
+    try {
+      await session.rpc.mcp.reload();
+    } catch (err: any) {
+      if (isSessionNotFoundError(err)) {
+        log.info(`Session stale during MCP reload for ${channelId.slice(0, 8)}... — falling back to full reload`);
+        await this.reloadSession(channelId);
+        return;
+      }
+      throw err;
+    }
     log.info(`MCP servers reloaded via RPC for channel ${channelId.slice(0, 8)}...`);
   }
 
   /**
    * Reload skills on the active session via RPC (no full session restart).
    * Tells the SDK to re-read skill directories already configured on the session.
-   * Falls back to full reloadSession() if no active session exists yet.
+   * Falls back to full reloadSession() if no active session exists yet or if the
+   * session is stale.
    */
   async reloadSkills(channelId: string): Promise<void> {
     const sessionId = this.channelSessions.get(channelId) ?? getChannelSession(channelId);
@@ -971,7 +981,16 @@ export class SessionManager {
       await this.reloadSession(channelId);
       return;
     }
-    await session.rpc.skills.reload();
+    try {
+      await session.rpc.skills.reload();
+    } catch (err: any) {
+      if (isSessionNotFoundError(err)) {
+        log.info(`Session stale during skills reload for ${channelId.slice(0, 8)}... — falling back to full reload`);
+        await this.reloadSession(channelId);
+        return;
+      }
+      throw err;
+    }
     log.info(`Skills reloaded via RPC for channel ${channelId.slice(0, 8)}...`);
   }
 

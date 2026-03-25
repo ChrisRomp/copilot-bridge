@@ -1015,7 +1015,7 @@ async function handleInboundMessage(
     const threadRoot = resolveThreadRoot(msg, threadRequested, channelConfig);
 
     // Send response before action, except for actions that send their own ack after completing
-    const deferResponse = cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent' || cmdResult.action === 'set_reasoning';
+    const deferResponse = cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent' || cmdResult.action === 'set_reasoning' || cmdResult.action === 'reload_mcp' || cmdResult.action === 'reload_skills';
     if (cmdResult.response && !deferResponse) {
       await adapter.sendMessage(msg.channelId, cmdResult.response, { threadRootId: threadRoot });
     }
