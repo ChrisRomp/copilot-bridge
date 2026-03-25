@@ -43,10 +43,11 @@ export class CopilotBridge {
 
   onLifecycleEvent?: SessionLifecycleHandler;
 
-  constructor(telemetry?: TelemetryConfig) {
+  constructor(options?: { telemetry?: TelemetryConfig; env?: Record<string, string | undefined> }) {
     this.client = new CopilotClient({
       autoStart: true,
-      telemetry,
+      telemetry: options?.telemetry,
+      env: options?.env as NodeJS.ProcessEnv,
     });
   }
 

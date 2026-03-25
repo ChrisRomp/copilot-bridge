@@ -1,6 +1,6 @@
 import { loadConfig, getConfig, isConfiguredChannel, registerDynamicChannel, markChannelAsDM, getChannelConfig, getPlatformBots, getPlatformAccess, getChannelBotName, isBotAdmin, getHardcodedRules, getConfigRules, reloadConfig, ConfigWatcher } from './config.js';
 import { CopilotBridge } from './core/bridge.js';
-import { SessionManager, BRIDGE_CUSTOM_TOOLS } from './core/session-manager.js';
+import { SessionManager, BRIDGE_CUSTOM_TOOLS, parseEnvFile } from './core/session-manager.js';
 import { handleCommand, parseCommand } from './core/command-handler.js';
 import { formatEvent, formatPermissionRequest, formatUserInputRequest } from './core/stream-formatter.js';
 import { WorkspaceWatcher, initWorkspace, getWorkspacePath } from './core/workspace-manager.js';
@@ -320,34 +320,31 @@ async function resolveSlackAccessUsers(config: AppConfig): Promise<void> {
   }
 }
 
-/** Resolve bridge telemetry config into SDK TelemetryConfig + set auth env var. */
-function resolveTelemetryConfig(config: AppConfig): import('@github/copilot-sdk').TelemetryConfig | undefined {
+/** Resolve bridge telemetry config into SDK TelemetryConfig + scoped env for auth. */
+function resolveTelemetryConfig(config: AppConfig): { telemetry?: import('@github/copilot-sdk').TelemetryConfig; env?: Record<string, string | undefined> } {
   const t = config.telemetry;
-  if (!t?.otlpEndpoint && !t?.filePath) return undefined;
+  if (!t?.otlpEndpoint && !t?.filePath) return {};
 
-  // Resolve auth header: check process.env first, then workspace .env files
+  // Build a scoped env with the auth header (avoids leaking to unrelated child processes)
+  let env: Record<string, string | undefined> | undefined;
   if (t.authEnv) {
     let authValue = process.env[t.authEnv];
     if (!authValue) {
-      // Try loading from workspace .env files (bridge process doesn't inherit them)
+      // Scan workspace .env files (bridge process doesn't inherit per-session .env)
       for (const ch of config.channels) {
-        try {
-          const envPath = path.join(ch.workingDirectory, '.env');
-          const envContent = fs.readFileSync(envPath, 'utf-8');
-          const match = envContent.match(new RegExp(`^${t.authEnv}=(.+)$`, 'm'));
-          if (match) { authValue = match[1]; break; }
-        } catch { /* skip missing .env */ }
+        const vars = parseEnvFile(path.join(ch.workingDirectory, '.env'));
+        if (vars[t.authEnv]) { authValue = vars[t.authEnv]; break; }
       }
     }
     if (authValue) {
-      process.env.OTEL_EXPORTER_OTLP_HEADERS = `Authorization=${authValue}`;
+      env = { ...process.env, OTEL_EXPORTER_OTLP_HEADERS: `Authorization=${authValue}` };
       log.info('OTel auth header configured');
     } else {
       log.warn(`Telemetry authEnv "${t.authEnv}" not found in environment or workspace .env files`);
     }
   }
 
-  const sdkConfig: import('@github/copilot-sdk').TelemetryConfig = {
+  const telemetry: import('@github/copilot-sdk').TelemetryConfig = {
     otlpEndpoint: t.otlpEndpoint,
     sourceName: t.sourceName ?? 'copilot-bridge',
     captureContent: t.captureContent,
@@ -356,7 +353,7 @@ function resolveTelemetryConfig(config: AppConfig): import('@github/copilot-sdk'
   };
 
   log.info(`OTel telemetry enabled → ${t.otlpEndpoint ?? t.filePath}`);
-  return sdkConfig;
+  return { telemetry, env };
 }
 
 async function main(): Promise<void> {
@@ -398,8 +395,8 @@ async function main(): Promise<void> {
   configWatcher.start();
 
   // Initialize Copilot SDK bridge
-  const telemetryConfig = resolveTelemetryConfig(config);
-  const bridge = new CopilotBridge(telemetryConfig);
+  const { telemetry: sdkTelemetry, env: telemetryEnv } = resolveTelemetryConfig(config);
+  const bridge = new CopilotBridge(sdkTelemetry || telemetryEnv ? { telemetry: sdkTelemetry, env: telemetryEnv } : undefined);
   await bridge.start();
   log.info('Copilot SDK connected');
 

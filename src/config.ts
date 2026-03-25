@@ -357,6 +357,12 @@ function diffConfigs(oldCfg: AppConfig, newCfg: AppConfig): { changes: string[];
     }
   }
 
+  // --- Telemetry ---
+  if (JSON.stringify(oldCfg.telemetry ?? {}) !== JSON.stringify(newCfg.telemetry ?? {})) {
+    changes.push('telemetry config updated');
+    restartNeeded.push('telemetry config changed (requires restart)');
+  }
+
   // --- Channels ---
   const oldChannelMap = new Map(oldCfg.channels.filter(c => !_dynamicChannels.has(c.id)).map(c => [c.id, c]));
   const newChannelMap = new Map(newCfg.channels.map(c => [c.id, c]));

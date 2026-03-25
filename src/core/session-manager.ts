@@ -44,7 +44,7 @@ let envLock: Promise<void> = Promise.resolve();
  * Parse a .env file into a key-value map.
  * Handles KEY=VALUE, KEY="VALUE", KEY='VALUE', comments, and blank lines.
  */
-function parseEnvFile(filePath: string): Record<string, string> {
+export function parseEnvFile(filePath: string): Record<string, string> {
   try {
     const content = fs.readFileSync(filePath, 'utf-8');
     const vars: Record<string, string> = {};
