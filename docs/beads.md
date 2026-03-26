@@ -40,34 +40,35 @@ Add to `<workspace>/.env`:
 ```bash
 BEADS_DIR=<workspace>/.beads
 BEADS_ACTOR={{botName}}
-PATH=/home/<user>/.local/bin:$PATH   # if dolt is not on system PATH
 ```
+
+> **Note:** copilot-bridge's `.env` parser does not expand shell variables like `$PATH`. If Dolt is not on the system PATH, set it in the hook scripts directly (see Session Hook Automation below) rather than in `.env`.
 
 copilot-bridge auto-injects `.env` variables into all MCP server environments. The `BEADS_ACTOR` variable sets the actor name in the Beads audit trail — use the bot name for clear attribution.
 
-### 3. Add the skill file
+### 3. Add the Beads agent definition
 
-Copy `templates/agents/beads.agent.md` to the workspace's skill directory (typically `.github/agents/`):
+Copy `templates/agents/beads.agent.md` to the workspace's agents directory (`.github/agents/`):
 
 ```bash
 cp templates/agents/beads.agent.md <workspace>/.github/agents/beads.agent.md
 ```
 
-copilot-bridge automatically discovers and surfaces skill files in `.github/agents/` to the agent. The agent will use this to learn the `bd` workflow without any system prompt changes.
+This adds a `beads` agent definition that agents can switch to with `/agent beads`. It provides the full `bd` workflow and is automatically discovered by copilot-bridge from `.github/agents/`.
 
 ### 4. Update AGENTS.md (optional)
 
-Add a brief Beads section to the workspace `AGENTS.md` so the agent knows to use it. The skill file (`beads.agent.md`) contains the full command reference — `AGENTS.md` just needs a pointer:
+Add a brief Beads section to the workspace `AGENTS.md` so the default agent knows to use `bd` when available:
 
 ```markdown
 ## Task Memory (Beads)
 
-This workspace uses Beads (`bd`) for persistent task tracking. See the `Beads Task Memory` skill for the full workflow. Use `bd prime` at session start and `bd backup export-git` at session end.
+This workspace uses Beads (`bd`) for persistent task tracking. Use `/agent beads` for the full workflow, or see `docs/beads.md` for setup. Use `bd prime` at session start and `bd backup export-git` at session end.
 ```
 
-### 5. Add `bd` to workspace permissions (optional)
+### 5. Add `bd` to workspace permissions (opt-in)
 
-If using `permissionMode: "auto"`, add `bd` to the workspace allow list in `config.json`:
+`bd` writes to `.beads/` and may start a Dolt server — it is intentionally **not** in the default allow list. Add it explicitly if you want agents to run it without interactive prompts:
 
 ```json
 "permissions": {
@@ -75,13 +76,14 @@ If using `permissionMode: "auto"`, add `bd` to the workspace allow list in `conf
 }
 ```
 
-Or use the blanket `"shell"` allow if the workspace is fully trusted.
-
 ## Session Hook Automation (Recommended)
 
 Rather than relying on the agent to remember to run `bd prime` and `bd backup export-git`, use copilot-bridge session hooks to automate them.
 
-> **Note:** Session hooks require `allowWorkspaceHooks: true` in `~/.copilot-bridge/config.json`.
+> **Note:** Session hooks require `allowWorkspaceHooks: true` under `defaults` in `~/.copilot-bridge/config.json`:
+> ```json
+> "defaults": { "allowWorkspaceHooks": true }
+> ```
 
 ### hooks.json
 
@@ -111,7 +113,11 @@ Create `<workspace>/.github/hooks/hooks.json`:
 }
 ```
 
+> **Note:** `cwd` is relative to the directory containing `hooks.json`. Use `"."` — do not repeat the hooks directory path.
+
 ### session-start.sh
+
+Hook scripts run as separate processes and do not inherit workspace `.env`. Set `BEADS_DIR` and `PATH` explicitly:
 
 ```bash
 #!/usr/bin/env bash
@@ -119,11 +125,15 @@ set -euo pipefail
 
 input=$(cat)  # JSON from copilot-bridge: { "sessionId": "...", "channelId": "..." }
 
+export PATH="/home/<user>/.local/bin:$PATH"   # ensure dolt is on PATH
+export BEADS_DIR="<workspace>/.beads"
+export BEADS_ACTOR="{{botName}}"
+
 if command -v bd &>/dev/null; then
   bd prime >/dev/null 2>&1 || true
 fi
 
-# Return empty JSON — hooks-loader expects JSON output from hook scripts
+# hooks-loader expects JSON output — return empty object
 echo '{}'
 ```
 
@@ -135,11 +145,15 @@ set -euo pipefail
 
 input=$(cat)  # JSON from copilot-bridge: { "sessionId": "...", "channelId": "..." }
 
+export PATH="/home/<user>/.local/bin:$PATH"   # ensure dolt is on PATH
+export BEADS_DIR="<workspace>/.beads"
+export BEADS_ACTOR="{{botName}}"
+
 if command -v bd &>/dev/null; then
   bd backup export-git >/dev/null 2>&1 || true
 fi
 
-# Return empty JSON — hooks-loader expects JSON output from hook scripts
+# hooks-loader expects JSON output — return empty object
 echo '{}'
 ```
 

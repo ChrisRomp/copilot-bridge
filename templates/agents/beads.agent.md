@@ -1,11 +1,18 @@
 ---
 name: Beads Task Memory
-description: Persistent task tracking for this workspace using bd (Beads). Use this skill to create, track, and close tasks across sessions.
+description: Persistent task tracking for this workspace using bd (Beads). Invoke with /agent beads to use this workflow for creating, tracking, and closing tasks across sessions.
 ---
 
-# Beads Task Memory Skill
+# Beads Task Memory
 
 This workspace uses [Beads](https://github.com/steveyegge/beads) (`bd`) for persistent, structured task memory backed by [Dolt](https://github.com/dolthub/dolt). Tasks survive session restarts and can be shared across multiple bots via Dolt sync.
+
+## How to use this agent
+
+Switch to this agent with `/agent beads` when you want to:
+- Recover task context at the start of a session (`bd prime`)
+- Create, update, claim, or close Beads tasks
+- Interpret `bd` output and decide what to work on next
 
 ## Prerequisites
 
