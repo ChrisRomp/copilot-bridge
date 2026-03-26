@@ -49,7 +49,8 @@
       "shell(tail)",
       "shell(find)",
       "shell(grep)",
-      "shell(wc)"
+      "shell(wc)",
+      "shell(bd)"
     ],
     "deny": [
       "shell(rm)",
