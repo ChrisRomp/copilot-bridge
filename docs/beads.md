@@ -117,12 +117,14 @@ Create `<workspace>/.github/hooks/hooks.json`:
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Inject bd prime output as context at session start
 input=$(cat)  # JSON from copilot-bridge: { "sessionId": "...", "channelId": "..." }
 
 if command -v bd &>/dev/null; then
-  bd prime 2>/dev/null || true
+  bd prime >/dev/null 2>&1 || true
 fi
+
+# Return empty JSON — hooks-loader expects JSON output from hook scripts
+echo '{}'
 ```
 
 ### session-end.sh
@@ -134,8 +136,11 @@ set -euo pipefail
 input=$(cat)  # JSON from copilot-bridge: { "sessionId": "...", "channelId": "..." }
 
 if command -v bd &>/dev/null; then
-  bd backup export-git 2>/dev/null || true
+  bd backup export-git >/dev/null 2>&1 || true
 fi
+
+# Return empty JSON — hooks-loader expects JSON output from hook scripts
+echo '{}'
 ```
 
 Make both scripts executable: `chmod +x session-start.sh session-end.sh`
