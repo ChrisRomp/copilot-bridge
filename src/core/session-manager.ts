@@ -653,6 +653,18 @@ export class SessionManager {
     // Clean up existing session
     const existingId = this.channelSessions.get(channelId);
     if (existingId) {
+      // Fire sessionEnd hook before teardown (best-effort)
+      const workingDirectory = this.resolveWorkingDirectory(channelId);
+      const rawHooks = await this.resolveHooks(workingDirectory);
+      const hooks = this.wrapHooksWithAsk(rawHooks, channelId);
+      if (hooks?.onSessionEnd) {
+        try {
+          await hooks.onSessionEnd({ sessionId: existingId, channelId }, { sessionId: existingId });
+        } catch (err: any) {
+          log.warn(`sessionEnd hook failed: ${err?.message ?? err}`);
+        }
+      }
+
       const unsub = this.sessionUnsubscribes.get(existingId);
       if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
       try {
@@ -686,6 +698,19 @@ export class SessionManager {
     // in-memory state (including MCP connections), allowing a clean re-init.
     const unsub = this.sessionUnsubscribes.get(existingId);
     if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
+
+    // Fire sessionEnd hook before teardown (best-effort)
+    const reloadWorkingDirectory = this.resolveWorkingDirectory(channelId);
+    const reloadRawHooks = await this.resolveHooks(reloadWorkingDirectory);
+    const reloadHooks = this.wrapHooksWithAsk(reloadRawHooks, channelId);
+    if (reloadHooks?.onSessionEnd) {
+      try {
+        await reloadHooks.onSessionEnd({ sessionId: existingId, channelId }, { sessionId: existingId });
+      } catch (err: any) {
+        log.warn(`sessionEnd hook failed: ${err?.message ?? err}`);
+      }
+    }
+
     try { await this.bridge.destroySession(existingId); } catch { /* best-effort */ }
 
     // Re-read global MCP servers so /reload picks up user-level config changes
@@ -1650,6 +1675,13 @@ export class SessionManager {
 
     this.attachSessionEvents(session, channelId);
 
+    // Fire sessionStart hook (best-effort, non-blocking)
+    if (hooks?.onSessionStart) {
+      hooks.onSessionStart({ sessionId, channelId }, { sessionId }).catch((err: any) => {
+        log.warn(`sessionStart hook failed: ${err?.message ?? err}`);
+      });
+    }
+
     log.info(`Created session ${sessionId} for channel ${channelId} (model: ${usedModel})`);
     return sessionId;
   }
@@ -1703,6 +1735,13 @@ export class SessionManager {
     this.channelSessions.set(channelId, sessionId);
     this.sessionChannels.set(sessionId, channelId);
     this.attachSessionEvents(session, channelId);
+
+    // Fire sessionStart hook (best-effort, non-blocking)
+    if (hooks?.onSessionStart) {
+      hooks.onSessionStart({ sessionId, channelId }, { sessionId }).catch((err: any) => {
+        log.warn(`sessionStart hook failed: ${err?.message ?? err}`);
+      });
+    }
 
     // Cache context window tokens for /context display (best-effort, non-blocking)
     const resumeModel = prefs.model;
