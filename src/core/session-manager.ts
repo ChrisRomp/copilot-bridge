@@ -653,8 +653,10 @@ export class SessionManager {
     // Clean up existing session
     const existingId = this.channelSessions.get(channelId);
     if (existingId) {
-      // Fire sessionEnd hook before teardown (best-effort)
+      // Fire sessionEnd hook before teardown (best-effort). Invalidate hooks cache
+      // so /new picks up any hooks.json edits since the session was created.
       const workingDirectory = this.resolveWorkingDirectory(channelId);
+      this.workspaceHooks.delete(workingDirectory);
       const rawHooks = await this.resolveHooks(workingDirectory);
       const hooks = this.wrapHooksWithAsk(rawHooks, channelId);
       if (hooks?.onSessionEnd) {
@@ -694,13 +696,12 @@ export class SessionManager {
       return this.createNewSession(channelId);
     }
 
-    // Detach event listeners and disconnect so the CLI subprocess tears down
-    // in-memory state (including MCP connections), allowing a clean re-init.
-    const unsub = this.sessionUnsubscribes.get(existingId);
-    if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
-
-    // Fire sessionEnd hook before teardown (best-effort)
+    // Fire sessionEnd hook before detaching events — events must still be wired
+    // during the await so concurrent sendMessage() calls don't silently drop responses.
+    // /reload is intended to pick up workspace config changes, so invalidate the hooks
+    // cache first to ensure we read the latest hooks.json.
     const reloadWorkingDirectory = this.resolveWorkingDirectory(channelId);
+    this.workspaceHooks.delete(reloadWorkingDirectory);
     const reloadRawHooks = await this.resolveHooks(reloadWorkingDirectory);
     const reloadHooks = this.wrapHooksWithAsk(reloadRawHooks, channelId);
     if (reloadHooks?.onSessionEnd) {
@@ -710,6 +711,11 @@ export class SessionManager {
         log.warn(`sessionEnd hook failed: ${err?.message ?? err}`);
       }
     }
+
+    // Detach event listeners and disconnect so the CLI subprocess tears down
+    // in-memory state (including MCP connections), allowing a clean re-init.
+    const unsub = this.sessionUnsubscribes.get(existingId);
+    if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
 
     try { await this.bridge.destroySession(existingId); } catch { /* best-effort */ }
 
