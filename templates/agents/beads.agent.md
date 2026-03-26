@@ -74,6 +74,16 @@ bd remember "key insight or decision"   # Store cross-session knowledge
 bd memories "keyword"                   # Search stored knowledge
 ```
 
+**Call `bd remember` at the moment of discovery — not at the end of the session.** Dolt commits immediately on every write, so memories survive any shutdown. Batching to the end risks losing them if the session is interrupted.
+
+Trigger `bd remember` whenever:
+- A non-obvious decision is made (e.g. "use X not Y because Z")
+- A gotcha, failure mode, or workaround is found
+- A config value or path turns out to be critical or surprising
+- Any fact that would take >5 minutes to re-discover next session
+
+Format: a concise, self-contained sentence — include the *why*, not just the *what*.
+
 ## Session End Workflow
 
 Close completed tasks and back up before ending a session:
