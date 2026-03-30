@@ -7,8 +7,6 @@ import {
   getLaunchdInstallPath,
   getSystemdInstallPath,
   getLogPath,
-  generateNewsyslogConfig,
-  getNewsyslogInstallPath,
 } from './service.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -52,15 +50,15 @@ describe('service', () => {
       expect(plist).toContain('dist/index.js');
     });
 
-    it('uses ~/.copilot-bridge/copilot-bridge.log for log path', () => {
+    it('does not include StandardOutPath/StandardErrorPath (self-managed logging)', () => {
       const plist = generateLaunchdPlist({
         label: 'com.copilot-bridge',
         bridgePath: '/Users/test/copilot-bridge',
         homePath: '/Users/test',
       });
 
-      expect(plist).toContain('/Users/test/.copilot-bridge/copilot-bridge.log');
-      expect(plist).not.toContain('/tmp/copilot-bridge.log');
+      expect(plist).not.toContain('StandardOutPath');
+      expect(plist).not.toContain('StandardErrorPath');
     });
 
     it('includes Umask key', () => {
@@ -119,22 +117,6 @@ describe('service', () => {
     it('returns path under .copilot-bridge', () => {
       expect(getLogPath('/Users/test')).toBe('/Users/test/.copilot-bridge/copilot-bridge.log');
       expect(getLogPath('/home/test')).toBe('/home/test/.copilot-bridge/copilot-bridge.log');
-    });
-  });
-
-  describe('generateNewsyslogConfig', () => {
-    it('generates config with correct log path and user', () => {
-      const config = generateNewsyslogConfig('/Users/test/.copilot-bridge/copilot-bridge.log', 'test');
-      expect(config).toContain('/Users/test/.copilot-bridge/copilot-bridge.log');
-      expect(config).toContain('test:');
-      expect(config).toContain('600');
-      expect(config).toContain('NCZ');
-    });
-  });
-
-  describe('getNewsyslogInstallPath', () => {
-    it('returns /etc/newsyslog.d/copilot-bridge.conf', () => {
-      expect(getNewsyslogInstallPath()).toBe('/etc/newsyslog.d/copilot-bridge.conf');
     });
   });
 

@@ -13,9 +13,10 @@ import { markBusy, markIdle, markIdleImmediate, isBusy, waitForChannelIdle, canc
 import { LoopDetector, MAX_IDENTICAL_CALLS } from './core/loop-detector.js';
 import { checkUserAccess } from './core/access-control.js';
 import { enterQuietMode, exitQuietMode, isQuiet } from './core/quiet-mode.js';
-import { createLogger, setLogLevel } from './logger.js';
+import { createLogger, setLogLevel, initLogFile } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig } from './types.js';
 
 const log = createLogger('bridge');
@@ -361,6 +362,11 @@ async function main(): Promise<void> {
 
   // Load configuration
   const config = loadConfig();
+
+  // Initialize self-managed log file (replaces launchd/systemd stdout redirection)
+  const logPath = path.join(os.homedir(), '.copilot-bridge', 'copilot-bridge.log');
+  initLogFile(logPath, config.logging);
+
   setLogLevel(config.logLevel ?? 'info');
   log.info(`Loaded ${config.channels.length} channel mapping(s)`);
 

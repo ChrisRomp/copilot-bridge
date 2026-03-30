@@ -114,5 +114,11 @@
     "sourceName": "copilot-bridge",
     "captureContent": false,
     "authEnv": "OTEL_AUTH"
+  },
+  "_comment_logging": "Optional: log rotation settings (bridge manages its own log file at ~/.copilot-bridge/copilot-bridge.log)",
+  "logging": {
+    "maxSize": 10485760,
+    "maxFiles": 3,
+    "compress": true
   }
 }
