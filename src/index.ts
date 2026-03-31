@@ -168,8 +168,8 @@ async function downloadAttachments(
 ): Promise<Array<{ type: 'file'; path: string; displayName?: string }>> {
   if (!attachments || attachments.length === 0) return [];
 
-  const botName = getChannelBotName(channelId);
-  const workspace = getWorkspacePath(botName);
+  const botName = await getChannelBotName(channelId);
+  const workspace = await getWorkspacePath(botName);
   const tempDir = path.join(workspace, '.temp', channelId);
 
   const results: Array<{ type: 'file'; path: string; displayName?: string }> = [];
@@ -193,10 +193,10 @@ async function downloadAttachments(
 }
 
 /** Remove temp files for a specific channel's temp directory. */
-function cleanupTempFiles(channelId: string): void {
+async function cleanupTempFiles(channelId: string): Promise<void> {
   try {
-    const botName = getChannelBotName(channelId);
-    const tempDir = path.join(getWorkspacePath(botName), '.temp', channelId);
+    const botName = await getChannelBotName(channelId);
+    const tempDir = path.join(await getWorkspacePath(botName), '.temp', channelId);
     if (!fs.existsSync(tempDir)) return;
 
     const files = fs.readdirSync(tempDir);
@@ -213,9 +213,9 @@ function cleanupTempFiles(channelId: string): void {
   } catch { /* best effort */ }
 }
 
-function getAdapterForChannel(channelId: string): { adapter: ChannelAdapter; streaming: StreamingHandler } | null {
-  const channelConfig = getChannelConfig(channelId);
-  const botName = getChannelBotName(channelId);
+async function getAdapterForChannel(channelId: string): Promise<{ adapter: ChannelAdapter; streaming: StreamingHandler } | null> {
+  const channelConfig = await getChannelConfig(channelId);
+  const botName = await getChannelBotName(channelId);
   const key = `${channelConfig.platform}:${botName}`;
   const adapter = botAdapters.get(key);
   const streaming = botStreamers.get(key);
@@ -419,19 +419,21 @@ async function main(): Promise<void> {
   for (const [platformName] of Object.entries(config.platforms)) {
     const bots = getPlatformBots(platformName);
     for (const [botName] of bots) {
-      initWorkspace(botName);
+      await initWorkspace(botName);
     }
   }
 
   // Watch for new workspace directories
   const workspaceWatcher = new WorkspaceWatcher();
   workspaceWatcher.onEvent((event) => {
-    if (event.type === 'created') {
-      initWorkspace(event.botName);
-      log.info(`Workspace ready for "${event.botName}" — channel registration will occur on first message`);
-    } else if (event.type === 'removed') {
-      log.warn(`Workspace removed for "${event.botName}" — existing sessions will continue but workspace files are gone`);
-    }
+    void (async () => {
+      if (event.type === 'created') {
+        await initWorkspace(event.botName);
+        log.info(`Workspace ready for "${event.botName}" — channel registration will occur on first message`);
+      } else if (event.type === 'removed') {
+        log.warn(`Workspace removed for "${event.botName}" — existing sessions will continue but workspace files are gone`);
+      }
+    })().catch((err) => log.error('Workspace event handler error:', err));
   });
   workspaceWatcher.start();
 
@@ -494,7 +496,7 @@ async function main(): Promise<void> {
 
   // Wire up send_file tool → adapter.sendFile (with thread context)
   sessionManager.onSendFile(async (channelId, filePath, message) => {
-    const resolved = getAdapterForChannel(channelId);
+    const resolved = await getAdapterForChannel(channelId);
     if (!resolved) throw new Error('No adapter for channel');
     // Preserve thread context if threaded replies are active
     const streamKey = activeStreams.get(channelId);
@@ -503,8 +505,8 @@ async function main(): Promise<void> {
   });
 
   // Provide adapter resolver for onboarding tools
-  sessionManager.onGetAdapter((channelId) => {
-    const resolved = getAdapterForChannel(channelId);
+  sessionManager.onGetAdapter(async (channelId) => {
+    const resolved = await getAdapterForChannel(channelId);
     return resolved?.adapter ?? null;
   });
 
@@ -554,9 +556,9 @@ async function main(): Promise<void> {
       const dmChannels = await adapter.discoverDMChannels();
       let registered = 0;
       for (const dm of dmChannels) {
-        if (!isConfiguredChannel(dm.channelId)) {
-          const workspacePath = getWorkspacePath(botName);
-          initWorkspace(botName);
+        if (!await isConfiguredChannel(dm.channelId)) {
+          const workspacePath = await getWorkspacePath(botName);
+          await initWorkspace(botName);
           registerDynamicChannel({
             id: dm.channelId,
             platform: platformName,
@@ -587,7 +589,7 @@ async function main(): Promise<void> {
       // Route through channelLocks to serialize with user messages
       const prev = channelLocks.get(channelId) ?? Promise.resolve();
       const task = prev.then(async () => {
-        const resolved = getAdapterForChannel(channelId);
+        const resolved = await getAdapterForChannel(channelId);
         if (resolved) {
           const { streaming } = resolved;
           // Finalize any existing stream, but don't create a new one —
@@ -616,7 +618,7 @@ async function main(): Promise<void> {
           markIdleImmediate(channelId);
           const failedStream = activeStreams.get(channelId);
           if (failedStream) {
-            const r = getAdapterForChannel(channelId);
+            const r = await getAdapterForChannel(channelId);
             if (r) await r.streaming.cancelStream(failedStream, err?.message ?? 'Scheduled job failed').catch(() => {});
             activeStreams.delete(channelId);
           }
@@ -630,7 +632,7 @@ async function main(): Promise<void> {
       return '';
     },
     postMessage: async (channelId, text) => {
-      const resolved = getAdapterForChannel(channelId);
+      const resolved = await getAdapterForChannel(channelId);
       if (resolved) {
         await resolved.adapter.sendMessage(channelId, text);
       }
@@ -654,7 +656,7 @@ async function main(): Promise<void> {
       await streaming.cleanup();
     }
     await bridge.stop();
-    closeDb();
+    await closeDb();
     log.info('Goodbye.');
     process.exit(0);
   };
@@ -693,16 +695,16 @@ async function handleMidTurnMessage(
     return;
   }
 
-  if (!isConfiguredChannel(msg.channelId)) return;
+  if (!await isConfiguredChannel(msg.channelId)) return;
 
-  const assignedBot = getChannelBotName(msg.channelId);
+  const assignedBot = await getChannelBotName(msg.channelId);
   if (assignedBot && assignedBot !== botName) return;
 
-  const resolved = getAdapterForChannel(msg.channelId);
+  const resolved = await getAdapterForChannel(msg.channelId);
   if (!resolved) return;
   const { adapter } = resolved;
 
-  const channelConfig = getChannelConfig(msg.channelId);
+  const channelConfig = await getChannelConfig(msg.channelId);
 
   // Respect trigger mode — don't steer on unmentioned messages in mention-only channels
   if (channelConfig.triggerMode === 'mention' && !msg.mentionsBot && !msg.isDM) {
@@ -726,32 +728,32 @@ async function handleMidTurnMessage(
   if (sessionManager.hasPendingPermission(msg.channelId)) {
     const lower = text.toLowerCase();
     if (lower === '/approve' || lower === 'yes' || lower === 'y' || lower === 'approve') {
-      sessionManager.resolvePermission(msg.channelId, true);
+      await sessionManager.resolvePermission(msg.channelId, true);
       return;
     }
     if (lower === '/deny' || lower === 'no' || lower === 'n' || lower === 'deny') {
-      sessionManager.resolvePermission(msg.channelId, false);
+      await sessionManager.resolvePermission(msg.channelId, false);
       return;
     }
     if (lower === '/remember' || lower === '/always approve') {
       if (sessionManager.isHookPermission(msg.channelId)) {
-        sessionManager.resolvePermission(msg.channelId, true);
+        await sessionManager.resolvePermission(msg.channelId, true);
       } else {
-        sessionManager.resolvePermission(msg.channelId, true, true);
+        await sessionManager.resolvePermission(msg.channelId, true, true);
       }
       return;
     }
     if (lower === '/always deny') {
       if (sessionManager.isHookPermission(msg.channelId)) {
-        sessionManager.resolvePermission(msg.channelId, false);
+        await sessionManager.resolvePermission(msg.channelId, false);
       } else {
-        sessionManager.resolvePermission(msg.channelId, false, true);
+        await sessionManager.resolvePermission(msg.channelId, false, true);
       }
       return;
     }
     // Unrecognized text or slash commands — auto-deny the permission and
     // fall through to process the message normally (mid-turn steering or command).
-    sessionManager.resolvePermission(msg.channelId, false);
+    await sessionManager.resolvePermission(msg.channelId, false);
   }
 
   // Slash commands while busy: handle safe ones immediately, defer the rest
@@ -765,7 +767,7 @@ async function handleMidTurnMessage(
       throw new Error('slash-command-while-busy');
     }
 
-    const channelConfig = getChannelConfig(msg.channelId);
+    const channelConfig = await getChannelConfig(msg.channelId);
     const threadRoot = resolveThreadRoot(msg, threadExtract.threadRequested, channelConfig);
 
     // Commands that MUST run immediately (abort/cancel current work)
@@ -819,8 +821,8 @@ async function handleMidTurnMessage(
 
     if (SAFE_MID_TURN.has(parsed.command)) {
       // Build the same inputs that handleInboundMessage would
-      const sessionInfo = sessionManager.getSessionInfo(msg.channelId);
-      const effPrefs = sessionManager.getEffectivePrefs(msg.channelId);
+      const sessionInfo = await sessionManager.getSessionInfo(msg.channelId);
+      const effPrefs = await sessionManager.getEffectivePrefs(msg.channelId);
       let models: any[] | undefined;
       if (['model', 'models', 'status'].includes(parsed.command)) {
         try { models = await sessionManager.listModels(); } catch { models = undefined; }
@@ -828,7 +830,7 @@ async function handleMidTurnMessage(
       const mcpInfo = undefined;
       const contextUsage = sessionManager.getContextUsage(msg.channelId);
 
-      const cmdResult = handleCommand(
+      const cmdResult = await handleCommand(
         msg.channelId, commandText, sessionInfo ?? undefined,
         { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort },
         { workingDirectory: channelConfig.workingDirectory, bot: channelConfig.bot },
@@ -968,9 +970,9 @@ async function handleInboundMessage(
   }
 
   // Auto-register DM channels for known bots
-  if (!isConfiguredChannel(msg.channelId) && msg.isDM) {
-    const workspacePath = getWorkspacePath(botName);
-    initWorkspace(botName);
+  if (!await isConfiguredChannel(msg.channelId) && msg.isDM) {
+    const workspacePath = await getWorkspacePath(botName);
+    await initWorkspace(botName);
     registerDynamicChannel({
       id: msg.channelId,
       platform: platformName,
@@ -986,23 +988,23 @@ async function handleInboundMessage(
   }
 
   // Only handle configured channels
-  if (!isConfiguredChannel(msg.channelId)) {
+  if (!await isConfiguredChannel(msg.channelId)) {
     log.debug(`Ignoring unconfigured channel ${msg.channelId}`);
     return;
   }
 
   // Only the assigned bot processes messages for this channel (prevents duplicate handling)
-  const assignedBot = getChannelBotName(msg.channelId);
+  const assignedBot = await getChannelBotName(msg.channelId);
   if (assignedBot && assignedBot !== botName) return;
 
-  const resolved = getAdapterForChannel(msg.channelId);
+  const resolved = await getAdapterForChannel(msg.channelId);
   if (!resolved) {
     log.warn(`No adapter for channel ${msg.channelId}`);
     return;
   }
   const { adapter, streaming } = resolved;
 
-  const channelConfig = getChannelConfig(msg.channelId);
+  const channelConfig = await getChannelConfig(msg.channelId);
 
   // Check trigger mode
   const triggerMode = channelConfig.triggerMode;
@@ -1024,8 +1026,8 @@ async function handleInboundMessage(
   if (!text && !msg.attachments?.length) return;
 
   // Check for slash commands
-  const sessionInfo = sessionManager.getSessionInfo(msg.channelId);
-  const effPrefs = sessionManager.getEffectivePrefs(msg.channelId);
+  const sessionInfo = await sessionManager.getSessionInfo(msg.channelId);
+  const effPrefs = await sessionManager.getEffectivePrefs(msg.channelId);
 
   // Fetch models list for commands that need it (model, models, status, reasoning)
   const parsed = parseCommand(text);
@@ -1050,7 +1052,7 @@ async function handleInboundMessage(
   // Get cached context usage for /context and /status
   const contextUsage = sessionManager.getContextUsage(msg.channelId);
 
-  const cmdResult = handleCommand(
+  const cmdResult = await handleCommand(
     msg.channelId, text, sessionInfo ?? undefined,
     { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort },
     { workingDirectory: channelConfig.workingDirectory, bot: channelConfig.bot },
@@ -1130,7 +1132,7 @@ async function handleInboundMessage(
           activeStreams.delete(msg.channelId);
         }
         await finalizeActivityFeed(msg.channelId, adapter);
-        const prevSessionId = sessionManager.getSessionId(msg.channelId);
+        const prevSessionId = await sessionManager.getSessionId(msg.channelId);
         const ackId = await adapter.sendMessage(msg.channelId, '⏳ Reloading session...', { threadRootId: threadRoot });
         const sessionId = await sessionManager.reloadSession(msg.channelId);
         const wasNew = !prevSessionId || sessionId !== prevSessionId;
@@ -1262,7 +1264,7 @@ async function handleInboundMessage(
         break;
       }
       case 'set_reasoning': {
-        const reasoningSessionId = sessionManager.getSessionId(msg.channelId);
+        const reasoningSessionId = await sessionManager.getSessionId(msg.channelId);
         if (!reasoningSessionId) {
           // No active session — pref is saved, will apply on next session creation
           await adapter.sendMessage(msg.channelId, `🧠 Reasoning effort set to **${cmdResult.payload}**. Will apply when a session starts.`, { threadRootId: threadRoot });
@@ -1279,22 +1281,22 @@ async function handleInboundMessage(
         break;
       }
       case 'approve':
-        if (!sessionManager.resolvePermission(msg.channelId, true)) {
+        if (!await sessionManager.resolvePermission(msg.channelId, true)) {
           await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
         }
         break;
       case 'deny':
-        if (!sessionManager.resolvePermission(msg.channelId, false)) {
+        if (!await sessionManager.resolvePermission(msg.channelId, false)) {
           await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
         }
         break;
       case 'remember':
-        if (!sessionManager.resolvePermission(msg.channelId, true, true)) {
+        if (!await sessionManager.resolvePermission(msg.channelId, true, true)) {
           await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
         }
         break;
       case 'remember_deny':
-        if (!sessionManager.resolvePermission(msg.channelId, false, true)) {
+        if (!await sessionManager.resolvePermission(msg.channelId, false, true)) {
           await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
         }
         break;
@@ -1318,7 +1320,7 @@ async function handleInboundMessage(
           }
 
           // Stored rules (per-channel)
-          const stored = listPermissionRulesForScope(msg.channelId);
+          const stored = await listPermissionRulesForScope(msg.channelId);
           if (stored.length > 0) {
             sections.push('\n**💾 Stored — this channel (skipped in autopilot):**');
             sections.push(...stored.map(r => {
@@ -1340,13 +1342,13 @@ async function handleInboundMessage(
         try {
           const spec = cmdResult.payload as string | undefined;
           if (!spec) {
-            clearPermissionRules(msg.channelId);
+            await clearPermissionRules(msg.channelId);
             await adapter.sendMessage(msg.channelId, '🗑️ All permission rules cleared for this channel.', { threadRootId: threadRoot });
           } else {
             const match = spec.match(/^([^(]+?)(?:\((.+)\))?$/);
             const tool = match?.[1]?.trim() ?? spec;
             const pattern = match?.[2]?.trim() ?? '*';
-            const removed = removePermissionRule(msg.channelId, tool, pattern);
+            const removed = await removePermissionRule(msg.channelId, tool, pattern);
             if (removed) {
               await adapter.sendMessage(msg.channelId, `🗑️ Removed rule: \`${spec}\``, { threadRootId: threadRoot });
             } else {
@@ -1365,7 +1367,7 @@ async function handleInboundMessage(
         const subArg = args?.slice((sub?.length ?? 0)).trim();
 
         if (!sub || sub === 'list') {
-          const tasks = listJobs(msg.channelId);
+          const tasks = await listJobs(msg.channelId);
           if (tasks.length === 0) {
             await adapter.sendMessage(msg.channelId, '📋 No scheduled tasks for this channel.', { threadRootId: threadRoot });
           } else {
@@ -1387,26 +1389,26 @@ async function handleInboundMessage(
           if (!subArg) {
             await adapter.sendMessage(msg.channelId, '⚠️ Usage: `/schedule cancel <id>`', { threadRootId: threadRoot });
           } else {
-            const removed = removeJob(subArg, msg.channelId);
+            const removed = await removeJob(subArg, msg.channelId);
             await adapter.sendMessage(msg.channelId, removed ? `🗑️ Task \`${subArg}\` cancelled.` : `⚠️ Task \`${subArg}\` not found.`, { threadRootId: threadRoot });
           }
         } else if (sub === 'pause') {
           if (!subArg) {
             await adapter.sendMessage(msg.channelId, '⚠️ Usage: `/schedule pause <id>`', { threadRootId: threadRoot });
           } else {
-            const paused = pauseJob(subArg, msg.channelId);
+            const paused = await pauseJob(subArg, msg.channelId);
             await adapter.sendMessage(msg.channelId, paused ? `⏸️ Task \`${subArg}\` paused.` : `⚠️ Task \`${subArg}\` not found.`, { threadRootId: threadRoot });
           }
         } else if (sub === 'resume') {
           if (!subArg) {
             await adapter.sendMessage(msg.channelId, '⚠️ Usage: `/schedule resume <id>`', { threadRootId: threadRoot });
           } else {
-            const resumed = resumeJob(subArg, msg.channelId);
+            const resumed = await resumeJob(subArg, msg.channelId);
             await adapter.sendMessage(msg.channelId, resumed ? `▶️ Task \`${subArg}\` resumed.` : `⚠️ Task \`${subArg}\` not found.`, { threadRootId: threadRoot });
           }
         } else if (sub === 'history' || sub === 'log') {
           const limit = subArg ? parseInt(subArg, 10) || 10 : 10;
-          const entries = getTaskHistory(msg.channelId, limit);
+          const entries = await getTaskHistory(msg.channelId, limit);
           if (entries.length === 0) {
             await adapter.sendMessage(msg.channelId, '📋 No task history for this channel.', { threadRootId: threadRoot });
           } else {
@@ -1425,9 +1427,9 @@ async function handleInboundMessage(
       }
 
       case 'skills': {
-        const skills = sessionManager.getSkillInfo(msg.channelId);
-        const mcpInfo = sessionManager.getMcpServerInfo(msg.channelId);
-        const hooksInfo = sessionManager.getHooksInfo(msg.channelId);
+        const skills = await sessionManager.getSkillInfo(msg.channelId);
+        const mcpInfo = await sessionManager.getMcpServerInfo(msg.channelId);
+        const hooksInfo = await sessionManager.getHooksInfo(msg.channelId);
         const lines: string[] = ['🧰 **Skills & Tools**', ''];
 
         if (skills.length > 0) {
@@ -1493,8 +1495,8 @@ async function handleInboundMessage(
 
       case 'skill_toggle': {
         const { action: toggleAction, targets } = cmdResult.payload as { action: 'enable' | 'disable'; targets: string[] };
-        const skills = sessionManager.getSkillInfo(msg.channelId);
-        const prefs = getChannelPrefs(msg.channelId);
+        const skills = await sessionManager.getSkillInfo(msg.channelId);
+        const prefs = await getChannelPrefs(msg.channelId);
         const currentDisabled = new Set(prefs?.disabledSkills ?? []);
 
         // Handle "all" keyword (only valid as sole target)
@@ -1505,7 +1507,7 @@ async function handleInboundMessage(
           }
           if (toggleAction === 'disable') {
             const allNames = [...new Set(skills.map(s => s.name))];
-            setChannelPrefs(msg.channelId, { disabledSkills: allNames });
+            await setChannelPrefs(msg.channelId, { disabledSkills: allNames });
             // Apply via RPC for each skill
             for (const name of allNames) {
               try { await sessionManager.toggleSkillRpc(msg.channelId, name, 'disable'); } catch { /* best-effort */ }
@@ -1513,7 +1515,7 @@ async function handleInboundMessage(
             await adapter.sendMessage(msg.channelId, `🔴 Disabled all ${allNames.length} skills.`, { threadRootId: threadRoot });
           } else {
             const allNames = [...currentDisabled];
-            setChannelPrefs(msg.channelId, { disabledSkills: [] });
+            await setChannelPrefs(msg.channelId, { disabledSkills: [] });
             for (const name of allNames) {
               try { await sessionManager.toggleSkillRpc(msg.channelId, name, 'enable'); } catch { /* best-effort */ }
             }
@@ -1549,7 +1551,7 @@ async function handleInboundMessage(
         }
 
         if (matched.length > 0) {
-          setChannelPrefs(msg.channelId, { disabledSkills: [...currentDisabled] });
+          await setChannelPrefs(msg.channelId, { disabledSkills: [...currentDisabled] });
           // Apply each toggle via RPC (best-effort — pref is already persisted)
           for (const name of matched) {
             try { await sessionManager.toggleSkillRpc(msg.channelId, name, toggleAction); } catch { /* best-effort */ }
@@ -1573,7 +1575,7 @@ async function handleInboundMessage(
       }
 
       case 'mcp': {
-        const mcpInfo = sessionManager.getMcpServerInfo(msg.channelId);
+        const mcpInfo = await sessionManager.getMcpServerInfo(msg.channelId);
         if (mcpInfo.length === 0) {
           await adapter.sendMessage(msg.channelId, '🔌 No MCP servers configured.', { threadRootId: threadRoot });
           break;
@@ -1722,8 +1724,8 @@ async function handleInboundMessage(
 
           // Save yolo state before changing it
           if (enableYolo) {
-            sessionManager.saveYoloPreviousState(msg.channelId);
-            setChannelPrefs(msg.channelId, { permissionMode: 'autopilot' });
+            await sessionManager.saveYoloPreviousState(msg.channelId);
+            await setChannelPrefs(msg.channelId, { permissionMode: 'autopilot' });
           }
 
           const modeLabel = interactive ? 'interactive' : enableYolo ? 'autopilot + yolo' : 'autopilot';
@@ -1776,7 +1778,7 @@ async function handleInboundMessage(
               { threadRootId: threadRoot });
           } else {
             await sessionManager.setSessionMode(msg.channelId, 'autopilot');
-            const prefs = sessionManager.getEffectivePrefs(msg.channelId);
+            const prefs = await sessionManager.getEffectivePrefs(msg.channelId);
             const yoloWarning = prefs.permissionMode !== 'autopilot'
               ? '\n\n⚠️ Yolo is off — you\'ll still be prompted for tool permissions. Use `/yolo` to auto-approve.'
               : '';
@@ -1805,15 +1807,15 @@ async function handleInboundMessage(
   if (sessionManager.hasPendingPermission(msg.channelId)) {
     const lower = text.toLowerCase();
     if (lower === 'yes' || lower === 'y' || lower === 'approve') {
-      sessionManager.resolvePermission(msg.channelId, true);
+      await sessionManager.resolvePermission(msg.channelId, true);
       return;
     }
     if (lower === 'no' || lower === 'n' || lower === 'deny') {
-      sessionManager.resolvePermission(msg.channelId, false);
+      await sessionManager.resolvePermission(msg.channelId, false);
       return;
     }
     // Unrecognized text — auto-deny and fall through to process as a normal message
-    sessionManager.resolvePermission(msg.channelId, false);
+    await sessionManager.resolvePermission(msg.channelId, false);
   }
 
   // Pending plan exit — auto-dismiss on unrecognized text, process message normally
@@ -1824,7 +1826,7 @@ async function handleInboundMessage(
   // Regular message — forward to Copilot session
   try {
     // Check auth before starting a session (prevents hanging on "Working...")
-    const hasSession = sessionManager.getSessionInfo(msg.channelId);
+    const hasSession = await sessionManager.getSessionInfo(msg.channelId);
     if (!hasSession) {
       const auth = await sessionManager.getAuthStatus();
       if (!auth.isAuthenticated) {
@@ -1914,7 +1916,7 @@ async function handleReaction(
   platformName: string,
   botName: string,
 ): Promise<void> {
-  if (!isConfiguredChannel(reaction.channelId)) return;
+  if (!await isConfiguredChannel(reaction.channelId)) return;
   if (reaction.action !== 'added') return;
 
   // Check user-level access control
@@ -1924,26 +1926,26 @@ async function handleReaction(
     return;
   }
 
-  const resolved = getAdapterForChannel(reaction.channelId);
+  const resolved = await getAdapterForChannel(reaction.channelId);
   if (!resolved) return;
   const { adapter } = resolved;
 
   if (reaction.emoji === 'thumbsup' || reaction.emoji === '+1') {
-    if (sessionManager.resolvePermission(reaction.channelId, true)) {
+    if (await sessionManager.resolvePermission(reaction.channelId, true)) {
       await adapter.sendMessage(reaction.channelId, '✅ Approved via reaction.');
     }
   } else if (reaction.emoji === 'thumbsdown' || reaction.emoji === '-1') {
-    if (sessionManager.resolvePermission(reaction.channelId, false)) {
+    if (await sessionManager.resolvePermission(reaction.channelId, false)) {
       await adapter.sendMessage(reaction.channelId, '❌ Denied via reaction.');
     }
   } else if (reaction.emoji === 'floppy_disk') {
     const isHook = sessionManager.isHookPermission(reaction.channelId);
-    if (sessionManager.resolvePermission(reaction.channelId, true, !isHook)) {
+    if (await sessionManager.resolvePermission(reaction.channelId, true, !isHook)) {
       await adapter.sendMessage(reaction.channelId, isHook ? '✅ Approved via reaction.' : '💾 Approved + remembered via reaction.');
     }
   } else if (reaction.emoji === 'no_entry_sign') {
     const isHook = sessionManager.isHookPermission(reaction.channelId);
-    if (sessionManager.resolvePermission(reaction.channelId, false, !isHook)) {
+    if (await sessionManager.resolvePermission(reaction.channelId, false, !isHook)) {
       await adapter.sendMessage(reaction.channelId, isHook ? '❌ Denied via reaction.' : '🚫 Denied + remembered via reaction.');
     }
   }
@@ -1994,12 +1996,12 @@ async function handleSessionEvent(
     log.debug(`SDK event: ${event.type}`);
   }
 
-  const resolved = getAdapterForChannel(channelId);
+  const resolved = await getAdapterForChannel(channelId);
   if (!resolved) return;
   const { adapter, streaming } = resolved;
 
-  const channelConfig = getChannelConfig(channelId);
-  const prefs = getChannelPrefs(channelId);
+  const channelConfig = await getChannelConfig(channelId);
+  const prefs = await getChannelPrefs(channelId);
   const verbose = prefs?.verbose ?? channelConfig.verbose;
 
   // Handle custom bridge events (permissions, user input)
@@ -2008,7 +2010,7 @@ async function handleSessionEvent(
   if (event.type === 'bridge.permission_request') {
     if (isQuiet(channelId)) {
       log.info(`Auto-denying permission during quiet mode on ${channelId.slice(0, 8)}...`);
-      sessionManager.resolvePermission(channelId, false);
+      await sessionManager.resolvePermission(channelId, false);
       return;
     }
     const streamKey = activeStreams.get(channelId);
@@ -2396,11 +2398,11 @@ async function handleSessionEvent(
           activeStreams.delete(channelId);
         }
         // Revert yolo if it was temporarily enabled for plan implementation
-        if (sessionManager.revertYoloIfNeeded(channelId)) {
+        if (await sessionManager.revertYoloIfNeeded(channelId)) {
           log.info(`Reverted yolo state on idle for ${channelId.slice(0, 8)}...`);
         }
         // Clean up temp files from downloaded attachments
-        cleanupTempFiles(channelId);
+        void cleanupTempFiles(channelId).catch(() => { /* best-effort */ });
       }
       break;
   }
@@ -2460,16 +2462,16 @@ async function finalizeActivityFeed(channelId: string, adapter: ChannelAdapter):
 // --- Startup Restart Notice ---
 
 /** Post a restart notice to admin DM channels (no session creation or LLM interaction). */
-function postRestartNotices(): void {
-  const allSessions = getAllChannelSessions();
+async function postRestartNotices(): Promise<void> {
+  const allSessions = await getAllChannelSessions();
   for (const { channelId } of allSessions) {
-    if (!isConfiguredChannel(channelId)) continue;
-    const channelConfig = getChannelConfig(channelId);
-    const botName = getChannelBotName(channelId);
+    if (!await isConfiguredChannel(channelId)) continue;
+    const channelConfig = await getChannelConfig(channelId);
+    const botName = await getChannelBotName(channelId);
     if (!isBotAdmin(channelConfig.platform, botName)) continue;
     if (!channelConfig.isDM) continue;
 
-    const resolved = getAdapterForChannel(channelId);
+    const resolved = await getAdapterForChannel(channelId);
     if (!resolved) continue;
     resolved.adapter.sendMessage(channelId, '🔄 Bridge restarted.').catch(e =>
       log.warn(`Failed to post restart notice on ${channelId.slice(0, 8)}...:`, e)
@@ -2478,8 +2480,8 @@ function postRestartNotices(): void {
 }
 
 // Start the bridge
-main().catch((err) => {
+main().catch(async (err) => {
   log.error('Fatal error:', err);
-  closeDb();
+  await closeDb();
   process.exit(1);
 });

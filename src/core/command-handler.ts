@@ -26,8 +26,8 @@ function redactedModelLabel(index: number): string {
 }
 
 /** Check if streamer mode is currently enabled. */
-function isStreamerMode(): boolean {
-  return getGlobalSetting('streamer_mode') === '1';
+async function isStreamerMode(): Promise<boolean> {
+  return await getGlobalSetting('streamer_mode') === '1';
 }
 
 export interface ModelInfo {
@@ -168,8 +168,8 @@ function fuzzyMatch(input: string, models: ModelInfo[], scope?: string): { model
 }
 
 /** Build the formatted model listing, optionally grouped by provider. */
-function formatModelListing(models: ModelInfo[], providerNames: string[], currentModel: string | null, currentProvider: string | null, filterProvider?: string): string {
-  const streamer = isStreamerMode();
+async function formatModelListing(models: ModelInfo[], providerNames: string[], currentModel: string | null, currentProvider: string | null, filterProvider?: string): Promise<string> {
+  const streamer = await isStreamerMode();
   let hiddenIndex = 0;
 
   // Determine if the current model matches a given model entry
@@ -318,7 +318,7 @@ export interface McpServerInfo {
   pending?: boolean;
 }
 
-export function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[], contextUsage?: { currentTokens: number; tokenLimit: number; contextWindowTokens?: number } | null, providers?: Record<string, BridgeProviderConfig>): CommandResult {
+export async function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[], contextUsage?: { currentTokens: number; tokenLimit: number; contextWindowTokens?: number } | null, providers?: Record<string, BridgeProviderConfig>): Promise<CommandResult> {
   const parsed = parseCommand(text);
   if (!parsed) return { handled: false };
 
@@ -326,7 +326,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
   // When a BYOK provider is active, prefer the provider-prefixed entry to avoid
   // inheriting metadata (e.g., supportedReasoningEfforts) from a same-named Copilot model
   const needsModelInfo = ['reasoning', 'status', 'model', 'models'].includes(parsed.command);
-  const currentProvider = needsModelInfo ? (getChannelPrefs(channelId)?.provider ?? null) : null;
+  const currentProvider = needsModelInfo ? ((await getChannelPrefs(channelId))?.provider ?? null) : null;
   const currentModelInfo = needsModelInfo && models && sessionInfo
     ? (currentProvider
         ? models.find(m => m.id === `${currentProvider}:${sessionInfo.model}`) ?? null
@@ -365,14 +365,14 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
     case 'model':
     case 'models': {
       const providerNames = providers ? Object.keys(providers) : [];
-      const currentProvider = getChannelPrefs(channelId)?.provider ?? null;
+      const currentProvider = (await getChannelPrefs(channelId))?.provider ?? null;
 
       if (!parsed.args) {
         // No args: show model table grouped by provider
         if (!models || models.length === 0) {
           return { handled: true, response: '⚠️ Model list not available.' };
         }
-        return { handled: true, response: formatModelListing(models, providerNames, sessionInfo?.model ?? null, currentProvider) };
+        return { handled: true, response: await formatModelListing(models, providerNames, sessionInfo?.model ?? null, currentProvider) };
       }
 
       // Check if arg is a provider name → show just that provider's models
@@ -385,7 +385,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         if (provModels.length === 0) {
           return { handled: true, response: `⚠️ No models found for provider "${provName}".` };
         }
-        return { handled: true, response: formatModelListing(provModels, providerNames, sessionInfo?.model ?? null, currentProvider, provName) };
+        return { handled: true, response: await formatModelListing(provModels, providerNames, sessionInfo?.model ?? null, currentProvider, provName) };
       }
 
       if (!models || models.length === 0) {
@@ -404,7 +404,7 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       const resolvedProvider = providerNames.find(p => result.model.id.toLowerCase().startsWith(`${p.toLowerCase()}:`)) ?? null;
       const bareModelId = resolvedProvider ? result.model.id.slice(resolvedProvider.length + 1) : result.model.id;
 
-      const streamerSwitch = isStreamerMode();
+      const streamerSwitch = await isStreamerMode();
       const switchName = (streamerSwitch && isHiddenModel(result.model))
         ? 'a hidden model'
         : `**${result.model.name}** (\`${result.model.id}\`)`;
@@ -525,10 +525,10 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
     }
 
     case 'verbose': {
-      const prefs = getChannelPrefs(channelId);
+      const prefs = await getChannelPrefs(channelId);
       const current = effectivePrefs?.verbose ?? prefs?.verbose ?? false;
       const newVerbose = parsed.args ? parseBool(parsed.args, !current) : !current;
-      setChannelPrefs(channelId, { verbose: newVerbose });
+      await setChannelPrefs(channelId, { verbose: newVerbose });
       return {
         handled: true,
         action: 'toggle_verbose',
@@ -546,12 +546,12 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
         return { handled: true, response: `⚠️ Invalid reasoning effort. Valid values: \`low\`, \`medium\`, \`high\`, \`xhigh\`` };
       }
       if (currentModelInfo && currentModelInfo.supportedReasoningEfforts && !currentModelInfo.supportedReasoningEfforts.includes(level)) {
-        const reasoningModelName = (isStreamerMode() && isHiddenModel(currentModelInfo))
+        const reasoningModelName = (await isStreamerMode() && isHiddenModel(currentModelInfo))
           ? 'the current model'
           : `**${sessionInfo?.model ?? 'unknown'}**`;
         return { handled: true, response: `⚠️ Model ${reasoningModelName} does not support reasoning effort.\nSupported models include Opus and other reasoning-capable models.` };
       }
-      setChannelPrefs(channelId, { reasoningEffort: level });
+      await setChannelPrefs(channelId, { reasoningEffort: level });
       return {
         handled: true,
         action: 'set_reasoning',
@@ -563,8 +563,8 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       if (!sessionInfo) {
         return { handled: true, response: '📊 No active session for this channel.' };
       }
-      const prefs = getChannelPrefs(channelId);
-      const streamerStatus = isStreamerMode();
+      const prefs = await getChannelPrefs(channelId);
+      const streamerStatus = await isStreamerMode();
       const modelDisplay = (streamerStatus && currentModelInfo && isHiddenModel(currentModelInfo))
         ? 'Hidden Model'
         : sessionInfo.model;
@@ -615,10 +615,10 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
       return { handled: true, action: 'toggle_autopilot' };
 
     case 'yolo': {
-      const prefs = getChannelPrefs(channelId);
+      const prefs = await getChannelPrefs(channelId);
       const current = effectivePrefs?.permissionMode ?? prefs?.permissionMode ?? 'interactive';
       const newMode = current === 'autopilot' ? 'interactive' : 'autopilot';
-      setChannelPrefs(channelId, { permissionMode: newMode });
+      await setChannelPrefs(channelId, { permissionMode: newMode });
       return {
         handled: true,
         response: newMode === 'autopilot'
@@ -663,9 +663,9 @@ export function handleCommand(channelId: string, text: string, sessionInfo?: { s
 
     case 'streamer-mode':
     case 'on-air': {
-      const current = isStreamerMode();
+      const current = await isStreamerMode();
       const newValue = parsed.args ? parseBool(parsed.args, !current) : !current;
-      setGlobalSetting('streamer_mode', newValue ? '1' : '0');
+      await setGlobalSetting('streamer_mode', newValue ? '1' : '0');
       return {
         handled: true,
         response: newValue
