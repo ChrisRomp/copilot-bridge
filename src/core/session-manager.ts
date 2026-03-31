@@ -639,7 +639,7 @@ export class SessionManager {
         return { sessionId: storedSessionId, isNew: false };
       } catch (err) {
       log.warn(`Failed to resume session ${storedSessionId} for channel ${channelId}, creating new:`, err);
-        await clearChannelSession(channelId);
+        try { await clearChannelSession(channelId); } catch (e) { log.warn('Failed to clear channel session during recovery:', e); }
       }
     }
 
@@ -836,7 +836,7 @@ export class SessionManager {
         }
 
         // If no fallback worked, restore original model pref and throw
-        await setChannelPrefs(channelId, { model: prefs.model });
+        try { await setChannelPrefs(channelId, { model: prefs.model }); } catch (e) { log.warn('Failed to restore model pref after fallback failure:', e); }
         throw lastError;
       }
 
@@ -926,7 +926,7 @@ export class SessionManager {
           // Clear stale session so ensureSession() creates fresh on next call
           this.channelSessions.delete(channelId);
           this.sessionChannels.delete(sessionId);
-          await clearChannelSession(channelId);
+          try { await clearChannelSession(channelId); } catch (e) { log.warn('Failed to clear channel session during retry recovery:', e); }
           throw err;
         }
         // Last resort: new session
@@ -1028,7 +1028,7 @@ export class SessionManager {
         await this.newSession(channelId);
       } catch (err) {
         log.warn(`Provider switch failed, reverting prefs:`, err);
-        await setChannelPrefs(channelId, { model: prevModel, provider: currentProvider });
+        try { await setChannelPrefs(channelId, { model: prevModel, provider: currentProvider }); } catch (e) { log.warn('Failed to revert prefs after provider switch failure:', e); }
         throw err;
       }
     } else if (newProvider && this.wireApiChanged(newProvider, currentPrefs.model ?? '', model)) {
@@ -1040,7 +1040,7 @@ export class SessionManager {
         await this.newSession(channelId);
       } catch (err) {
         log.warn(`wireApi switch failed, reverting prefs:`, err);
-        await setChannelPrefs(channelId, { model: prevModel, provider: currentProvider });
+        try { await setChannelPrefs(channelId, { model: prevModel, provider: currentProvider }); } catch (e) { log.warn('Failed to revert prefs after wireApi switch failure:', e); }
         throw err;
       }
     } else {
@@ -1816,17 +1816,19 @@ export class SessionManager {
     } catch (err: any) {
       const durationMs = Date.now() - startTime;
       const errorMsg = err?.message ?? 'unknown error';
-      await recordAgentCall({
-        callerBot: opts.callerBot,
-        targetBot: opts.targetBot,
-        targetAgent: opts.agent,
-        messageSummary: opts.message.slice(0, 500),
-        durationMs,
-        success: false,
-        error: errorMsg,
-        chainId: opts.context.chainId,
-        depth: nextContext.depth,
-      });
+      try {
+        await recordAgentCall({
+          callerBot: opts.callerBot,
+          targetBot: opts.targetBot,
+          targetAgent: opts.agent,
+          messageSummary: opts.message.slice(0, 500),
+          durationMs,
+          success: false,
+          error: errorMsg,
+          chainId: opts.context.chainId,
+          depth: nextContext.depth,
+        });
+      } catch (e) { log.warn('Failed to record agent call during error handling:', e); }
 
       log.error(`Ephemeral call ${opts.callerBot}→${opts.targetBot} failed: ${errorMsg}`);
       return { success: false, error: 'ephemeral_session_error', detail: errorMsg };
@@ -2675,6 +2677,8 @@ export class SessionManager {
     const toolInput = request.input ?? (request as any).arguments ?? (request as any).parameters ?? request;
     const commands = extractCommandPatterns(toolInput);
 
+    // Check stored permission rules (DB errors fall through to interactive prompt)
+    try {
     // For MCP tools, check server-level rules first (covers all tools on that server)
     if (kind === 'mcp' && serverName) {
       const serverResult = await checkPermission(channelId, `mcp:${serverName}`, '*');
@@ -2703,6 +2707,9 @@ export class SessionManager {
       const result = await checkPermission(channelId, toolName, '*');
       if (result === 'allow') return Promise.resolve({ kind: 'approved' });
       if (result === 'deny') return Promise.resolve({ kind: 'denied-by-rules' });
+    }
+    } catch (err) {
+      log.warn('Permission check failed, falling through to interactive:', err);
     }
 
     // No rule matched — need to ask the user via chat

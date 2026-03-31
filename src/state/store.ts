@@ -2,10 +2,23 @@ import Database from 'better-sqlite3';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
+import { performance } from 'node:perf_hooks';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('store');
 const DB_PATH = path.join(os.homedir(), '.copilot-bridge', 'state.db');
+const SLOW_QUERY_MS = 50;
+
+/** Classify SQLite error codes into severity buckets for logging. */
+function classifyDbError(err: unknown): 'busy' | 'corrupt' | 'full' | 'readonly' | 'other' {
+  const code = (err as any)?.code as string | undefined;
+  if (!code) return 'other';
+  if (code === 'SQLITE_BUSY' || code.startsWith('SQLITE_BUSY_')) return 'busy';
+  if (code === 'SQLITE_CORRUPT' || code.startsWith('SQLITE_CORRUPT_')) return 'corrupt';
+  if (code === 'SQLITE_FULL') return 'full';
+  if (code === 'SQLITE_READONLY' || code.startsWith('SQLITE_READONLY_')) return 'readonly';
+  return 'other';
+}
 
 function safeParseStringArray(raw: string): string[] | undefined {
   try {
@@ -230,44 +243,76 @@ function getDb(): Database.Database {
 
 export async function getChannelSession(channelId: string): Promise<string | null> {
   try {
+    const start = performance.now();
     const db = getDb();
     const row = db.prepare('SELECT session_id FROM channel_sessions WHERE channel_id = ?').get(channelId) as { session_id: string } | undefined;
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`getChannelSession took ${elapsed.toFixed(0)}ms`);
     return row?.session_id ?? null;
   } catch (err) {
-    log.error('getChannelSession failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('getChannelSession CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('getChannelSession CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('getChannelSession - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('getChannelSession - database is read-only:', err);
+    else log.error('getChannelSession failed:', err);
     throw err;
   }
 }
 
 export async function setChannelSession(channelId: string, sessionId: string): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
     db.prepare(
       'INSERT OR REPLACE INTO channel_sessions (channel_id, session_id, created_at) VALUES (?, ?, datetime(\'now\'))'
     ).run(channelId, sessionId);
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`setChannelSession took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('setChannelSession failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('setChannelSession CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('setChannelSession CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('setChannelSession - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('setChannelSession - database is read-only:', err);
+    else log.error('setChannelSession failed:', err);
     throw err;
   }
 }
 
 export async function clearChannelSession(channelId: string): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
     db.prepare('DELETE FROM channel_sessions WHERE channel_id = ?').run(channelId);
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`clearChannelSession took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('clearChannelSession failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('clearChannelSession CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('clearChannelSession CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('clearChannelSession - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('clearChannelSession - database is read-only:', err);
+    else log.error('clearChannelSession failed:', err);
     throw err;
   }
 }
 
 export async function getAllChannelSessions(): Promise<Array<{ channelId: string; sessionId: string }>> {
   try {
+    const start = performance.now();
     const db = getDb();
     const rows = db.prepare('SELECT channel_id, session_id FROM channel_sessions').all() as any[];
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`getAllChannelSessions took ${elapsed.toFixed(0)}ms`);
     return rows.map(r => ({ channelId: r.channel_id, sessionId: r.session_id }));
   } catch (err) {
-    log.error('getAllChannelSessions failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('getAllChannelSessions CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('getAllChannelSessions CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('getAllChannelSessions - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('getAllChannelSessions - database is read-only:', err);
+    else log.error('getAllChannelSessions failed:', err);
     throw err;
   }
 }
@@ -289,8 +334,11 @@ export interface ChannelPrefs {
 
 export async function getChannelPrefs(channelId: string): Promise<ChannelPrefs | null> {
   try {
+    const start = performance.now();
     const db = getDb();
     const row = db.prepare('SELECT * FROM channel_prefs WHERE channel_id = ?').get(channelId) as any;
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`getChannelPrefs took ${elapsed.toFixed(0)}ms`);
     if (!row) return null;
     return {
       model: row.model ?? undefined,
@@ -305,41 +353,58 @@ export async function getChannelPrefs(channelId: string): Promise<ChannelPrefs |
       disabledSkills: row.disabled_skills ? safeParseStringArray(row.disabled_skills) : undefined,
     };
   } catch (err) {
-    log.error('getChannelPrefs failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('getChannelPrefs CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('getChannelPrefs CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('getChannelPrefs - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('getChannelPrefs - database is read-only:', err);
+    else log.error('getChannelPrefs failed:', err);
     throw err;
   }
 }
 
 export async function setChannelPrefs(channelId: string, prefs: Partial<ChannelPrefs>): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
 
-    // Ensure a row exists (upsert-safe — avoids TOCTOU race with async callers)
-    db.prepare(
-      `INSERT OR IGNORE INTO channel_prefs (channel_id) VALUES (?)`
-    ).run(channelId);
+    const txn = db.transaction(() => {
+      // Ensure a row exists (upsert-safe — avoids TOCTOU race with async callers)
+      db.prepare(
+        `INSERT OR IGNORE INTO channel_prefs (channel_id) VALUES (?)`
+      ).run(channelId);
 
-    const updates: string[] = [];
-    const values: any[] = [];
+      const updates: string[] = [];
+      const values: any[] = [];
 
-    if (prefs.model !== undefined) { updates.push('model = ?'); values.push(prefs.model); }
-    if (prefs.provider !== undefined) { updates.push('provider = ?'); values.push(prefs.provider); }
-    if (prefs.agent !== undefined) { updates.push('agent = ?'); values.push(prefs.agent); }
-    if (prefs.verbose !== undefined) { updates.push('verbose = ?'); values.push(prefs.verbose ? 1 : 0); }
+      if (prefs.model !== undefined) { updates.push('model = ?'); values.push(prefs.model); }
+      if (prefs.provider !== undefined) { updates.push('provider = ?'); values.push(prefs.provider); }
+      if (prefs.agent !== undefined) { updates.push('agent = ?'); values.push(prefs.agent); }
+      if (prefs.verbose !== undefined) { updates.push('verbose = ?'); values.push(prefs.verbose ? 1 : 0); }
 
-    if (prefs.threadedReplies !== undefined) { updates.push('threaded_replies = ?'); values.push(prefs.threadedReplies ? 1 : 0); }
-    if (prefs.permissionMode !== undefined) { updates.push('permission_mode = ?'); values.push(prefs.permissionMode); }
-    if (prefs.reasoningEffort !== undefined) { updates.push('reasoning_effort = ?'); values.push(prefs.reasoningEffort); }
-    if (prefs.sessionMode !== undefined) { updates.push('session_mode = ?'); values.push(prefs.sessionMode); }
-    if (prefs.disabledSkills !== undefined) { updates.push('disabled_skills = ?'); values.push(JSON.stringify(prefs.disabledSkills)); }
+      if (prefs.threadedReplies !== undefined) { updates.push('threaded_replies = ?'); values.push(prefs.threadedReplies ? 1 : 0); }
+      if (prefs.permissionMode !== undefined) { updates.push('permission_mode = ?'); values.push(prefs.permissionMode); }
+      if (prefs.reasoningEffort !== undefined) { updates.push('reasoning_effort = ?'); values.push(prefs.reasoningEffort); }
+      if (prefs.sessionMode !== undefined) { updates.push('session_mode = ?'); values.push(prefs.sessionMode); }
+      if (prefs.disabledSkills !== undefined) { updates.push('disabled_skills = ?'); values.push(JSON.stringify(prefs.disabledSkills)); }
 
-    if (updates.length > 0) {
-      updates.push("updated_at = datetime('now')");
-      values.push(channelId);
-      db.prepare(`UPDATE channel_prefs SET ${updates.join(', ')} WHERE channel_id = ?`).run(...values);
-    }
+      if (updates.length > 0) {
+        updates.push("updated_at = datetime('now')");
+        values.push(channelId);
+        db.prepare(`UPDATE channel_prefs SET ${updates.join(', ')} WHERE channel_id = ?`).run(...values);
+      }
+    });
+    txn();
+
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`setChannelPrefs took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('setChannelPrefs failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('setChannelPrefs CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('setChannelPrefs CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('setChannelPrefs - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('setChannelPrefs - database is read-only:', err);
+    else log.error('setChannelPrefs failed:', err);
     throw err;
   }
 }
@@ -357,10 +422,13 @@ export interface StoredPermissionRule {
 
 export async function getPermissionRules(scope: string, tool: string): Promise<StoredPermissionRule[]> {
   try {
+    const start = performance.now();
     const db = getDb();
     const rows = db.prepare(
       'SELECT * FROM permission_rules WHERE (scope = ? OR scope = \'global\') AND tool = ? ORDER BY scope DESC, id DESC'
     ).all(scope, tool) as any[];
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`getPermissionRules took ${elapsed.toFixed(0)}ms`);
     return rows.map(r => ({
       id: r.id,
       scope: r.scope,
@@ -370,34 +438,60 @@ export async function getPermissionRules(scope: string, tool: string): Promise<S
       createdAt: r.created_at,
     }));
   } catch (err) {
-    log.error('getPermissionRules failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('getPermissionRules CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('getPermissionRules CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('getPermissionRules - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('getPermissionRules - database is read-only:', err);
+    else log.error('getPermissionRules failed:', err);
     throw err;
   }
 }
 
 export async function addPermissionRule(scope: string, tool: string, commandPattern: string, action: 'allow' | 'deny'): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
-    // Remove existing rule for same scope+tool+pattern before inserting
-    db.prepare(
-      'DELETE FROM permission_rules WHERE scope = ? AND tool = ? AND command_pattern = ?'
-    ).run(scope, tool, commandPattern);
 
-    db.prepare(
-      'INSERT INTO permission_rules (scope, tool, command_pattern, action) VALUES (?, ?, ?, ?)'
-    ).run(scope, tool, commandPattern, action);
+    const txn = db.transaction(() => {
+      // Remove existing rule for same scope+tool+pattern before inserting
+      db.prepare(
+        'DELETE FROM permission_rules WHERE scope = ? AND tool = ? AND command_pattern = ?'
+      ).run(scope, tool, commandPattern);
+
+      db.prepare(
+        'INSERT INTO permission_rules (scope, tool, command_pattern, action) VALUES (?, ?, ?, ?)'
+      ).run(scope, tool, commandPattern, action);
+    });
+    txn();
+
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`addPermissionRule took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('addPermissionRule failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('addPermissionRule CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('addPermissionRule CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('addPermissionRule - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('addPermissionRule - database is read-only:', err);
+    else log.error('addPermissionRule failed:', err);
     throw err;
   }
 }
 
 export async function clearPermissionRules(scope: string): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
     db.prepare('DELETE FROM permission_rules WHERE scope = ?').run(scope);
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`clearPermissionRules took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('clearPermissionRules failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('clearPermissionRules CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('clearPermissionRules CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('clearPermissionRules - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('clearPermissionRules - database is read-only:', err);
+    else log.error('clearPermissionRules failed:', err);
     throw err;
   }
 }
@@ -405,13 +499,21 @@ export async function clearPermissionRules(scope: string): Promise<void> {
 /** Remove a specific permission rule by scope + tool + command_pattern. */
 export async function removePermissionRule(scope: string, tool: string, commandPattern: string): Promise<boolean> {
   try {
+    const start = performance.now();
     const db = getDb();
     const result = db.prepare(
       'DELETE FROM permission_rules WHERE scope = ? AND tool = ? AND command_pattern = ?'
     ).run(scope, tool, commandPattern);
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`removePermissionRule took ${elapsed.toFixed(0)}ms`);
     return result.changes > 0;
   } catch (err) {
-    log.error('removePermissionRule failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('removePermissionRule CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('removePermissionRule CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('removePermissionRule - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('removePermissionRule - database is read-only:', err);
+    else log.error('removePermissionRule failed:', err);
     throw err;
   }
 }
@@ -419,10 +521,13 @@ export async function removePermissionRule(scope: string, tool: string, commandP
 /** List all permission rules for a scope. */
 export async function listPermissionRulesForScope(scope: string): Promise<StoredPermissionRule[]> {
   try {
+    const start = performance.now();
     const db = getDb();
     const rows = db.prepare(
       'SELECT * FROM permission_rules WHERE scope = ? ORDER BY tool, command_pattern'
     ).all(scope) as any[];
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`listPermissionRulesForScope took ${elapsed.toFixed(0)}ms`);
     return rows.map(r => ({
       id: r.id,
       scope: r.scope,
@@ -432,7 +537,12 @@ export async function listPermissionRulesForScope(scope: string): Promise<Stored
       createdAt: r.created_at,
     }));
   } catch (err) {
-    log.error('listPermissionRulesForScope failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('listPermissionRulesForScope CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('listPermissionRulesForScope CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('listPermissionRulesForScope - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('listPermissionRulesForScope - database is read-only:', err);
+    else log.error('listPermissionRulesForScope failed:', err);
     throw err;
   }
 }
@@ -474,8 +584,11 @@ function safeParseAllowPaths(raw: string): string[] {
 
 export async function getWorkspaceOverride(botName: string): Promise<WorkspaceOverride | null> {
   try {
+    const start = performance.now();
     const db = getDb();
     const row = db.prepare('SELECT * FROM workspace_overrides WHERE bot_name = ?').get(botName) as any;
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`getWorkspaceOverride took ${elapsed.toFixed(0)}ms`);
     if (!row) return null;
     return {
       botName: row.bot_name,
@@ -484,13 +597,19 @@ export async function getWorkspaceOverride(botName: string): Promise<WorkspaceOv
       createdAt: row.created_at,
     };
   } catch (err) {
-    log.error('getWorkspaceOverride failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('getWorkspaceOverride CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('getWorkspaceOverride CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('getWorkspaceOverride - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('getWorkspaceOverride - database is read-only:', err);
+    else log.error('getWorkspaceOverride failed:', err);
     throw err;
   }
 }
 
 export async function setWorkspaceOverride(botName: string, workingDirectory: string, allowPaths?: string[]): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
     db.prepare(
       `INSERT INTO workspace_overrides (bot_name, working_directory, allow_paths, created_at)
@@ -499,26 +618,44 @@ export async function setWorkspaceOverride(botName: string, workingDirectory: st
          working_directory = excluded.working_directory,
          allow_paths = excluded.allow_paths`
     ).run(botName, workingDirectory, JSON.stringify(allowPaths ?? []));
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`setWorkspaceOverride took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('setWorkspaceOverride failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('setWorkspaceOverride CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('setWorkspaceOverride CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('setWorkspaceOverride - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('setWorkspaceOverride - database is read-only:', err);
+    else log.error('setWorkspaceOverride failed:', err);
     throw err;
   }
 }
 
 export async function removeWorkspaceOverride(botName: string): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
     db.prepare('DELETE FROM workspace_overrides WHERE bot_name = ?').run(botName);
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`removeWorkspaceOverride took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('removeWorkspaceOverride failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('removeWorkspaceOverride CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('removeWorkspaceOverride CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('removeWorkspaceOverride - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('removeWorkspaceOverride - database is read-only:', err);
+    else log.error('removeWorkspaceOverride failed:', err);
     throw err;
   }
 }
 
 export async function listWorkspaceOverrides(): Promise<WorkspaceOverride[]> {
   try {
+    const start = performance.now();
     const db = getDb();
     const rows = db.prepare('SELECT * FROM workspace_overrides').all() as any[];
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`listWorkspaceOverrides took ${elapsed.toFixed(0)}ms`);
     return rows.map(row => ({
       botName: row.bot_name,
       workingDirectory: row.working_directory,
@@ -526,7 +663,12 @@ export async function listWorkspaceOverrides(): Promise<WorkspaceOverride[]> {
       createdAt: row.created_at,
     }));
   } catch (err) {
-    log.error('listWorkspaceOverrides failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('listWorkspaceOverrides CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('listWorkspaceOverrides CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('listWorkspaceOverrides - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('listWorkspaceOverrides - database is read-only:', err);
+    else log.error('listWorkspaceOverrides failed:', err);
     throw err;
   }
 }
@@ -535,24 +677,40 @@ export async function listWorkspaceOverrides(): Promise<WorkspaceOverride[]> {
 
 export async function getGlobalSetting(key: string): Promise<string | null> {
   try {
+    const start = performance.now();
     const db = getDb();
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`getGlobalSetting took ${elapsed.toFixed(0)}ms`);
     return row?.value ?? null;
   } catch (err) {
-    log.error('getGlobalSetting failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('getGlobalSetting CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('getGlobalSetting CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('getGlobalSetting - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('getGlobalSetting - database is read-only:', err);
+    else log.error('getGlobalSetting failed:', err);
     throw err;
   }
 }
 
 export async function setGlobalSetting(key: string, value: string): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
     db.prepare(
       `INSERT INTO settings (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`
     ).run(key, value);
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`setGlobalSetting took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('setGlobalSetting failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('setGlobalSetting CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('setGlobalSetting CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('setGlobalSetting - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('setGlobalSetting - database is read-only:', err);
+    else log.error('setGlobalSetting failed:', err);
     throw err;
   }
 }
@@ -577,6 +735,7 @@ export interface DynamicChannel {
 
 export async function addDynamicChannel(channel: Omit<DynamicChannel, 'createdAt' | 'updatedAt'>): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
     db.prepare(
       `INSERT INTO dynamic_channels (channel_id, platform, name, bot, working_directory, agent, model, trigger_mode, threaded_replies, verbose, is_dm)
@@ -600,41 +759,72 @@ export async function addDynamicChannel(channel: Omit<DynamicChannel, 'createdAt
       channel.verbose != null ? (channel.verbose ? 1 : 0) : null,
       channel.isDM ? 1 : 0,
     );
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`addDynamicChannel took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('addDynamicChannel failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('addDynamicChannel CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('addDynamicChannel CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('addDynamicChannel - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('addDynamicChannel - database is read-only:', err);
+    else log.error('addDynamicChannel failed:', err);
     throw err;
   }
 }
 
 export async function removeDynamicChannel(channelId: string): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
     db.prepare('DELETE FROM dynamic_channels WHERE channel_id = ?').run(channelId);
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`removeDynamicChannel took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('removeDynamicChannel failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('removeDynamicChannel CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('removeDynamicChannel CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('removeDynamicChannel - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('removeDynamicChannel - database is read-only:', err);
+    else log.error('removeDynamicChannel failed:', err);
     throw err;
   }
 }
 
 export async function getDynamicChannel(channelId: string): Promise<DynamicChannel | null> {
   try {
+    const start = performance.now();
     const db = getDb();
     const row = db.prepare('SELECT * FROM dynamic_channels WHERE channel_id = ?').get(channelId) as any;
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`getDynamicChannel took ${elapsed.toFixed(0)}ms`);
     if (!row) return null;
     return mapDynamicChannelRow(row);
   } catch (err) {
-    log.error('getDynamicChannel failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('getDynamicChannel CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('getDynamicChannel CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('getDynamicChannel - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('getDynamicChannel - database is read-only:', err);
+    else log.error('getDynamicChannel failed:', err);
     throw err;
   }
 }
 
 export async function getDynamicChannels(): Promise<DynamicChannel[]> {
   try {
+    const start = performance.now();
     const db = getDb();
     const rows = db.prepare('SELECT * FROM dynamic_channels ORDER BY created_at').all() as any[];
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`getDynamicChannels took ${elapsed.toFixed(0)}ms`);
     return rows.map(mapDynamicChannelRow);
   } catch (err) {
-    log.error('getDynamicChannels failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('getDynamicChannels CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('getDynamicChannels CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('getDynamicChannels - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('getDynamicChannels - database is read-only:', err);
+    else log.error('getDynamicChannels failed:', err);
     throw err;
   }
 }
@@ -674,6 +864,7 @@ export interface AgentCallRecord {
 
 export async function recordAgentCall(record: AgentCallRecord): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
     db.prepare(
       `INSERT INTO agent_calls (caller_bot, target_bot, target_agent, message_summary, response_summary, duration_ms, success, error, chain_id, depth)
@@ -690,18 +881,28 @@ export async function recordAgentCall(record: AgentCallRecord): Promise<void> {
       record.chainId ?? null,
       record.depth ?? 0,
     );
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`recordAgentCall took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('recordAgentCall failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('recordAgentCall CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('recordAgentCall CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('recordAgentCall - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('recordAgentCall - database is read-only:', err);
+    else log.error('recordAgentCall failed:', err);
     throw err;
   }
 }
 
 export async function getRecentAgentCalls(limit: number = 20): Promise<Array<AgentCallRecord & { id: number; createdAt: string }>> {
   try {
+    const start = performance.now();
     const db = getDb();
     const rows = db.prepare(
       'SELECT * FROM agent_calls ORDER BY created_at DESC LIMIT ?'
     ).all(limit) as any[];
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`getRecentAgentCalls took ${elapsed.toFixed(0)}ms`);
     return rows.map(r => ({
       id: r.id,
       callerBot: r.caller_bot,
@@ -717,7 +918,12 @@ export async function getRecentAgentCalls(limit: number = 20): Promise<Array<Age
       createdAt: r.created_at,
     }));
   } catch (err) {
-    log.error('getRecentAgentCalls failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('getRecentAgentCalls CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('getRecentAgentCalls CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('getRecentAgentCalls - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('getRecentAgentCalls - database is read-only:', err);
+    else log.error('getRecentAgentCalls failed:', err);
     throw err;
   }
 }
@@ -742,6 +948,7 @@ export interface ScheduledTask {
 
 export async function insertScheduledTask(task: Omit<ScheduledTask, 'createdAt' | 'lastRun' | 'nextRun'> & { nextRun?: string }): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
     db.prepare(`
       INSERT INTO scheduled_tasks (id, channel_id, bot_name, prompt, cron_expr, run_at, timezone, created_by, description, enabled, next_run)
@@ -752,74 +959,129 @@ export async function insertScheduledTask(task: Omit<ScheduledTask, 'createdAt' 
       task.createdBy ?? null, task.description ?? null,
       task.enabled ? 1 : 0, task.nextRun ?? null,
     );
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`insertScheduledTask took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('insertScheduledTask failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('insertScheduledTask CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('insertScheduledTask CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('insertScheduledTask - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('insertScheduledTask - database is read-only:', err);
+    else log.error('insertScheduledTask failed:', err);
     throw err;
   }
 }
 
 export async function getScheduledTask(id: string): Promise<ScheduledTask | null> {
   try {
+    const start = performance.now();
     const db = getDb();
     const row = db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id) as any;
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`getScheduledTask took ${elapsed.toFixed(0)}ms`);
     return row ? mapTaskRow(row) : null;
   } catch (err) {
-    log.error('getScheduledTask failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('getScheduledTask CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('getScheduledTask CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('getScheduledTask - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('getScheduledTask - database is read-only:', err);
+    else log.error('getScheduledTask failed:', err);
     throw err;
   }
 }
 
 export async function getScheduledTasksForChannel(channelId: string): Promise<ScheduledTask[]> {
   try {
+    const start = performance.now();
     const db = getDb();
     // Show enabled tasks + paused recurring tasks (exclude disabled one-offs — they're finished)
     const rows = db.prepare(
       'SELECT * FROM scheduled_tasks WHERE channel_id = ? AND (enabled = 1 OR cron_expr IS NOT NULL) ORDER BY created_at DESC'
     ).all(channelId) as any[];
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`getScheduledTasksForChannel took ${elapsed.toFixed(0)}ms`);
     return rows.map(mapTaskRow);
   } catch (err) {
-    log.error('getScheduledTasksForChannel failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('getScheduledTasksForChannel CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('getScheduledTasksForChannel CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('getScheduledTasksForChannel - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('getScheduledTasksForChannel - database is read-only:', err);
+    else log.error('getScheduledTasksForChannel failed:', err);
     throw err;
   }
 }
 
 export async function getEnabledScheduledTasks(): Promise<ScheduledTask[]> {
   try {
+    const start = performance.now();
     const db = getDb();
     const rows = db.prepare('SELECT * FROM scheduled_tasks WHERE enabled = 1').all() as any[];
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`getEnabledScheduledTasks took ${elapsed.toFixed(0)}ms`);
     return rows.map(mapTaskRow);
   } catch (err) {
-    log.error('getEnabledScheduledTasks failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('getEnabledScheduledTasks CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('getEnabledScheduledTasks CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('getEnabledScheduledTasks - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('getEnabledScheduledTasks - database is read-only:', err);
+    else log.error('getEnabledScheduledTasks failed:', err);
     throw err;
   }
 }
 
 export async function updateScheduledTaskEnabled(id: string, enabled: boolean): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
     db.prepare('UPDATE scheduled_tasks SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id);
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`updateScheduledTaskEnabled took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('updateScheduledTaskEnabled failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('updateScheduledTaskEnabled CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('updateScheduledTaskEnabled CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('updateScheduledTaskEnabled - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('updateScheduledTaskEnabled - database is read-only:', err);
+    else log.error('updateScheduledTaskEnabled failed:', err);
     throw err;
   }
 }
 
 export async function updateScheduledTaskLastRun(id: string, lastRun: string, nextRun?: string): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
     db.prepare('UPDATE scheduled_tasks SET last_run = ?, next_run = ? WHERE id = ?').run(lastRun, nextRun ?? null, id);
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`updateScheduledTaskLastRun took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('updateScheduledTaskLastRun failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('updateScheduledTaskLastRun CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('updateScheduledTaskLastRun CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('updateScheduledTaskLastRun - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('updateScheduledTaskLastRun - database is read-only:', err);
+    else log.error('updateScheduledTaskLastRun failed:', err);
     throw err;
   }
 }
 
 export async function deleteScheduledTask(id: string): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
     db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`deleteScheduledTask took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('deleteScheduledTask failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('deleteScheduledTask CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('deleteScheduledTask CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('deleteScheduledTask - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('deleteScheduledTask - database is read-only:', err);
+    else log.error('deleteScheduledTask failed:', err);
     throw err;
   }
 }
@@ -858,23 +1120,34 @@ export interface TaskHistoryEntry {
 
 export async function insertTaskHistory(entry: Omit<TaskHistoryEntry, 'id' | 'firedAt'>): Promise<void> {
   try {
+    const start = performance.now();
     const db = getDb();
     db.prepare(`
       INSERT INTO scheduled_task_history (task_id, channel_id, prompt, description, timezone, status, fired_at, error)
       VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
     `).run(entry.taskId, entry.channelId, entry.prompt, entry.description ?? null, entry.timezone, entry.status, entry.error ?? null);
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`insertTaskHistory took ${elapsed.toFixed(0)}ms`);
   } catch (err) {
-    log.error('insertTaskHistory failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('insertTaskHistory CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('insertTaskHistory CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('insertTaskHistory - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('insertTaskHistory - database is read-only:', err);
+    else log.error('insertTaskHistory failed:', err);
     throw err;
   }
 }
 
 export async function getTaskHistory(channelId: string, limit = 20): Promise<TaskHistoryEntry[]> {
   try {
+    const start = performance.now();
     const db = getDb();
     const rows = db.prepare(
       'SELECT * FROM scheduled_task_history WHERE channel_id = ? ORDER BY fired_at DESC LIMIT ?'
     ).all(channelId, limit) as any[];
+    const elapsed = performance.now() - start;
+    if (elapsed > SLOW_QUERY_MS) log.warn(`getTaskHistory took ${elapsed.toFixed(0)}ms`);
     return rows.map(r => ({
       id: r.id,
       taskId: r.task_id,
@@ -887,7 +1160,12 @@ export async function getTaskHistory(channelId: string, limit = 20): Promise<Tas
       error: r.error ?? undefined,
     }));
   } catch (err) {
-    log.error('getTaskHistory failed:', err);
+    const kind = classifyDbError(err);
+    if (kind === 'corrupt') log.error('getTaskHistory CRITICAL - database may be corrupt:', err);
+    else if (kind === 'full') log.error('getTaskHistory CRITICAL - disk full:', err);
+    else if (kind === 'busy') log.warn('getTaskHistory - database busy (contention):', err);
+    else if (kind === 'readonly') log.error('getTaskHistory - database is read-only:', err);
+    else log.error('getTaskHistory failed:', err);
     throw err;
   }
 }

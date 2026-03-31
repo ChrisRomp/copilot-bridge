@@ -584,7 +584,7 @@ async function main(): Promise<void> {
   log.info('copilot-bridge ready!');
 
   // Initialize scheduler — rehydrate persisted jobs
-  initScheduler({
+  await initScheduler({
     sendMessage: async (channelId, prompt) => {
       // Route through channelLocks to serialize with user messages
       const prev = channelLocks.get(channelId) ?? Promise.resolve();
@@ -640,7 +640,7 @@ async function main(): Promise<void> {
   });
 
   // Post restart notice to admin DM channels (no session creation needed)
-  postRestartNotices();
+  void postRestartNotices().catch((err) => log.error('postRestartNotices failed:', err));
 
   // Graceful shutdown
   const shutdown = async () => {
@@ -783,7 +783,7 @@ async function handleMidTurnMessage(
       await finalizeActivityFeed(msg.channelId, adapter);
       await sessionManager.abortSession(msg.channelId);
       // Revert yolo if temporarily enabled for plan implementation
-      sessionManager.revertYoloIfNeeded(msg.channelId);
+      await sessionManager.revertYoloIfNeeded(msg.channelId);
       markIdleImmediate(msg.channelId);
       await adapter.sendMessage(msg.channelId, '🛑 Task stopped.', { threadRootId: threadRoot });
       return;
@@ -1362,6 +1362,7 @@ async function handleInboundMessage(
         break;
       }
       case 'schedule': {
+        try {
         const args = cmdResult.payload as string | undefined;
         const sub = args?.split(/\s+/)?.[0]?.toLowerCase();
         const subArg = args?.slice((sub?.length ?? 0)).trim();
@@ -1422,6 +1423,10 @@ async function handleInboundMessage(
           }
         } else {
           await adapter.sendMessage(msg.channelId, '⚠️ Usage: `/schedule [list|cancel|pause|resume|history] [id]`', { threadRootId: threadRoot });
+        }
+        } catch (err: any) {
+          log.error(`Schedule command failed:`, err);
+          await adapter.sendMessage(msg.channelId, '❌ Schedule command failed — database error.', { threadRootId: threadRoot });
         }
         break;
       }
@@ -1494,6 +1499,7 @@ async function handleInboundMessage(
       }
 
       case 'skill_toggle': {
+        try {
         const { action: toggleAction, targets } = cmdResult.payload as { action: 'enable' | 'disable'; targets: string[] };
         const skills = await sessionManager.getSkillInfo(msg.channelId);
         const prefs = await getChannelPrefs(msg.channelId);
@@ -1571,6 +1577,10 @@ async function handleInboundMessage(
           lines.push(`❌ No match: ${notFound.map(n => `"${n}"`).join(', ')}`);
         }
         await adapter.sendMessage(msg.channelId, lines.join(' '), { threadRootId: threadRoot });
+        } catch (err: any) {
+          log.error(`Skill toggle failed:`, err);
+          await adapter.sendMessage(msg.channelId, '❌ Skill command failed — database error.', { threadRootId: threadRoot });
+        }
         break;
       }
 
@@ -1758,7 +1768,7 @@ async function handleInboundMessage(
           await sessionManager.sendMessage(msg.channelId, kickoff);
           await waitForChannelIdle(msg.channelId);
         } catch (err: any) {
-          sessionManager.revertYoloIfNeeded(msg.channelId);
+          await sessionManager.revertYoloIfNeeded(msg.channelId);
           markIdleImmediate(msg.channelId);
           const sk = activeStreams.get(msg.channelId);
           if (sk) { await streaming.cancelStream(sk); activeStreams.delete(msg.channelId); }
@@ -2001,7 +2011,12 @@ async function handleSessionEvent(
   const { adapter, streaming } = resolved;
 
   const channelConfig = await getChannelConfig(channelId);
-  const prefs = await getChannelPrefs(channelId);
+  let prefs: Awaited<ReturnType<typeof getChannelPrefs>> = null;
+  try {
+    prefs = await getChannelPrefs(channelId);
+  } catch (err) {
+    log.warn('Failed to read channel prefs in event handler, using defaults:', err);
+  }
   const verbose = prefs?.verbose ?? channelConfig.verbose;
 
   // Handle custom bridge events (permissions, user input)
