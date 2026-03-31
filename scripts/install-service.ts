@@ -63,12 +63,17 @@ function main() {
     if (result.installed) {
       success(`Service installed at ${result.path}`);
 
-      // Migration: remove old newsyslog config if present
+      // Migration: remove old newsyslog config if present (log rotation is now built-in)
       const newsyslogPath = '/etc/newsyslog.d/copilot-bridge.conf';
       if (fs.existsSync(newsyslogPath)) {
-        blank();
-        info('⚠️  Old newsyslog config detected (log rotation is now built-in).');
-        dim(`  To remove: sudo rm ${newsyslogPath}`);
+        try {
+          execSync(`sudo rm "${newsyslogPath}"`, { stdio: 'inherit' });
+          success('Removed old newsyslog config (log rotation is now built-in)');
+        } catch {
+          blank();
+          info('⚠️  Old newsyslog config detected (log rotation is now built-in).');
+          dim(`  To remove: sudo rm ${newsyslogPath}`);
+        }
       }
 
       // Migration: warn about old log file
