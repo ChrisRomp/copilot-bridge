@@ -358,14 +358,20 @@ function resolveTelemetryConfig(config: AppConfig): { telemetry?: import('@githu
 }
 
 async function main(): Promise<void> {
+  // Initialize log file early so startup output is captured
+  // (uses defaults until config is loaded)
+  const logPath = path.join(os.homedir(), '.copilot-bridge', 'copilot-bridge.log');
+  initLogFile(logPath);
+
   log.info('copilot-bridge starting...');
 
   // Load configuration
   const config = loadConfig();
 
-  // Initialize self-managed log file (replaces launchd/systemd stdout redirection)
-  const logPath = path.join(os.homedir(), '.copilot-bridge', 'copilot-bridge.log');
-  initLogFile(logPath, config.logging);
+  // Re-init with config-driven settings if provided
+  if (config.logging) {
+    initLogFile(logPath, config.logging);
+  }
 
   setLogLevel(config.logLevel ?? 'info');
   log.info(`Loaded ${config.channels.length} channel mapping(s)`);

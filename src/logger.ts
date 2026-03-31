@@ -42,11 +42,8 @@ export function createLogger(tag: string) {
 
 // --- Self-managed log file with rotation ---
 
-export interface LogFileConfig {
-  maxSize?: number;   // bytes, default 10 MB
-  maxFiles?: number;  // rotated files to keep, default 3
-  compress?: boolean; // gzip rotated files, default true
-}
+import type { LogRotationConfig } from './types.js';
+export type { LogRotationConfig as LogFileConfig };
 
 const DEFAULT_MAX_SIZE = 10 * 1024 * 1024; // 10 MB
 const DEFAULT_MAX_FILES = 3;
@@ -54,7 +51,7 @@ const DEFAULT_COMPRESS = true;
 
 let logFilePath: string | null = null;
 let logFd: number | null = null;
-let logConfig: Required<LogFileConfig> = {
+let logConfig: Required<LogRotationConfig> = {
   maxSize: DEFAULT_MAX_SIZE,
   maxFiles: DEFAULT_MAX_FILES,
   compress: DEFAULT_COMPRESS,
@@ -73,7 +70,7 @@ const _origStderrWrite: typeof process.stderr.write = process.stderr.write.bind(
  * Call once at startup. After this, all console output (including createLogger
  * callers) goes to the file.
  */
-export function initLogFile(filePath: string, config?: LogFileConfig): void {
+export function initLogFile(filePath: string, config?: LogRotationConfig): void {
   logFilePath = filePath;
   logConfig = {
     maxSize: config?.maxSize ?? DEFAULT_MAX_SIZE,
@@ -93,7 +90,7 @@ function openLogFd(): void {
   if (logFd !== null) {
     try { fs.closeSync(logFd); } catch { /* ignore */ }
   }
-  logFd = fs.openSync(logFilePath!, 'a');
+  logFd = fs.openSync(logFilePath!, 'a', 0o600);
   try {
     currentSize = fs.fstatSync(logFd).size;
   } catch {
@@ -153,19 +150,22 @@ async function rotateNow(): Promise<void> {
 
   const dir = path.dirname(logFilePath);
   const base = path.basename(logFilePath);
-  const ext = logConfig.compress ? '.gz' : '';
 
-  // Delete the oldest file if at limit
+  // Delete the oldest file if at limit (check both .gz and uncompressed)
   if (logConfig.maxFiles > 0) {
-    const oldestPath = path.join(dir, `${base}.${logConfig.maxFiles}${ext}`);
-    try { fs.unlinkSync(oldestPath); } catch { /* doesn't exist */ }
+    for (const ext of ['.gz', '']) {
+      const oldestPath = path.join(dir, `${base}.${logConfig.maxFiles}${ext}`);
+      try { fs.unlinkSync(oldestPath); } catch { /* doesn't exist */ }
+    }
   }
 
   // Shift existing rotated files: .3 -> .4, .2 -> .3, .1 -> .2
   for (let i = logConfig.maxFiles - 1; i >= 1; i--) {
-    const from = path.join(dir, `${base}.${i}${ext}`);
-    const to = path.join(dir, `${base}.${i + 1}${ext}`);
-    try { fs.renameSync(from, to); } catch { /* doesn't exist */ }
+    for (const ext of ['.gz', '']) {
+      const from = path.join(dir, `${base}.${i}${ext}`);
+      const to = path.join(dir, `${base}.${i + 1}${ext}`);
+      try { fs.renameSync(from, to); } catch { /* doesn't exist */ }
+    }
   }
 
   // Rename current log to .1
