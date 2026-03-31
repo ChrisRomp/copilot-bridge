@@ -1046,7 +1046,8 @@ export class SessionManager {
     } else {
       // Same provider — use RPC model switch (with session retry)
       await this.withSessionRetry(channelId, (sid) => this.bridge.switchSessionModel(sid, model));
-      await setChannelPrefs(channelId, { model, provider: newProvider });
+      try { await setChannelPrefs(channelId, { model, provider: newProvider }); }
+      catch (e) { log.warn('Model switched but failed to persist preference:', e); }
     }
 
     // Clear stale context window tokens so /context falls back to tokenLimit during transition
@@ -1084,7 +1085,8 @@ export class SessionManager {
         await this.bridge.deselectAgent(sid);
       }
     });
-    await setChannelPrefs(channelId, { agent });
+    try { await setChannelPrefs(channelId, { agent }); }
+    catch (e) { log.warn('Agent switched but failed to persist preference:', e); }
   }
 
   /**
@@ -1097,7 +1099,8 @@ export class SessionManager {
     await this.withSessionRetry(channelId, (sid) =>
       this.bridge.switchSessionModel(sid, model, { reasoningEffort: effort })
     );
-    await setChannelPrefs(channelId, { reasoningEffort: effort });
+    try { await setChannelPrefs(channelId, { reasoningEffort: effort }); }
+    catch (e) { log.warn('Reasoning effort set but failed to persist preference:', e); }
   }
 
   /** Get effective preferences for a channel (config merged with runtime overrides). */
@@ -1148,7 +1151,8 @@ export class SessionManager {
   /** Set the session mode (interactive, plan, autopilot). Persists to channel prefs. Does not change yolo/permission state. */
   async setSessionMode(channelId: string, mode: 'interactive' | 'plan' | 'autopilot'): Promise<string> {
     const result = await this.withSessionRetry(channelId, (sid) => this.bridge.setSessionMode(sid, mode));
-    await setChannelPrefs(channelId, { sessionMode: result.mode });
+    try { await setChannelPrefs(channelId, { sessionMode: result.mode }); }
+    catch (e) { log.warn('Session mode set but failed to persist preference:', e); }
     return result.mode;
   }
 
@@ -1279,24 +1283,28 @@ export class SessionManager {
 
     const pending = queue.shift()!;
 
-    if (remember && !pending.fromHook) {
-      const action = allow ? 'allow' : 'deny';
-      if (pending.serverName) {
-        // MCP tool: save at server level so all tools on this server are covered
-        await addPermissionRule(channelId, `mcp:${pending.serverName}`, '*', action as 'allow' | 'deny');
-        log.info(`Saved ${action} rule for MCP server "${pending.serverName}" in channel ${channelId}`);
-      } else if (pending.commands.length > 0) {
-        for (const cmd of pending.commands) {
-          await addPermissionRule(channelId, pending.toolName, cmd, action as 'allow' | 'deny');
-        }
-      } else {
-        await addPermissionRule(channelId, pending.toolName, '*', action as 'allow' | 'deny');
-      }
-    }
-
+    // Resolve the permission first — don't let persistence failures block the SDK callback
     pending.resolve(allow
       ? { kind: 'approved' }
       : { kind: 'denied-interactively-by-user' });
+
+    if (remember && !pending.fromHook) {
+      const action = allow ? 'allow' : 'deny';
+      try {
+        if (pending.serverName) {
+          await addPermissionRule(channelId, `mcp:${pending.serverName}`, '*', action as 'allow' | 'deny');
+          log.info(`Saved ${action} rule for MCP server "${pending.serverName}" in channel ${channelId}`);
+        } else if (pending.commands.length > 0) {
+          for (const cmd of pending.commands) {
+            await addPermissionRule(channelId, pending.toolName, cmd, action as 'allow' | 'deny');
+          }
+        } else {
+          await addPermissionRule(channelId, pending.toolName, '*', action as 'allow' | 'deny');
+        }
+      } catch (err) {
+        log.warn('Failed to persist permission rule (permission was still applied):', err);
+      }
+    }
 
     if (queue.length === 0) {
       this.pendingPermissions.delete(channelId);
@@ -1798,17 +1806,19 @@ export class SessionManager {
       const response = await this.sendAndWaitForIdle(session, opts.message, timeout);
 
       const durationMs = Date.now() - startTime;
-      await recordAgentCall({
-        callerBot: opts.callerBot,
-        targetBot: opts.targetBot,
-        targetAgent: opts.agent,
-        messageSummary: opts.message.slice(0, 500),
-        responseSummary: response.slice(0, 500),
-        durationMs,
-        success: true,
-        chainId: opts.context.chainId,
-        depth: nextContext.depth,
-      });
+      try {
+        await recordAgentCall({
+          callerBot: opts.callerBot,
+          targetBot: opts.targetBot,
+          targetAgent: opts.agent,
+          messageSummary: opts.message.slice(0, 500),
+          responseSummary: response.slice(0, 500),
+          durationMs,
+          success: true,
+          chainId: opts.context.chainId,
+          depth: nextContext.depth,
+        });
+      } catch (e) { log.warn('Failed to record successful agent call:', e); }
 
       log.info(`Ephemeral call ${opts.callerBot}→${opts.targetBot}: ${durationMs}ms, ${response.length} chars`);
       return { success: true, response };
