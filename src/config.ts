@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgentConfig, AccessConfig, BridgeProviderConfig } from './types.js';
+import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgentConfig, AccessConfig, BridgeProviderConfig, LogRotationConfig } from './types.js';
 import type { SDKProviderConfig } from './core/bridge.js';
 import { getDynamicChannel } from './state/store.js';
 import { createLogger } from './logger.js';
@@ -186,6 +186,27 @@ function validateAndNormalize(raw: any): AppConfig {
     }
   }
 
+  // Validate logging (log rotation) config (optional)
+  if (raw.logging !== undefined) {
+    if (raw.logging === null || typeof raw.logging !== 'object' || Array.isArray(raw.logging)) {
+      throw new Error('"logging" must be an object');
+    }
+    const lg = raw.logging;
+    if (lg.maxSize !== undefined) {
+      if (typeof lg.maxSize !== 'number' || lg.maxSize < 1024) {
+        throw new Error('logging.maxSize must be a number >= 1024 (bytes)');
+      }
+    }
+    if (lg.maxFiles !== undefined) {
+      if (typeof lg.maxFiles !== 'number' || lg.maxFiles < 0 || !Number.isInteger(lg.maxFiles)) {
+        throw new Error('logging.maxFiles must be a non-negative integer');
+      }
+    }
+    if (lg.compress !== undefined && typeof lg.compress !== 'boolean') {
+      throw new Error('logging.compress must be a boolean');
+    }
+  }
+
   // Validate telemetry config (optional)
   if (raw.telemetry !== undefined) {
     if (raw.telemetry === null || typeof raw.telemetry !== 'object' || Array.isArray(raw.telemetry)) {
@@ -231,6 +252,7 @@ function validateAndNormalize(raw: any): AppConfig {
     channels: raw.channels,
     defaults,
     logLevel: raw.logLevel,
+    logging: raw.logging,
     infiniteSessions: raw.infiniteSessions === true,
     permissions: raw.permissions,
     interAgent: raw.interAgent,
@@ -364,6 +386,12 @@ function diffConfigs(oldCfg: AppConfig, newCfg: AppConfig): { changes: string[];
   if (JSON.stringify(oldCfg.telemetry ?? {}) !== JSON.stringify(newCfg.telemetry ?? {})) {
     changes.push('telemetry config updated');
     restartNeeded.push('telemetry config changed (requires restart)');
+  }
+
+  // --- Logging ---
+  if (JSON.stringify(oldCfg.logging ?? {}) !== JSON.stringify(newCfg.logging ?? {})) {
+    changes.push('logging config updated');
+    restartNeeded.push('logging config changed (requires restart)');
   }
 
   // --- Channels ---

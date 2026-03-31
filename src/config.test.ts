@@ -875,3 +875,73 @@ describe('telemetry config validation', () => {
     expect2(result.restartNeeded.some((r: string) => r.includes('telemetry'))).toBe(true);
   });
 });
+
+describe('logging config validation', () => {
+  let tmpDir: string;
+  let configFile: string;
+
+  beforeEach(() => {
+    _resetConfigForTest();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'logging-test-'));
+    configFile = path.join(tmpDir, 'config.json');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('accepts valid logging config', () => {
+    const cfg = makeConfig({
+      logging: { maxSize: 5242880, maxFiles: 5, compress: false },
+    });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    const config = loadConfig(configFile);
+    expect2(config.logging?.maxSize).toBe(5242880);
+    expect2(config.logging?.maxFiles).toBe(5);
+    expect2(config.logging?.compress).toBe(false);
+  });
+
+  it('accepts config without logging', () => {
+    const cfg = makeConfig();
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    const config = loadConfig(configFile);
+    expect2(config.logging).toBeUndefined();
+  });
+
+  it('rejects non-object logging', () => {
+    const cfg = makeConfig({ logging: 'bad' });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    expect2(() => loadConfig(configFile)).toThrow(/"logging" must be an object/);
+  });
+
+  it('rejects maxSize below 1024', () => {
+    const cfg = makeConfig({ logging: { maxSize: 500 } });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    expect2(() => loadConfig(configFile)).toThrow(/maxSize must be a number >= 1024/);
+  });
+
+  it('rejects non-integer maxFiles', () => {
+    const cfg = makeConfig({ logging: { maxFiles: 2.5 } });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    expect2(() => loadConfig(configFile)).toThrow(/maxFiles must be a non-negative integer/);
+  });
+
+  it('rejects non-boolean compress', () => {
+    const cfg = makeConfig({ logging: { compress: 'yes' } });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    expect2(() => loadConfig(configFile)).toThrow(/compress must be a boolean/);
+  });
+
+  it('detects logging changes as restart-required on reload', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig()));
+    loadConfig(configFile);
+
+    const updated = makeConfig({ logging: { maxSize: 5242880 } });
+    fs.writeFileSync(configFile, JSON.stringify(updated));
+
+    const result = reloadConfig();
+    expect2(result.success).toBe(true);
+    expect2(result.changes.some((c: string) => c.includes('logging'))).toBe(true);
+    expect2(result.restartNeeded.some((r: string) => r.includes('logging'))).toBe(true);
+  });
+});

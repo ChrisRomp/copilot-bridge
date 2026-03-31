@@ -53,7 +53,6 @@ export interface LaunchdConfig {
 export function generateLaunchdPlist(config: LaunchdConfig): string {
   const nodePath = getNodePath();
   const tsxPath = path.join(config.bridgePath, 'node_modules', '.bin', 'tsx');
-  const logPath = getLogPath(config.homePath);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -90,12 +89,6 @@ export function generateLaunchdPlist(config: LaunchdConfig): string {
 
     <key>Umask</key>
     <integer>63</integer>
-
-    <key>StandardOutPath</key>
-    <string>${logPath}</string>
-
-    <key>StandardErrorPath</key>
-    <string>${logPath}</string>
 </dict>
 </plist>`;
 }
@@ -117,21 +110,6 @@ export function installLaunchd(plistContent: string): { installed: boolean; path
   } catch (err) {
     return { installed: false, path: installPath, error: String(err) };
   }
-}
-
-export function generateNewsyslogConfig(logPath: string, user: string): string {
-  let group = 'staff';
-  try { group = execSync('id -gn', { encoding: 'utf-8' }).trim(); } catch { /* default */ }
-  // N=no signal, C=create new file after rotation, Z=gzip compress
-  // Rotates at 10 MB, keeps 3 archives
-  return `# Copilot Bridge log rotation — installed by copilot-bridge install-service
-# logfilename  owner:group  mode  count  size(KB)  when  flags
-${logPath}  ${user}:${group}  600  3  10240  *  NCZ
-`;
-}
-
-export function getNewsyslogInstallPath(): string {
-  return '/etc/newsyslog.d/copilot-bridge.conf';
 }
 
 // --- systemd (Linux) ---

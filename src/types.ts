@@ -67,6 +67,13 @@ export interface BridgeProviderConfig {
   models: ProviderModelEntry[];
 }
 
+// Log file rotation configuration
+export interface LogRotationConfig {
+  maxSize?: number;     // max file size in bytes before rotation (default: 10 MB)
+  maxFiles?: number;    // rotated files to keep (default: 3)
+  compress?: boolean;   // gzip compress rotated files (default: true)
+}
+
 // Full app config
 // Telemetry configuration for OpenTelemetry tracing
 export interface BridgeTelemetryConfig {
@@ -92,6 +99,7 @@ export interface AppConfig {
     allowWorkspaceHooks?: boolean;
   };
   logLevel?: 'debug' | 'info' | 'warn' | 'error';
+  logging?: LogRotationConfig;
   infiniteSessions?: boolean;
   permissions?: PermissionsConfig;
   interAgent?: InterAgentConfig;

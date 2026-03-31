@@ -13,7 +13,7 @@ import { heading, printCheck, printSummary, info, dim, type CheckResult } from '
 import { runAllPrereqs } from './lib/prerequisites.js';
 import { pingServer, validateBotToken, checkChannelAccess } from './lib/mattermost.js';
 import { getConfigPath, getConfigDir } from './lib/config-gen.js';
-import { detectPlatform, getServiceStatus, getLogPath, getNewsyslogInstallPath } from './lib/service.js';
+import { detectPlatform, getServiceStatus, getLogPath } from './lib/service.js';
 
 async function main() {
   const isCli = process.env.COPILOT_BRIDGE_CLI === '1';
@@ -267,13 +267,13 @@ async function main() {
       printCheck(result);
       results.push(result);
     }
-    const newsyslogPath = getNewsyslogInstallPath();
+    const newsyslogPath = '/etc/newsyslog.d/copilot-bridge.conf';
     if (fs.existsSync(newsyslogPath)) {
-      const result: CheckResult = { status: 'pass', label: 'Log rotation', detail: newsyslogPath };
+      const result: CheckResult = { status: 'warn', label: 'Log rotation', detail: `old newsyslog config found at ${newsyslogPath} — can be removed (rotation is now built-in)` };
       printCheck(result);
       results.push(result);
     } else {
-      const result: CheckResult = { status: 'warn', label: 'Log rotation', detail: 'not configured — run install-service to set up' };
+      const result: CheckResult = { status: 'pass', label: 'Log rotation', detail: 'built-in (self-managed)' };
       printCheck(result);
       results.push(result);
     }

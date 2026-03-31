@@ -13,9 +13,10 @@ import { markBusy, markIdle, markIdleImmediate, isBusy, waitForChannelIdle, canc
 import { LoopDetector, MAX_IDENTICAL_CALLS } from './core/loop-detector.js';
 import { checkUserAccess } from './core/access-control.js';
 import { enterQuietMode, exitQuietMode, isQuiet } from './core/quiet-mode.js';
-import { createLogger, setLogLevel } from './logger.js';
+import { createLogger, setLogLevel, initLogFile } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig } from './types.js';
 
 const log = createLogger('bridge');
@@ -357,10 +358,21 @@ function resolveTelemetryConfig(config: AppConfig): { telemetry?: import('@githu
 }
 
 async function main(): Promise<void> {
+  // Initialize log file early so startup output is captured
+  // (uses defaults until config is loaded)
+  const logPath = path.join(os.homedir(), '.copilot-bridge', 'copilot-bridge.log');
+  initLogFile(logPath);
+
   log.info('copilot-bridge starting...');
 
   // Load configuration
   const config = loadConfig();
+
+  // Re-init with config-driven settings if provided
+  if (config.logging) {
+    initLogFile(logPath, config.logging);
+  }
+
   setLogLevel(config.logLevel ?? 'info');
   log.info(`Loaded ${config.channels.length} channel mapping(s)`);
 

@@ -34,11 +34,5 @@
 
     <key>Umask</key>
     <integer>63</integer>
-
-    <key>StandardOutPath</key>
-    <string>/Users/USERNAME/.copilot-bridge/copilot-bridge.log</string>
-
-    <key>StandardErrorPath</key>
-    <string>/Users/USERNAME/.copilot-bridge/copilot-bridge.log</string>
 </dict>
 </plist>

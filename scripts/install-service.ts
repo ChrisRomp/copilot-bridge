@@ -17,7 +17,7 @@ import {
   detectPlatform,
   generateLaunchdPlist, installLaunchd, getLaunchdInstallPath,
   generateSystemdUnit, getSystemdInstallPath,
-  getLogPath, generateNewsyslogConfig, getNewsyslogInstallPath,
+  getLogPath,
 } from './lib/service.js';
 import { execSync } from 'node:child_process';
 
@@ -63,27 +63,24 @@ function main() {
     if (result.installed) {
       success(`Service installed at ${result.path}`);
 
-      // Install log rotation via newsyslog
-      const logPath = getLogPath(homePath);
-      const newsyslogContent = generateNewsyslogConfig(logPath, user);
-      const newsyslogPath = getNewsyslogInstallPath();
-      try {
-        execSync(`sudo tee "${newsyslogPath}" > /dev/null`, { input: newsyslogContent });
-        success(`Log rotation installed at ${newsyslogPath}`);
-      } catch {
-        blank();
-        dim('  ⚠️  Could not install log rotation (sudo required).');
-        dim('  To install manually:');
-        dim(`    sudo tee ${newsyslogPath} << 'EOF'`);
-        dim(newsyslogContent.trimEnd());
-        dim('    EOF');
+      // Migration: remove old newsyslog config if present (log rotation is now built-in)
+      const newsyslogPath = '/etc/newsyslog.d/copilot-bridge.conf';
+      if (fs.existsSync(newsyslogPath)) {
+        try {
+          execSync(`sudo rm "${newsyslogPath}"`, { stdio: 'inherit' });
+          success('Removed old newsyslog config (log rotation is now built-in)');
+        } catch {
+          blank();
+          info('⚠️  Old newsyslog config detected (log rotation is now built-in).');
+          dim(`  To remove: sudo rm ${newsyslogPath}`);
+        }
       }
 
       // Migration: warn about old log file
       const oldLogPath = '/tmp/copilot-bridge.log';
       if (fs.existsSync(oldLogPath)) {
         blank();
-        info(`📋 Log path changed: ${oldLogPath} → ${logPath}`);
+        info(`📋 Log path changed: ${oldLogPath} → ${getLogPath(homePath)}`);
         dim(`  You can delete the old log: rm ${oldLogPath}`);
       }
 
