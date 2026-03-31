@@ -62,8 +62,9 @@ let logConfig: Required<LogFileConfig> = {
 let currentSize = 0;
 let rotating = false;
 
-// Keep a reference to the real stderr write for emergency output
-let _origStderrWrite: typeof process.stderr.write = process.stderr.write.bind(process.stderr);
+// Captured once at module load — never reassigned, so it always points at the
+// real stderr even after redirectConsole() overrides process.stderr.write.
+const _origStderrWrite: typeof process.stderr.write = process.stderr.write.bind(process.stderr);
 
 /**
  * Initialize self-managed file logging. Redirects console.log/warn/error
@@ -122,19 +123,21 @@ function writeToLog(data: string): void {
 }
 
 function redirectConsole(): void {
-  _origStderrWrite = process.stderr.write.bind(process.stderr);
-
   // Override process.stdout.write — captures console.log output
-  process.stdout.write = function (chunk: any, ...args: any[]): boolean {
+  process.stdout.write = function (chunk: any, encoding?: any, callback?: any): boolean {
+    const cb = typeof encoding === 'function' ? encoding : callback;
     const str = typeof chunk === 'string' ? chunk : chunk.toString();
     writeToLog(str);
-    return true; // signal that data was consumed
+    if (typeof cb === 'function') cb();
+    return true;
   } as any;
 
   // Override process.stderr.write — captures console.error/warn output
-  process.stderr.write = function (chunk: any, ...args: any[]): boolean {
+  process.stderr.write = function (chunk: any, encoding?: any, callback?: any): boolean {
+    const cb = typeof encoding === 'function' ? encoding : callback;
     const str = typeof chunk === 'string' ? chunk : chunk.toString();
     writeToLog(str);
+    if (typeof cb === 'function') cb();
     return true;
   } as any;
 }
@@ -153,8 +156,10 @@ async function rotateNow(): Promise<void> {
   const ext = logConfig.compress ? '.gz' : '';
 
   // Delete the oldest file if at limit
-  const oldestPath = path.join(dir, `${base}.${logConfig.maxFiles}${ext}`);
-  try { fs.unlinkSync(oldestPath); } catch { /* doesn't exist */ }
+  if (logConfig.maxFiles > 0) {
+    const oldestPath = path.join(dir, `${base}.${logConfig.maxFiles}${ext}`);
+    try { fs.unlinkSync(oldestPath); } catch { /* doesn't exist */ }
+  }
 
   // Shift existing rotated files: .3 -> .4, .2 -> .3, .1 -> .2
   for (let i = logConfig.maxFiles - 1; i >= 1; i--) {
@@ -169,16 +174,42 @@ async function rotateNow(): Promise<void> {
     fs.renameSync(logFilePath, rotatedPath);
   } catch {
     // If rename fails, just reopen
-    openLogFd();
+    tryOpenLogFd();
     return;
   }
 
   // Open a fresh log file
-  openLogFd();
+  tryOpenLogFd();
 
-  // Compress the rotated file in the background
+  if (logConfig.maxFiles === 0) {
+    // No archives kept — delete the rotated file immediately
+    try { fs.unlinkSync(rotatedPath); } catch { /* best effort */ }
+    return;
+  }
+
+  // Compress the rotated file (awaited to prevent race with next rotation)
   if (logConfig.compress) {
-    compressFile(rotatedPath).catch(() => { /* best effort */ });
+    try {
+      await compressFile(rotatedPath);
+    } catch {
+      // Compression failed — keep the uncompressed file
+    }
+  }
+}
+
+/** Open the log fd with retry on failure so logging isn't permanently lost. */
+function tryOpenLogFd(): void {
+  try {
+    openLogFd();
+  } catch (err: any) {
+    _origStderrWrite(`[logger] Failed to open log file: ${err.message}, retrying in 1s\n`);
+    setTimeout(() => {
+      try {
+        openLogFd();
+      } catch (retryErr: any) {
+        _origStderrWrite(`[logger] Retry failed: ${retryErr.message}, logging to stderr\n`);
+      }
+    }, 1000);
   }
 }
 

@@ -80,7 +80,7 @@ function main() {
       const oldLogPath = '/tmp/copilot-bridge.log';
       if (fs.existsSync(oldLogPath)) {
         blank();
-        info(`📋 Log path changed: ${oldLogPath} → ${logPath}`);
+        info(`📋 Log path changed: ${oldLogPath} → ${getLogPath(homePath)}`);
         dim(`  You can delete the old log: rm ${oldLogPath}`);
       }
 
