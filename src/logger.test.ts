@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { initLogFile, closeLogFile, getLogFileState } from './logger.js';
+import { initLogFile, closeLogFile, getLogFileState, waitForRotation } from './logger.js';
 
 describe('self-managed log file', () => {
   let tmpDir: string;
@@ -79,8 +79,7 @@ describe('self-managed log file', () => {
       writeViaStdout(`line ${i}: ${'x'.repeat(50)}`);
     }
 
-    // Give the async rotation a moment to complete
-    await new Promise(r => setTimeout(r, 200));
+    await waitForRotation();
     closeLogFile();
 
     // Should have the current log and at least one rotated file
@@ -95,11 +94,11 @@ describe('self-managed log file', () => {
     // Write many lines to trigger multiple rotations
     for (let i = 0; i < 50; i++) {
       writeViaStdout(`line ${i}: ${'y'.repeat(80)}`);
-      // Small delay to let rotation complete between writes
-      if (i % 10 === 0) await new Promise(r => setTimeout(r, 100));
+      // Let rotation complete between bursts so the next write triggers a fresh rotation
+      if (i % 10 === 0) await waitForRotation();
     }
 
-    await new Promise(r => setTimeout(r, 300));
+    await waitForRotation();
     closeLogFile();
 
     const files = fs.readdirSync(tmpDir).filter(f => f.startsWith('test.log'));
@@ -114,7 +113,7 @@ describe('self-managed log file', () => {
       writeViaStdout(`line ${i}: ${'z'.repeat(60)}`);
     }
 
-    await new Promise(r => setTimeout(r, 500));
+    await waitForRotation();
     closeLogFile();
 
     const files = fs.readdirSync(tmpDir);

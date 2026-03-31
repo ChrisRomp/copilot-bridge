@@ -58,6 +58,7 @@ let logConfig: Required<LogRotationConfig> = {
 };
 let currentSize = 0;
 let rotating = false;
+let _rotationPromise: Promise<void> = Promise.resolve();
 
 // Captured once at module load — never reassigned, so it always points at the
 // real stderr even after redirectConsole() overrides process.stderr.write.
@@ -111,7 +112,7 @@ function writeToLog(data: string): void {
 
   if (!rotating && currentSize >= logConfig.maxSize) {
     rotating = true;
-    rotateNow().catch((err) => {
+    _rotationPromise = rotateNow().catch((err) => {
       _origStderrWrite(`[logger] Rotation error: ${err.message}\n`);
     }).finally(() => {
       rotating = false;
@@ -233,4 +234,9 @@ export function closeLogFile(): void {
 /** Expose for testing. */
 export function getLogFileState(): { filePath: string | null; currentSize: number; rotating: boolean } {
   return { filePath: logFilePath, currentSize, rotating };
+}
+
+/** Wait for any in-progress rotation to complete. For testing only. */
+export function waitForRotation(): Promise<void> {
+  return _rotationPromise;
 }
