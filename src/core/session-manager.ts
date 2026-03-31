@@ -424,6 +424,9 @@ export class SessionManager {
   private sessionSkillDirs = new Map<string, Set<string>>(); // channelId → skill dir paths
   // Loaded session hooks per workspace (cached after first load)
   private workspaceHooks = new Map<string, SessionHooks | undefined>();
+  // Working directory captured at session create/resume time (sessionId → workingDirectory)
+  // Used to fire sessionEnd hooks against the correct workspace even if channel config changes.
+  private sessionWorkingDirectories = new Map<string, string>(); // sessionId → workingDirectory
   // Pending plan exit requests (one per channel)
   private pendingPlanExit = new Map<string, PendingPlanExit>();
   // Debounce timers for plan_changed events
@@ -653,6 +656,21 @@ export class SessionManager {
     // Clean up existing session
     const existingId = this.channelSessions.get(channelId);
     if (existingId) {
+      // Use the working directory captured at session creation time, not the current channel config.
+      // Channel config may have changed since the session started — sessionEnd should fire against
+      // the workspace the session was actually running in.
+      const workingDirectory = this.sessionWorkingDirectories.get(existingId) ?? this.resolveWorkingDirectory(channelId);
+      this.workspaceHooks.delete(workingDirectory);
+      const rawHooks = await this.resolveHooks(workingDirectory);
+      const hooks = this.wrapHooksWithAsk(rawHooks, channelId);
+      if (hooks?.onSessionEnd) {
+        try {
+          await hooks.onSessionEnd({ sessionId: existingId, channelId }, { sessionId: existingId });
+        } catch (err: any) {
+          log.warn(`sessionEnd hook failed: ${err?.message ?? err}`);
+        }
+      }
+
       const unsub = this.sessionUnsubscribes.get(existingId);
       if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
       try {
@@ -660,6 +678,7 @@ export class SessionManager {
       } catch { /* best-effort */ }
       this.channelSessions.delete(channelId);
       this.sessionChannels.delete(existingId);
+      this.sessionWorkingDirectories.delete(existingId);
       this.contextUsage.delete(channelId);
       this.contextWindowTokens.delete(channelId);
       this.lastMessageUserIds.delete(channelId);
@@ -682,11 +701,29 @@ export class SessionManager {
       return this.createNewSession(channelId);
     }
 
+    // Fire sessionEnd hook before detaching events — events must still be wired
+    // during the await so concurrent sendMessage() calls don't silently drop responses.
+    // Use the working directory captured at session creation time — channel config may
+    // have changed since then. Invalidate cache so we read the latest hooks.json.
+    const reloadWorkingDirectory = this.sessionWorkingDirectories.get(existingId) ?? this.resolveWorkingDirectory(channelId);
+    this.workspaceHooks.delete(reloadWorkingDirectory);
+    const reloadRawHooks = await this.resolveHooks(reloadWorkingDirectory);
+    const reloadHooks = this.wrapHooksWithAsk(reloadRawHooks, channelId);
+    if (reloadHooks?.onSessionEnd) {
+      try {
+        await reloadHooks.onSessionEnd({ sessionId: existingId, channelId }, { sessionId: existingId });
+      } catch (err: any) {
+        log.warn(`sessionEnd hook failed: ${err?.message ?? err}`);
+      }
+    }
+
     // Detach event listeners and disconnect so the CLI subprocess tears down
     // in-memory state (including MCP connections), allowing a clean re-init.
     const unsub = this.sessionUnsubscribes.get(existingId);
     if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
+
     try { await this.bridge.destroySession(existingId); } catch { /* best-effort */ }
+    this.sessionWorkingDirectories.delete(existingId);
 
     // Re-read global MCP servers so /reload picks up user-level config changes
     this.mcpServers = loadMcpServers();
@@ -1646,9 +1683,17 @@ export class SessionManager {
     const sessionId = session.sessionId;
     this.channelSessions.set(channelId, sessionId);
     this.sessionChannels.set(sessionId, channelId);
+    this.sessionWorkingDirectories.set(sessionId, workingDirectory); // capture at create time
     setChannelSession(channelId, sessionId);
 
     this.attachSessionEvents(session, channelId);
+
+    // Fire sessionStart hook (best-effort, non-blocking)
+    if (hooks?.onSessionStart) {
+      hooks.onSessionStart({ sessionId, channelId }, { sessionId }).catch((err: any) => {
+        log.warn(`sessionStart hook failed: ${err?.message ?? err}`);
+      });
+    }
 
     log.info(`Created session ${sessionId} for channel ${channelId} (model: ${usedModel})`);
     return sessionId;
@@ -1702,7 +1747,15 @@ export class SessionManager {
     this.sessionSkillDirs.set(channelId, new Set(skillDirectories));
     this.channelSessions.set(channelId, sessionId);
     this.sessionChannels.set(sessionId, channelId);
+    this.sessionWorkingDirectories.set(sessionId, workingDirectory); // capture at resume time
     this.attachSessionEvents(session, channelId);
+
+    // Fire sessionStart hook (best-effort, non-blocking)
+    if (hooks?.onSessionStart) {
+      hooks.onSessionStart({ sessionId, channelId }, { sessionId }).catch((err: any) => {
+        log.warn(`sessionStart hook failed: ${err?.message ?? err}`);
+      });
+    }
 
     // Cache context window tokens for /context display (best-effort, non-blocking)
     const resumeModel = prefs.model;

@@ -164,7 +164,7 @@ function parseHooksConfig(filePath: string): Map<string, HookCommand[]> {
  * Input is piped as JSON to stdin, output parsed from stdout.
  */
 async function executeHookCommand(cmd: HookCommand, input: any, baseDir: string): Promise<any | undefined> {
-  const shell = cmd.bash ? 'bash' : 'powershell';
+  const shell = cmd.bash ? (process.platform === 'win32' ? 'bash' : '/bin/bash') : 'powershell';
   const script = cmd.bash ?? cmd.powershell!;
   const cwd = cmd.cwd ? path.resolve(baseDir, cmd.cwd) : baseDir;
   const timeoutMs = (cmd.timeoutSec ?? 30) * 1000;
