@@ -48,15 +48,15 @@
     "@slack/bolt": "^4.6.0",
     "better-sqlite3": "^12.6.2",
     "cron": "^4.4.0",
-    "cronstrue": "^3.13.0",
+    "cronstrue": "^3.14.0",
     "luxon": "^3.7.2",
     "tsx": "^4.21.0",
-    "ws": "^8.18.0"
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "@types/ws": "^8.5.14",
-    "typescript": "^5.7.3",
-    "vitest": "^4.0.18"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.1"
   }
 }
