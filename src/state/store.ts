@@ -2,7 +2,9 @@ import Database from 'better-sqlite3';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
+import { createLogger } from '../logger.js';
 
+const log = createLogger('store');
 const DB_PATH = path.join(os.homedir(), '.copilot-bridge', 'state.db');
 
 function safeParseStringArray(raw: string): string[] | undefined {
@@ -227,27 +229,47 @@ function getDb(): Database.Database {
 // --- Channel Sessions ---
 
 export async function getChannelSession(channelId: string): Promise<string | null> {
-  const db = getDb();
-  const row = db.prepare('SELECT session_id FROM channel_sessions WHERE channel_id = ?').get(channelId) as { session_id: string } | undefined;
-  return row?.session_id ?? null;
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT session_id FROM channel_sessions WHERE channel_id = ?').get(channelId) as { session_id: string } | undefined;
+    return row?.session_id ?? null;
+  } catch (err) {
+    log.error('getChannelSession failed:', err);
+    throw err;
+  }
 }
 
 export async function setChannelSession(channelId: string, sessionId: string): Promise<void> {
-  const db = getDb();
-  db.prepare(
-    'INSERT OR REPLACE INTO channel_sessions (channel_id, session_id, created_at) VALUES (?, ?, datetime(\'now\'))'
-  ).run(channelId, sessionId);
+  try {
+    const db = getDb();
+    db.prepare(
+      'INSERT OR REPLACE INTO channel_sessions (channel_id, session_id, created_at) VALUES (?, ?, datetime(\'now\'))'
+    ).run(channelId, sessionId);
+  } catch (err) {
+    log.error('setChannelSession failed:', err);
+    throw err;
+  }
 }
 
 export async function clearChannelSession(channelId: string): Promise<void> {
-  const db = getDb();
-  db.prepare('DELETE FROM channel_sessions WHERE channel_id = ?').run(channelId);
+  try {
+    const db = getDb();
+    db.prepare('DELETE FROM channel_sessions WHERE channel_id = ?').run(channelId);
+  } catch (err) {
+    log.error('clearChannelSession failed:', err);
+    throw err;
+  }
 }
 
 export async function getAllChannelSessions(): Promise<Array<{ channelId: string; sessionId: string }>> {
-  const db = getDb();
-  const rows = db.prepare('SELECT channel_id, session_id FROM channel_sessions').all() as any[];
-  return rows.map(r => ({ channelId: r.channel_id, sessionId: r.session_id }));
+  try {
+    const db = getDb();
+    const rows = db.prepare('SELECT channel_id, session_id FROM channel_sessions').all() as any[];
+    return rows.map(r => ({ channelId: r.channel_id, sessionId: r.session_id }));
+  } catch (err) {
+    log.error('getAllChannelSessions failed:', err);
+    throw err;
+  }
 }
 
 // --- Channel Preferences ---
@@ -266,49 +288,59 @@ export interface ChannelPrefs {
 }
 
 export async function getChannelPrefs(channelId: string): Promise<ChannelPrefs | null> {
-  const db = getDb();
-  const row = db.prepare('SELECT * FROM channel_prefs WHERE channel_id = ?').get(channelId) as any;
-  if (!row) return null;
-  return {
-    model: row.model ?? undefined,
-    provider: row.provider ?? null,
-    agent: row.agent,
-    verbose: row.verbose != null ? !!row.verbose : undefined,
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM channel_prefs WHERE channel_id = ?').get(channelId) as any;
+    if (!row) return null;
+    return {
+      model: row.model ?? undefined,
+      provider: row.provider ?? null,
+      agent: row.agent,
+      verbose: row.verbose != null ? !!row.verbose : undefined,
 
-    threadedReplies: row.threaded_replies != null ? !!row.threaded_replies : undefined,
-    permissionMode: row.permission_mode ?? undefined,
-    reasoningEffort: row.reasoning_effort ?? null,
-    sessionMode: row.session_mode ?? undefined,
-    disabledSkills: row.disabled_skills ? safeParseStringArray(row.disabled_skills) : undefined,
-  };
+      threadedReplies: row.threaded_replies != null ? !!row.threaded_replies : undefined,
+      permissionMode: row.permission_mode ?? undefined,
+      reasoningEffort: row.reasoning_effort ?? null,
+      sessionMode: row.session_mode ?? undefined,
+      disabledSkills: row.disabled_skills ? safeParseStringArray(row.disabled_skills) : undefined,
+    };
+  } catch (err) {
+    log.error('getChannelPrefs failed:', err);
+    throw err;
+  }
 }
 
 export async function setChannelPrefs(channelId: string, prefs: Partial<ChannelPrefs>): Promise<void> {
-  const db = getDb();
+  try {
+    const db = getDb();
 
-  // Ensure a row exists (upsert-safe — avoids TOCTOU race with async callers)
-  db.prepare(
-    `INSERT OR IGNORE INTO channel_prefs (channel_id) VALUES (?)`
-  ).run(channelId);
+    // Ensure a row exists (upsert-safe — avoids TOCTOU race with async callers)
+    db.prepare(
+      `INSERT OR IGNORE INTO channel_prefs (channel_id) VALUES (?)`
+    ).run(channelId);
 
-  const updates: string[] = [];
-  const values: any[] = [];
+    const updates: string[] = [];
+    const values: any[] = [];
 
-  if (prefs.model !== undefined) { updates.push('model = ?'); values.push(prefs.model); }
-  if (prefs.provider !== undefined) { updates.push('provider = ?'); values.push(prefs.provider); }
-  if (prefs.agent !== undefined) { updates.push('agent = ?'); values.push(prefs.agent); }
-  if (prefs.verbose !== undefined) { updates.push('verbose = ?'); values.push(prefs.verbose ? 1 : 0); }
+    if (prefs.model !== undefined) { updates.push('model = ?'); values.push(prefs.model); }
+    if (prefs.provider !== undefined) { updates.push('provider = ?'); values.push(prefs.provider); }
+    if (prefs.agent !== undefined) { updates.push('agent = ?'); values.push(prefs.agent); }
+    if (prefs.verbose !== undefined) { updates.push('verbose = ?'); values.push(prefs.verbose ? 1 : 0); }
 
-  if (prefs.threadedReplies !== undefined) { updates.push('threaded_replies = ?'); values.push(prefs.threadedReplies ? 1 : 0); }
-  if (prefs.permissionMode !== undefined) { updates.push('permission_mode = ?'); values.push(prefs.permissionMode); }
-  if (prefs.reasoningEffort !== undefined) { updates.push('reasoning_effort = ?'); values.push(prefs.reasoningEffort); }
-  if (prefs.sessionMode !== undefined) { updates.push('session_mode = ?'); values.push(prefs.sessionMode); }
-  if (prefs.disabledSkills !== undefined) { updates.push('disabled_skills = ?'); values.push(JSON.stringify(prefs.disabledSkills)); }
+    if (prefs.threadedReplies !== undefined) { updates.push('threaded_replies = ?'); values.push(prefs.threadedReplies ? 1 : 0); }
+    if (prefs.permissionMode !== undefined) { updates.push('permission_mode = ?'); values.push(prefs.permissionMode); }
+    if (prefs.reasoningEffort !== undefined) { updates.push('reasoning_effort = ?'); values.push(prefs.reasoningEffort); }
+    if (prefs.sessionMode !== undefined) { updates.push('session_mode = ?'); values.push(prefs.sessionMode); }
+    if (prefs.disabledSkills !== undefined) { updates.push('disabled_skills = ?'); values.push(JSON.stringify(prefs.disabledSkills)); }
 
-  if (updates.length > 0) {
-    updates.push("updated_at = datetime('now')");
-    values.push(channelId);
-    db.prepare(`UPDATE channel_prefs SET ${updates.join(', ')} WHERE channel_id = ?`).run(...values);
+    if (updates.length > 0) {
+      updates.push("updated_at = datetime('now')");
+      values.push(channelId);
+      db.prepare(`UPDATE channel_prefs SET ${updates.join(', ')} WHERE channel_id = ?`).run(...values);
+    }
+  } catch (err) {
+    log.error('setChannelPrefs failed:', err);
+    throw err;
   }
 }
 
@@ -324,60 +356,85 @@ export interface StoredPermissionRule {
 }
 
 export async function getPermissionRules(scope: string, tool: string): Promise<StoredPermissionRule[]> {
-  const db = getDb();
-  const rows = db.prepare(
-    'SELECT * FROM permission_rules WHERE (scope = ? OR scope = \'global\') AND tool = ? ORDER BY scope DESC, id DESC'
-  ).all(scope, tool) as any[];
-  return rows.map(r => ({
-    id: r.id,
-    scope: r.scope,
-    tool: r.tool,
-    commandPattern: r.command_pattern,
-    action: r.action,
-    createdAt: r.created_at,
-  }));
+  try {
+    const db = getDb();
+    const rows = db.prepare(
+      'SELECT * FROM permission_rules WHERE (scope = ? OR scope = \'global\') AND tool = ? ORDER BY scope DESC, id DESC'
+    ).all(scope, tool) as any[];
+    return rows.map(r => ({
+      id: r.id,
+      scope: r.scope,
+      tool: r.tool,
+      commandPattern: r.command_pattern,
+      action: r.action,
+      createdAt: r.created_at,
+    }));
+  } catch (err) {
+    log.error('getPermissionRules failed:', err);
+    throw err;
+  }
 }
 
 export async function addPermissionRule(scope: string, tool: string, commandPattern: string, action: 'allow' | 'deny'): Promise<void> {
-  const db = getDb();
-  // Remove existing rule for same scope+tool+pattern before inserting
-  db.prepare(
-    'DELETE FROM permission_rules WHERE scope = ? AND tool = ? AND command_pattern = ?'
-  ).run(scope, tool, commandPattern);
+  try {
+    const db = getDb();
+    // Remove existing rule for same scope+tool+pattern before inserting
+    db.prepare(
+      'DELETE FROM permission_rules WHERE scope = ? AND tool = ? AND command_pattern = ?'
+    ).run(scope, tool, commandPattern);
 
-  db.prepare(
-    'INSERT INTO permission_rules (scope, tool, command_pattern, action) VALUES (?, ?, ?, ?)'
-  ).run(scope, tool, commandPattern, action);
+    db.prepare(
+      'INSERT INTO permission_rules (scope, tool, command_pattern, action) VALUES (?, ?, ?, ?)'
+    ).run(scope, tool, commandPattern, action);
+  } catch (err) {
+    log.error('addPermissionRule failed:', err);
+    throw err;
+  }
 }
 
 export async function clearPermissionRules(scope: string): Promise<void> {
-  const db = getDb();
-  db.prepare('DELETE FROM permission_rules WHERE scope = ?').run(scope);
+  try {
+    const db = getDb();
+    db.prepare('DELETE FROM permission_rules WHERE scope = ?').run(scope);
+  } catch (err) {
+    log.error('clearPermissionRules failed:', err);
+    throw err;
+  }
 }
 
 /** Remove a specific permission rule by scope + tool + command_pattern. */
 export async function removePermissionRule(scope: string, tool: string, commandPattern: string): Promise<boolean> {
-  const db = getDb();
-  const result = db.prepare(
-    'DELETE FROM permission_rules WHERE scope = ? AND tool = ? AND command_pattern = ?'
-  ).run(scope, tool, commandPattern);
-  return result.changes > 0;
+  try {
+    const db = getDb();
+    const result = db.prepare(
+      'DELETE FROM permission_rules WHERE scope = ? AND tool = ? AND command_pattern = ?'
+    ).run(scope, tool, commandPattern);
+    return result.changes > 0;
+  } catch (err) {
+    log.error('removePermissionRule failed:', err);
+    throw err;
+  }
 }
 
 /** List all permission rules for a scope. */
 export async function listPermissionRulesForScope(scope: string): Promise<StoredPermissionRule[]> {
-  const db = getDb();
-  const rows = db.prepare(
-    'SELECT * FROM permission_rules WHERE scope = ? ORDER BY tool, command_pattern'
-  ).all(scope) as any[];
-  return rows.map(r => ({
-    id: r.id,
-    scope: r.scope,
-    tool: r.tool,
-    commandPattern: r.command_pattern,
-    action: r.action,
-    createdAt: r.created_at,
-  }));
+  try {
+    const db = getDb();
+    const rows = db.prepare(
+      'SELECT * FROM permission_rules WHERE scope = ? ORDER BY tool, command_pattern'
+    ).all(scope) as any[];
+    return rows.map(r => ({
+      id: r.id,
+      scope: r.scope,
+      tool: r.tool,
+      commandPattern: r.command_pattern,
+      action: r.action,
+      createdAt: r.created_at,
+    }));
+  } catch (err) {
+    log.error('listPermissionRulesForScope failed:', err);
+    throw err;
+  }
 }
 
 /**
@@ -416,58 +473,88 @@ function safeParseAllowPaths(raw: string): string[] {
 }
 
 export async function getWorkspaceOverride(botName: string): Promise<WorkspaceOverride | null> {
-  const db = getDb();
-  const row = db.prepare('SELECT * FROM workspace_overrides WHERE bot_name = ?').get(botName) as any;
-  if (!row) return null;
-  return {
-    botName: row.bot_name,
-    workingDirectory: row.working_directory,
-    allowPaths: safeParseAllowPaths(row.allow_paths),
-    createdAt: row.created_at,
-  };
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM workspace_overrides WHERE bot_name = ?').get(botName) as any;
+    if (!row) return null;
+    return {
+      botName: row.bot_name,
+      workingDirectory: row.working_directory,
+      allowPaths: safeParseAllowPaths(row.allow_paths),
+      createdAt: row.created_at,
+    };
+  } catch (err) {
+    log.error('getWorkspaceOverride failed:', err);
+    throw err;
+  }
 }
 
 export async function setWorkspaceOverride(botName: string, workingDirectory: string, allowPaths?: string[]): Promise<void> {
-  const db = getDb();
-  db.prepare(
-    `INSERT INTO workspace_overrides (bot_name, working_directory, allow_paths, created_at)
-     VALUES (?, ?, ?, datetime('now'))
-     ON CONFLICT(bot_name) DO UPDATE SET
-       working_directory = excluded.working_directory,
-       allow_paths = excluded.allow_paths`
-  ).run(botName, workingDirectory, JSON.stringify(allowPaths ?? []));
+  try {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO workspace_overrides (bot_name, working_directory, allow_paths, created_at)
+       VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(bot_name) DO UPDATE SET
+         working_directory = excluded.working_directory,
+         allow_paths = excluded.allow_paths`
+    ).run(botName, workingDirectory, JSON.stringify(allowPaths ?? []));
+  } catch (err) {
+    log.error('setWorkspaceOverride failed:', err);
+    throw err;
+  }
 }
 
 export async function removeWorkspaceOverride(botName: string): Promise<void> {
-  const db = getDb();
-  db.prepare('DELETE FROM workspace_overrides WHERE bot_name = ?').run(botName);
+  try {
+    const db = getDb();
+    db.prepare('DELETE FROM workspace_overrides WHERE bot_name = ?').run(botName);
+  } catch (err) {
+    log.error('removeWorkspaceOverride failed:', err);
+    throw err;
+  }
 }
 
 export async function listWorkspaceOverrides(): Promise<WorkspaceOverride[]> {
-  const db = getDb();
-  const rows = db.prepare('SELECT * FROM workspace_overrides').all() as any[];
-  return rows.map(row => ({
-    botName: row.bot_name,
-    workingDirectory: row.working_directory,
-    allowPaths: safeParseAllowPaths(row.allow_paths),
-    createdAt: row.created_at,
-  }));
+  try {
+    const db = getDb();
+    const rows = db.prepare('SELECT * FROM workspace_overrides').all() as any[];
+    return rows.map(row => ({
+      botName: row.bot_name,
+      workingDirectory: row.working_directory,
+      allowPaths: safeParseAllowPaths(row.allow_paths),
+      createdAt: row.created_at,
+    }));
+  } catch (err) {
+    log.error('listWorkspaceOverrides failed:', err);
+    throw err;
+  }
 }
 
 // --- Global Settings ---
 
 export async function getGlobalSetting(key: string): Promise<string | null> {
-  const db = getDb();
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-  return row?.value ?? null;
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  } catch (err) {
+    log.error('getGlobalSetting failed:', err);
+    throw err;
+  }
 }
 
 export async function setGlobalSetting(key: string, value: string): Promise<void> {
-  const db = getDb();
-  db.prepare(
-    `INSERT INTO settings (key, value) VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-  ).run(key, value);
+  try {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run(key, value);
+  } catch (err) {
+    log.error('setGlobalSetting failed:', err);
+    throw err;
+  }
 }
 
 // --- Dynamic Channels ---
@@ -489,47 +576,67 @@ export interface DynamicChannel {
 }
 
 export async function addDynamicChannel(channel: Omit<DynamicChannel, 'createdAt' | 'updatedAt'>): Promise<void> {
-  const db = getDb();
-  db.prepare(
-    `INSERT INTO dynamic_channels (channel_id, platform, name, bot, working_directory, agent, model, trigger_mode, threaded_replies, verbose, is_dm)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(channel_id) DO UPDATE SET
-       platform = excluded.platform, name = excluded.name, bot = excluded.bot,
-       working_directory = excluded.working_directory, agent = excluded.agent,
-       model = excluded.model, trigger_mode = excluded.trigger_mode,
-       threaded_replies = excluded.threaded_replies, verbose = excluded.verbose,
-       is_dm = excluded.is_dm, updated_at = datetime('now')`
-  ).run(
-    channel.channelId,
-    channel.platform,
-    channel.name ?? '',
-    channel.bot ?? null,
-    channel.workingDirectory,
-    channel.agent ?? null,
-    channel.model ?? null,
-    channel.triggerMode ?? null,
-    channel.threadedReplies != null ? (channel.threadedReplies ? 1 : 0) : null,
-    channel.verbose != null ? (channel.verbose ? 1 : 0) : null,
-    channel.isDM ? 1 : 0,
-  );
+  try {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO dynamic_channels (channel_id, platform, name, bot, working_directory, agent, model, trigger_mode, threaded_replies, verbose, is_dm)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(channel_id) DO UPDATE SET
+         platform = excluded.platform, name = excluded.name, bot = excluded.bot,
+         working_directory = excluded.working_directory, agent = excluded.agent,
+         model = excluded.model, trigger_mode = excluded.trigger_mode,
+         threaded_replies = excluded.threaded_replies, verbose = excluded.verbose,
+         is_dm = excluded.is_dm, updated_at = datetime('now')`
+    ).run(
+      channel.channelId,
+      channel.platform,
+      channel.name ?? '',
+      channel.bot ?? null,
+      channel.workingDirectory,
+      channel.agent ?? null,
+      channel.model ?? null,
+      channel.triggerMode ?? null,
+      channel.threadedReplies != null ? (channel.threadedReplies ? 1 : 0) : null,
+      channel.verbose != null ? (channel.verbose ? 1 : 0) : null,
+      channel.isDM ? 1 : 0,
+    );
+  } catch (err) {
+    log.error('addDynamicChannel failed:', err);
+    throw err;
+  }
 }
 
 export async function removeDynamicChannel(channelId: string): Promise<void> {
-  const db = getDb();
-  db.prepare('DELETE FROM dynamic_channels WHERE channel_id = ?').run(channelId);
+  try {
+    const db = getDb();
+    db.prepare('DELETE FROM dynamic_channels WHERE channel_id = ?').run(channelId);
+  } catch (err) {
+    log.error('removeDynamicChannel failed:', err);
+    throw err;
+  }
 }
 
 export async function getDynamicChannel(channelId: string): Promise<DynamicChannel | null> {
-  const db = getDb();
-  const row = db.prepare('SELECT * FROM dynamic_channels WHERE channel_id = ?').get(channelId) as any;
-  if (!row) return null;
-  return mapDynamicChannelRow(row);
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM dynamic_channels WHERE channel_id = ?').get(channelId) as any;
+    if (!row) return null;
+    return mapDynamicChannelRow(row);
+  } catch (err) {
+    log.error('getDynamicChannel failed:', err);
+    throw err;
+  }
 }
 
 export async function getDynamicChannels(): Promise<DynamicChannel[]> {
-  const db = getDb();
-  const rows = db.prepare('SELECT * FROM dynamic_channels ORDER BY created_at').all() as any[];
-  return rows.map(mapDynamicChannelRow);
+  try {
+    const db = getDb();
+    const rows = db.prepare('SELECT * FROM dynamic_channels ORDER BY created_at').all() as any[];
+    return rows.map(mapDynamicChannelRow);
+  } catch (err) {
+    log.error('getDynamicChannels failed:', err);
+    throw err;
+  }
 }
 
 function mapDynamicChannelRow(row: any): DynamicChannel {
@@ -566,43 +673,53 @@ export interface AgentCallRecord {
 }
 
 export async function recordAgentCall(record: AgentCallRecord): Promise<void> {
-  const db = getDb();
-  db.prepare(
-    `INSERT INTO agent_calls (caller_bot, target_bot, target_agent, message_summary, response_summary, duration_ms, success, error, chain_id, depth)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    record.callerBot,
-    record.targetBot,
-    record.targetAgent ?? null,
-    record.messageSummary ?? null,
-    record.responseSummary ?? null,
-    record.durationMs ?? null,
-    record.success ? 1 : 0,
-    record.error ?? null,
-    record.chainId ?? null,
-    record.depth ?? 0,
-  );
+  try {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO agent_calls (caller_bot, target_bot, target_agent, message_summary, response_summary, duration_ms, success, error, chain_id, depth)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      record.callerBot,
+      record.targetBot,
+      record.targetAgent ?? null,
+      record.messageSummary ?? null,
+      record.responseSummary ?? null,
+      record.durationMs ?? null,
+      record.success ? 1 : 0,
+      record.error ?? null,
+      record.chainId ?? null,
+      record.depth ?? 0,
+    );
+  } catch (err) {
+    log.error('recordAgentCall failed:', err);
+    throw err;
+  }
 }
 
 export async function getRecentAgentCalls(limit: number = 20): Promise<Array<AgentCallRecord & { id: number; createdAt: string }>> {
-  const db = getDb();
-  const rows = db.prepare(
-    'SELECT * FROM agent_calls ORDER BY created_at DESC LIMIT ?'
-  ).all(limit) as any[];
-  return rows.map(r => ({
-    id: r.id,
-    callerBot: r.caller_bot,
-    targetBot: r.target_bot,
-    targetAgent: r.target_agent ?? undefined,
-    messageSummary: r.message_summary ?? undefined,
-    responseSummary: r.response_summary ?? undefined,
-    durationMs: r.duration_ms ?? undefined,
-    success: !!r.success,
-    error: r.error ?? undefined,
-    chainId: r.chain_id ?? undefined,
-    depth: r.depth ?? 0,
-    createdAt: r.created_at,
-  }));
+  try {
+    const db = getDb();
+    const rows = db.prepare(
+      'SELECT * FROM agent_calls ORDER BY created_at DESC LIMIT ?'
+    ).all(limit) as any[];
+    return rows.map(r => ({
+      id: r.id,
+      callerBot: r.caller_bot,
+      targetBot: r.target_bot,
+      targetAgent: r.target_agent ?? undefined,
+      messageSummary: r.message_summary ?? undefined,
+      responseSummary: r.response_summary ?? undefined,
+      durationMs: r.duration_ms ?? undefined,
+      success: !!r.success,
+      error: r.error ?? undefined,
+      chainId: r.chain_id ?? undefined,
+      depth: r.depth ?? 0,
+      createdAt: r.created_at,
+    }));
+  } catch (err) {
+    log.error('getRecentAgentCalls failed:', err);
+    throw err;
+  }
 }
 
 // --- Scheduled Tasks ---
@@ -624,52 +741,87 @@ export interface ScheduledTask {
 }
 
 export async function insertScheduledTask(task: Omit<ScheduledTask, 'createdAt' | 'lastRun' | 'nextRun'> & { nextRun?: string }): Promise<void> {
-  const db = getDb();
-  db.prepare(`
-    INSERT INTO scheduled_tasks (id, channel_id, bot_name, prompt, cron_expr, run_at, timezone, created_by, description, enabled, next_run)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    task.id, task.channelId, task.botName, task.prompt,
-    task.cronExpr ?? null, task.runAt ?? null, task.timezone,
-    task.createdBy ?? null, task.description ?? null,
-    task.enabled ? 1 : 0, task.nextRun ?? null,
-  );
+  try {
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO scheduled_tasks (id, channel_id, bot_name, prompt, cron_expr, run_at, timezone, created_by, description, enabled, next_run)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      task.id, task.channelId, task.botName, task.prompt,
+      task.cronExpr ?? null, task.runAt ?? null, task.timezone,
+      task.createdBy ?? null, task.description ?? null,
+      task.enabled ? 1 : 0, task.nextRun ?? null,
+    );
+  } catch (err) {
+    log.error('insertScheduledTask failed:', err);
+    throw err;
+  }
 }
 
 export async function getScheduledTask(id: string): Promise<ScheduledTask | null> {
-  const db = getDb();
-  const row = db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id) as any;
-  return row ? mapTaskRow(row) : null;
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id) as any;
+    return row ? mapTaskRow(row) : null;
+  } catch (err) {
+    log.error('getScheduledTask failed:', err);
+    throw err;
+  }
 }
 
 export async function getScheduledTasksForChannel(channelId: string): Promise<ScheduledTask[]> {
-  const db = getDb();
-  // Show enabled tasks + paused recurring tasks (exclude disabled one-offs — they're finished)
-  const rows = db.prepare(
-    'SELECT * FROM scheduled_tasks WHERE channel_id = ? AND (enabled = 1 OR cron_expr IS NOT NULL) ORDER BY created_at DESC'
-  ).all(channelId) as any[];
-  return rows.map(mapTaskRow);
+  try {
+    const db = getDb();
+    // Show enabled tasks + paused recurring tasks (exclude disabled one-offs — they're finished)
+    const rows = db.prepare(
+      'SELECT * FROM scheduled_tasks WHERE channel_id = ? AND (enabled = 1 OR cron_expr IS NOT NULL) ORDER BY created_at DESC'
+    ).all(channelId) as any[];
+    return rows.map(mapTaskRow);
+  } catch (err) {
+    log.error('getScheduledTasksForChannel failed:', err);
+    throw err;
+  }
 }
 
 export async function getEnabledScheduledTasks(): Promise<ScheduledTask[]> {
-  const db = getDb();
-  const rows = db.prepare('SELECT * FROM scheduled_tasks WHERE enabled = 1').all() as any[];
-  return rows.map(mapTaskRow);
+  try {
+    const db = getDb();
+    const rows = db.prepare('SELECT * FROM scheduled_tasks WHERE enabled = 1').all() as any[];
+    return rows.map(mapTaskRow);
+  } catch (err) {
+    log.error('getEnabledScheduledTasks failed:', err);
+    throw err;
+  }
 }
 
 export async function updateScheduledTaskEnabled(id: string, enabled: boolean): Promise<void> {
-  const db = getDb();
-  db.prepare('UPDATE scheduled_tasks SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id);
+  try {
+    const db = getDb();
+    db.prepare('UPDATE scheduled_tasks SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id);
+  } catch (err) {
+    log.error('updateScheduledTaskEnabled failed:', err);
+    throw err;
+  }
 }
 
 export async function updateScheduledTaskLastRun(id: string, lastRun: string, nextRun?: string): Promise<void> {
-  const db = getDb();
-  db.prepare('UPDATE scheduled_tasks SET last_run = ?, next_run = ? WHERE id = ?').run(lastRun, nextRun ?? null, id);
+  try {
+    const db = getDb();
+    db.prepare('UPDATE scheduled_tasks SET last_run = ?, next_run = ? WHERE id = ?').run(lastRun, nextRun ?? null, id);
+  } catch (err) {
+    log.error('updateScheduledTaskLastRun failed:', err);
+    throw err;
+  }
 }
 
 export async function deleteScheduledTask(id: string): Promise<void> {
-  const db = getDb();
-  db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
+  try {
+    const db = getDb();
+    db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
+  } catch (err) {
+    log.error('deleteScheduledTask failed:', err);
+    throw err;
+  }
 }
 
 function mapTaskRow(r: any): ScheduledTask {
@@ -705,29 +857,39 @@ export interface TaskHistoryEntry {
 }
 
 export async function insertTaskHistory(entry: Omit<TaskHistoryEntry, 'id' | 'firedAt'>): Promise<void> {
-  const db = getDb();
-  db.prepare(`
-    INSERT INTO scheduled_task_history (task_id, channel_id, prompt, description, timezone, status, fired_at, error)
-    VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
-  `).run(entry.taskId, entry.channelId, entry.prompt, entry.description ?? null, entry.timezone, entry.status, entry.error ?? null);
+  try {
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO scheduled_task_history (task_id, channel_id, prompt, description, timezone, status, fired_at, error)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
+    `).run(entry.taskId, entry.channelId, entry.prompt, entry.description ?? null, entry.timezone, entry.status, entry.error ?? null);
+  } catch (err) {
+    log.error('insertTaskHistory failed:', err);
+    throw err;
+  }
 }
 
 export async function getTaskHistory(channelId: string, limit = 20): Promise<TaskHistoryEntry[]> {
-  const db = getDb();
-  const rows = db.prepare(
-    'SELECT * FROM scheduled_task_history WHERE channel_id = ? ORDER BY fired_at DESC LIMIT ?'
-  ).all(channelId, limit) as any[];
-  return rows.map(r => ({
-    id: r.id,
-    taskId: r.task_id,
-    channelId: r.channel_id,
-    prompt: r.prompt,
-    description: r.description ?? undefined,
-    timezone: r.timezone ?? 'UTC',
-    status: r.status,
-    firedAt: r.fired_at,
-    error: r.error ?? undefined,
-  }));
+  try {
+    const db = getDb();
+    const rows = db.prepare(
+      'SELECT * FROM scheduled_task_history WHERE channel_id = ? ORDER BY fired_at DESC LIMIT ?'
+    ).all(channelId, limit) as any[];
+    return rows.map(r => ({
+      id: r.id,
+      taskId: r.task_id,
+      channelId: r.channel_id,
+      prompt: r.prompt,
+      description: r.description ?? undefined,
+      timezone: r.timezone ?? 'UTC',
+      status: r.status,
+      firedAt: r.fired_at,
+      error: r.error ?? undefined,
+    }));
+  } catch (err) {
+    log.error('getTaskHistory failed:', err);
+    throw err;
+  }
 }
 
 // --- Cleanup ---
