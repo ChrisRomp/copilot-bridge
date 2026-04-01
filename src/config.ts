@@ -258,6 +258,7 @@ function validateAndNormalize(raw: any): AppConfig {
     interAgent: raw.interAgent,
     providers: raw.providers,
     telemetry: raw.telemetry,
+    database: raw.database,
   };
 }
 

@@ -411,14 +411,21 @@ async function main(): Promise<void> {
   if (config.database?.module) {
     try {
       log.info(`Loading custom state store from ${config.database.module}...`);
-      const mod = await import(config.database.module);
-      const StoreClass = mod.default ?? mod;
+      // Resolve relative paths against CWD, not the dist/ directory
+      const modulePath = config.database.module.startsWith('.')
+        ? path.resolve(process.cwd(), config.database.module)
+        : config.database.module;
+      const mod = await import(modulePath);
+      const StoreClass = mod.default ?? mod.StateStore ?? mod;
       if (typeof StoreClass !== 'function') {
         throw new Error(`Module does not export a constructor (got ${typeof StoreClass})`);
       }
       const customStore: StateStore = new StoreClass(config.database.options);
-      if (typeof customStore.initialize !== 'function') {
-        throw new Error('Custom store does not implement StateStore.initialize()');
+      // Validate required StateStore methods beyond just initialize()
+      const required = ['initialize', 'close', 'ping', 'getChannelSession', 'setChannelPrefs', 'checkPermission', 'getChannelPrefs'];
+      const missing = required.filter(m => typeof (customStore as any)[m] !== 'function');
+      if (missing.length > 0) {
+        throw new Error(`Custom store missing required methods: ${missing.join(', ')}`);
       }
       await initStore(customStore);
       log.info(`Custom state store loaded from ${config.database.module}`);
