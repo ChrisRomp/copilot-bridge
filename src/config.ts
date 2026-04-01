@@ -258,10 +258,10 @@ function validateAndNormalize(raw: any): AppConfig {
     interAgent: raw.interAgent,
     providers: raw.providers,
     telemetry: raw.telemetry,
-    database: raw.database && typeof raw.database === 'object' ? {
-      module: typeof raw.database.module === 'string' ? raw.database.module : undefined,
+    database: raw.database && typeof raw.database === 'object' && typeof raw.database.module === 'string' ? {
+      module: raw.database.module,
       options: raw.database.options && typeof raw.database.options === 'object' ? raw.database.options : undefined,
-    } as DatabaseConfig : undefined,
+    } : (raw.database ? (() => { throw new Error('database.module must be a string when database config is present'); })() : undefined),
   };
 }
 

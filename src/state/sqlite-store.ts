@@ -341,14 +341,19 @@ export class SqliteStateStore implements StateStore {
   }
 
   async withTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    // For SQLite, all store methods are synchronous under the hood (wrapped
+    // in async/Promise). We use BEGIN/COMMIT/ROLLBACK manually but guard
+    // against interleaving by executing fn() without yielding between
+    // BEGIN and COMMIT. Since better-sqlite3 operations are synchronous,
+    // the await only resolves an already-settled promise.
     const db = this.getDb();
-    db.exec('BEGIN');
+    db.exec('BEGIN IMMEDIATE');
     try {
       const result = await fn();
       db.exec('COMMIT');
       return result;
     } catch (err) {
-      db.exec('ROLLBACK');
+      try { db.exec('ROLLBACK'); } catch { /* already rolled back */ }
       throw err;
     }
   }

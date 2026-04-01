@@ -34,6 +34,7 @@ function createMockStore(): StateStore {
     initialize: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     close: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     ping: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
+    withTransaction: vi.fn().mockImplementation(async (fn: () => Promise<unknown>) => fn()),
     getChannelSession: vi.fn().mockResolvedValue(null),
     setChannelSession: vi.fn().mockResolvedValue(undefined),
     clearChannelSession: vi.fn().mockResolvedValue(undefined),
