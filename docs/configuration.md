@@ -437,3 +437,21 @@ Hooks are loaded from multiple locations (lowest to highest priority). Commands 
 ### Viewing Loaded Hooks
 
 Use `/tools` in chat to see which hooks are currently loaded and how many commands are registered per hook type.
+
+## Database
+
+By default, the bridge uses SQLite at `~/.copilot-bridge/state.db`. The state layer is pluggable — you can swap in a custom backend (Postgres, Redis, etc.) by pointing `database.module` at a module that exports a class implementing the `StateStore` interface.
+
+```json
+{
+  "database": {
+    "module": "./path/to/custom-store.js",
+    "options": { "connectionString": "postgresql://..." }
+  }
+}
+```
+
+- **`module`** — Path to a JS module. Must export a class (default export or named) that implements `StateStore` from `src/state/types.ts`.
+- **`options`** — Arbitrary object passed to the custom store's constructor.
+
+When `database` is omitted (the default), the built-in `SqliteStateStore` is used with no additional configuration.

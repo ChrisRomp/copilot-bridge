@@ -299,18 +299,31 @@ export class SqliteStateStore implements StateStore {
     migrateChannelPrefsNullable(this.db);
 
     // Schema migrations for existing DBs
-    try { this.db.exec(`ALTER TABLE channel_prefs ADD COLUMN reasoning_effort TEXT`); } catch { /* Column already exists */ }
-    try { this.db.exec(`ALTER TABLE scheduled_task_history ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'`); } catch { /* Column already exists */ }
-    try { this.db.exec(`ALTER TABLE channel_prefs ADD COLUMN session_mode TEXT`); } catch { /* Column already exists */ }
-    try { this.db.exec(`ALTER TABLE channel_prefs ADD COLUMN disabled_skills TEXT`); } catch { /* Column already exists */ }
-    try { this.db.exec(`ALTER TABLE channel_prefs ADD COLUMN provider TEXT`); } catch { /* Column already exists */ }
+    const tryMigration = (sql: string, label: string) => {
+      try {
+        this.db!.exec(sql);
+        log.debug(`Migration applied: ${label}`);
+      } catch (err: any) {
+        if (err?.message?.includes('duplicate column')) {
+          log.debug(`Migration skipped (already applied): ${label}`);
+        } else {
+          log.warn(`Migration failed for "${label}":`, err);
+        }
+      }
+    };
+    tryMigration(`ALTER TABLE channel_prefs ADD COLUMN reasoning_effort TEXT`, 'channel_prefs.reasoning_effort');
+    tryMigration(`ALTER TABLE scheduled_task_history ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'`, 'scheduled_task_history.timezone');
+    tryMigration(`ALTER TABLE channel_prefs ADD COLUMN session_mode TEXT`, 'channel_prefs.session_mode');
+    tryMigration(`ALTER TABLE channel_prefs ADD COLUMN disabled_skills TEXT`, 'channel_prefs.disabled_skills');
+    tryMigration(`ALTER TABLE channel_prefs ADD COLUMN provider TEXT`, 'channel_prefs.provider');
   }
 
   async close(): Promise<void> {
     try {
       this.db?.close();
+      log.info('SQLite database closed');
     } catch (err) {
-      log.warn('Failed to close database cleanly:', err);
+      log.warn('Failed to close SQLite database cleanly:', err);
     } finally {
       this.db = null;
     }
@@ -321,7 +334,8 @@ export class SqliteStateStore implements StateStore {
       const db = this.getDb();
       db.prepare('SELECT 1').get();
       return true;
-    } catch {
+    } catch (err) {
+      log.warn('ping() failed:', err);
       return false;
     }
   }

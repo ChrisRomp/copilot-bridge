@@ -37,10 +37,13 @@ function store(): StateStore {
     // (tests and code that call store functions before explicit initStore)
     log.warn('Store accessed before initStore() — auto-initializing with defaults');
     const sqlite = new SqliteStateStore();
-    // Synchronous field assignment; initialize() will be called on first real use
     _store = sqlite;
-    // Fire-and-forget init — better-sqlite3 is synchronous so this resolves immediately
-    void sqlite.initialize();
+    // better-sqlite3 is synchronous so this resolves immediately, but catch
+    // any failure so it's never silently swallowed
+    sqlite.initialize().catch((err) => {
+      log.error('Auto-initialization of default SQLite store failed:', err);
+      _store = null;
+    });
   }
   return _store;
 }
@@ -58,7 +61,12 @@ function store(): StateStore {
 export async function initStore(customStore?: StateStore, dbPath?: string): Promise<void> {
   if (_store) {
     log.warn('initStore called when store already initialized — closing previous instance');
-    await closeDb();
+    try {
+      await _store.close();
+    } catch (err) {
+      log.warn('Failed to close previous store during re-init:', err);
+    }
+    _store = null;
   }
   _store = customStore ?? new SqliteStateStore(dbPath);
   await _store.initialize();
@@ -191,9 +199,13 @@ export async function getTaskHistory(channelId: string, limit?: number) {
 
 // -- Lifecycle --------------------------------------------------------------
 export async function closeDb(): Promise<void> {
-  if (!_store) return;
+  if (!_store) {
+    log.debug('closeDb called but store is already null — no-op');
+    return;
+  }
   try {
     await _store.close();
+    log.info('State store closed');
   } catch (err) {
     log.warn('Failed to close database cleanly:', err);
   } finally {

@@ -410,9 +410,16 @@ async function main(): Promise<void> {
   // Initialize state store (must happen before any DB access)
   if (config.database?.module) {
     try {
+      log.info(`Loading custom state store from ${config.database.module}...`);
       const mod = await import(config.database.module);
       const StoreClass = mod.default ?? mod;
+      if (typeof StoreClass !== 'function') {
+        throw new Error(`Module does not export a constructor (got ${typeof StoreClass})`);
+      }
       const customStore: StateStore = new StoreClass(config.database.options);
+      if (typeof customStore.initialize !== 'function') {
+        throw new Error('Custom store does not implement StateStore.initialize()');
+      }
       await initStore(customStore);
       log.info(`Custom state store loaded from ${config.database.module}`);
     } catch (err) {
@@ -2518,6 +2525,6 @@ async function postRestartNotices(): Promise<void> {
 // Start the bridge
 main().catch(async (err) => {
   log.error('Fatal error:', err);
-  try { await closeDb(); } catch { /* best-effort */ }
+  try { await closeDb(); } catch (err) { log.warn('Failed to close database during fatal error handler:', err); }
   process.exit(1);
 });
