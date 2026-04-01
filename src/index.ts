@@ -6,7 +6,8 @@ import { formatEvent, formatPermissionRequest, formatUserInputRequest } from './
 import { WorkspaceWatcher, initWorkspace, getWorkspacePath } from './core/workspace-manager.js';
 import { MattermostAdapter } from './channels/mattermost/adapter.js';
 import { StreamingHandler } from './channels/mattermost/streaming.js';
-import { getChannelPrefs, setChannelPrefs, getAllChannelSessions, closeDb, listPermissionRulesForScope, removePermissionRule, clearPermissionRules, getTaskHistory } from './state/store.js';
+import { initStore, getChannelPrefs, setChannelPrefs, getAllChannelSessions, closeDb, listPermissionRulesForScope, removePermissionRule, clearPermissionRules, getTaskHistory } from './state/store.js';
+import type { StateStore } from './state/types.js';
 import { extractThreadRequest, resolveThreadRoot } from './core/thread-utils.js';
 import { initScheduler, stopAll as stopScheduler, listJobs, removeJob, pauseJob, resumeJob, formatInTimezone, describeCron } from './core/scheduler.js';
 import { markBusy, markIdle, markIdleImmediate, isBusy, waitForChannelIdle, cancelIdleDebounce } from './core/channel-idle.js';
@@ -17,7 +18,7 @@ import { createLogger, setLogLevel, initLogFile } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig } from './types.js';
+import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig, DatabaseConfig } from './types.js';
 
 const log = createLogger('bridge');
 
@@ -405,6 +406,22 @@ async function main(): Promise<void> {
     }
   });
   configWatcher.start();
+
+  // Initialize state store (must happen before any DB access)
+  if (config.database?.module) {
+    try {
+      const mod = await import(config.database.module);
+      const StoreClass = mod.default ?? mod;
+      const customStore: StateStore = new StoreClass(config.database.options);
+      await initStore(customStore);
+      log.info(`Custom state store loaded from ${config.database.module}`);
+    } catch (err) {
+      log.error(`Failed to load custom state store from ${config.database.module}:`, err);
+      process.exit(1);
+    }
+  } else {
+    await initStore();
+  }
 
   // Initialize Copilot SDK bridge
   const { telemetry: sdkTelemetry, env: telemetryEnv } = resolveTelemetryConfig(config);

@@ -120,5 +120,10 @@
     "maxSize": 10485760,
     "maxFiles": 3,
     "compress": true
+  },
+  "_comment_database": "Optional: pluggable state store (default: built-in SQLite at ~/.copilot-bridge/state.db)",
+  "_example_database": {
+    "module": "./path/to/custom-store.js",
+    "options": { "connectionString": "postgresql://..." }
   }
 }
