@@ -116,7 +116,7 @@ export function extendContext(context: InterAgentContext, nextBot: string): Inte
  * Get all working directories for channels served by a given bot.
  * Queries both static config and dynamic channels.
  */
-export function getBotWorkspaceMap(botName: string): BotWorkspaceEntry[] {
+export async function getBotWorkspaceMap(botName: string): Promise<BotWorkspaceEntry[]> {
   const config = getConfig();
   const entries: BotWorkspaceEntry[] = [];
   const seen = new Set<string>(); // dedupe by channelId
@@ -135,7 +135,7 @@ export function getBotWorkspaceMap(botName: string): BotWorkspaceEntry[] {
   }
 
   // Dynamic channels from SQLite
-  for (const dyn of getDynamicChannels()) {
+  for (const dyn of await getDynamicChannels()) {
     const channelBot = dyn.bot ?? getDefaultBotForPlatform(dyn.platform);
     if (channelBot === botName && !seen.has(dyn.channelId)) {
       seen.add(dyn.channelId);

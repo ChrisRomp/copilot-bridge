@@ -47,22 +47,22 @@ describe('extractPlanSummary', () => {
 // --- /implement command ---
 
 describe('/implement command', () => {
-  it('returns implement action with no args', () => {
-    const result = handleCommand('ch1', '/implement');
+  it('returns implement action with no args', async () => {
+    const result = await handleCommand('ch1', '/implement');
     expect(result.handled).toBe(true);
     expect(result.action).toBe('implement');
     expect(result.payload).toBeUndefined();
   });
 
-  it('returns implement action with yolo arg', () => {
-    const result = handleCommand('ch1', '/implement yolo');
+  it('returns implement action with yolo arg', async () => {
+    const result = await handleCommand('ch1', '/implement yolo');
     expect(result.handled).toBe(true);
     expect(result.action).toBe('implement');
     expect(result.payload).toBe('yolo');
   });
 
-  it('returns implement action with interactive arg', () => {
-    const result = handleCommand('ch1', '/implement interactive');
+  it('returns implement action with interactive arg', async () => {
+    const result = await handleCommand('ch1', '/implement interactive');
     expect(result.handled).toBe(true);
     expect(result.action).toBe('implement');
     expect(result.payload).toBe('interactive');

@@ -189,7 +189,7 @@ export async function onboardProject(
 
   // initWorkspace handles AGENTS.md and MEMORY.md creation (skips if exists)
   try {
-    initWorkspace(opts.botName ?? 'copilot', workspacePath, false);
+    await initWorkspace(opts.botName ?? 'copilot', workspacePath, false);
     steps.push(`Workspace initialized at ${workspacePath}`);
   } catch (err: any) {
     steps.push(`⚠️ Workspace init warning: ${err?.message}`);
@@ -200,7 +200,7 @@ export async function onboardProject(
   const triggerMode = opts.triggerMode ?? config.defaults.triggerMode;
   const threadedReplies = opts.threadedReplies ?? config.defaults.threadedReplies;
 
-  addDynamicChannel({
+  await addDynamicChannel({
     channelId,
     platform: opts.platform,
     name: channelName,

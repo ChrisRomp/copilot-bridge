@@ -432,7 +432,7 @@ export class SessionManager {
   private yoloPreviousState = new Map<string, string>();
   // Handler for send_file tool (set by index.ts, calls adapter.sendFile)
   private sendFileHandler: ((channelId: string, filePath: string, message?: string) => Promise<string>) | null = null;
-  private getAdapterForChannel: ((channelId: string) => ChannelAdapter | null) | null = null;
+  private getAdapterForChannel: ((channelId: string) => ChannelAdapter | null | Promise<ChannelAdapter | null>) | null = null;
 
   constructor(bridge: CopilotBridge) {
     this.bridge = bridge;
@@ -523,7 +523,7 @@ export class SessionManager {
   }
 
   /** Register adapter resolver for onboarding tools. */
-  onGetAdapter(resolver: (channelId: string) => ChannelAdapter | null): void {
+  onGetAdapter(resolver: (channelId: string) => ChannelAdapter | null | Promise<ChannelAdapter | null>): void {
     this.getAdapterForChannel = resolver;
   }
 
@@ -537,8 +537,8 @@ export class SessionManager {
   }
 
   /** Get annotated MCP server info for a channel, showing which layer each server came from. */
-  getMcpServerInfo(channelId: string): McpServerInfo[] {
-    const workingDirectory = this.resolveWorkingDirectory(channelId);
+  async getMcpServerInfo(channelId: string): Promise<McpServerInfo[]> {
+    const workingDirectory = await this.resolveWorkingDirectory(channelId);
     const { servers: workspaceServers } = loadWorkspaceMcpServers(workingDirectory);
     const globalNames = new Set(Object.keys(this.mcpServers));
     const sessionServers = this.sessionMcpServers.get(channelId);
@@ -565,11 +565,11 @@ export class SessionManager {
   }
 
   /** Get skill info for a channel — discovers skills and reads their descriptions from SKILL.md frontmatter. */
-  getSkillInfo(channelId: string): { name: string; description: string; source: string; pending?: boolean; disabled?: boolean }[] {
-    const workingDirectory = this.resolveWorkingDirectory(channelId);
+  async getSkillInfo(channelId: string): Promise<{ name: string; description: string; source: string; pending?: boolean; disabled?: boolean }[]> {
+    const workingDirectory = await this.resolveWorkingDirectory(channelId);
     const dirs = discoverSkillDirectories(workingDirectory);
     const sessionDirs = this.sessionSkillDirs.get(channelId);
-    const prefs = getChannelPrefs(channelId);
+    const prefs = await getChannelPrefs(channelId);
     const disabledSet = new Set(prefs?.disabledSkills ?? []);
     const skills: { name: string; description: string; source: string; pending?: boolean; disabled?: boolean }[] = [];
     const home = process.env.HOME;
@@ -604,8 +604,8 @@ export class SessionManager {
   }
 
   /** Get info about configured hooks for a channel's workspace. */
-  getHooksInfo(channelId: string): HookInfo[] {
-    const workingDirectory = this.resolveWorkingDirectory(channelId);
+  async getHooksInfo(channelId: string): Promise<HookInfo[]> {
+    const workingDirectory = await this.resolveWorkingDirectory(channelId);
     const allowWorkspaceHooks = getConfig().defaults.allowWorkspaceHooks ?? false;
     return getHooksInfo(workingDirectory, { allowWorkspaceHooks });
   }
@@ -632,14 +632,14 @@ export class SessionManager {
     }
 
     // Check SQLite for persisted session
-    const storedSessionId = getChannelSession(channelId);
+    const storedSessionId = await getChannelSession(channelId);
     if (storedSessionId) {
       try {
         await this.attachSession(channelId, storedSessionId);
         return { sessionId: storedSessionId, isNew: false };
       } catch (err) {
       log.warn(`Failed to resume session ${storedSessionId} for channel ${channelId}, creating new:`, err);
-        clearChannelSession(channelId);
+        try { await clearChannelSession(channelId); } catch (e) { log.warn('Failed to clear channel session during recovery:', e); }
       }
     }
 
@@ -666,17 +666,17 @@ export class SessionManager {
       this.sessionMcpServers.delete(channelId);
       this.sessionSkillDirs.delete(channelId);
       this.pendingPlanExit.delete(channelId);
-      this.revertYoloIfNeeded(channelId);
+      await this.revertYoloIfNeeded(channelId);
       const debounceTimer = this.planChangedDebounce.get(channelId);
       if (debounceTimer) { clearTimeout(debounceTimer); this.planChangedDebounce.delete(channelId); }
     }
-    clearChannelSession(channelId);
+    await clearChannelSession(channelId);
     return this.createNewSession(channelId);
   }
 
   /** Reload the current session — detach and re-attach to pick up AGENTS.md / config changes. */
   async reloadSession(channelId: string): Promise<string> {
-    const existingId = this.channelSessions.get(channelId) ?? getChannelSession(channelId) ?? undefined;
+    const existingId = this.channelSessions.get(channelId) ?? await getChannelSession(channelId) ?? undefined;
     if (!existingId) {
       // No session to reload — just create one
       return this.createNewSession(channelId);
@@ -698,7 +698,7 @@ export class SessionManager {
     this.sessionMcpServers.delete(channelId);
     this.sessionSkillDirs.delete(channelId);
     this.pendingPlanExit.delete(channelId);
-    this.revertYoloIfNeeded(channelId);
+    await this.revertYoloIfNeeded(channelId);
     { const dt = this.planChangedDebounce.get(channelId); if (dt) { clearTimeout(dt); this.planChangedDebounce.delete(channelId); } }
     try {
       await this.attachSession(channelId, existingId);
@@ -716,7 +716,7 @@ export class SessionManager {
       this.sessionSkillDirs.delete(channelId);
       this.pendingPlanExit.delete(channelId);
       // yoloPreviousState already reverted above
-      clearChannelSession(channelId);
+      await clearChannelSession(channelId);
       return this.createNewSession(channelId);
     }
   }
@@ -742,7 +742,7 @@ export class SessionManager {
       this.sessionMcpServers.delete(channelId);
       this.sessionSkillDirs.delete(channelId);
       this.pendingPlanExit.delete(channelId);
-      this.revertYoloIfNeeded(channelId);
+      await this.revertYoloIfNeeded(channelId);
       { const dt = this.planChangedDebounce.get(channelId); if (dt) { clearTimeout(dt); this.planChangedDebounce.delete(channelId); } }
     }
 
@@ -760,15 +760,15 @@ export class SessionManager {
       this.sessionMcpServers.delete(otherChannel);
       this.sessionSkillDirs.delete(otherChannel);
       this.pendingPlanExit.delete(otherChannel);
-      this.revertYoloIfNeeded(otherChannel);
+      await this.revertYoloIfNeeded(otherChannel);
       { const dt = this.planChangedDebounce.get(otherChannel); if (dt) { clearTimeout(dt); this.planChangedDebounce.delete(otherChannel); } }
-      clearChannelSession(otherChannel);
+      await clearChannelSession(otherChannel);
     }
 
     // Attach to the target session — fail hard if it doesn't exist
     // (user explicitly asked for this session, don't silently replace it)
     await this.attachSession(channelId, targetSessionId);
-    setChannelSession(channelId, targetSessionId);
+    await setChannelSession(channelId, targetSessionId);
     log.info(`Resumed session ${targetSessionId} for channel ${channelId}`);
     return targetSessionId;
   }
@@ -797,8 +797,8 @@ export class SessionManager {
       // a new session so the fallback model is used for both creation and send
       if (isModelError(err)) {
         log.info(`Model error detected — switching to fallback model for channel ${channelId}...`);
-        const prefs = this.getEffectivePrefs(channelId);
-        const configChannel = getChannelConfig(channelId);
+        const prefs = await this.getEffectivePrefs(channelId);
+        const configChannel = await getChannelConfig(channelId);
         const configFallbacks = configChannel.fallbackModels ?? getConfig().defaults.fallbackModels;
 
         let availableModels: string[] = [];
@@ -815,7 +815,7 @@ export class SessionManager {
         for (const fallbackModel of chain) {
           try {
             log.info(`Trying send with fallback model "${fallbackModel}"...`);
-            setChannelPrefs(channelId, { model: fallbackModel });
+            await setChannelPrefs(channelId, { model: fallbackModel });
             const newSessionId = await this.newSession(channelId);
             const newSession = this.bridge.getSession(newSessionId);
             if (!newSession) continue;
@@ -836,7 +836,7 @@ export class SessionManager {
         }
 
         // If no fallback worked, restore original model pref and throw
-        setChannelPrefs(channelId, { model: prefs.model });
+        try { await setChannelPrefs(channelId, { model: prefs.model }); } catch (e) { log.warn('Failed to restore model pref after fallback failure:', e); }
         throw lastError;
       }
 
@@ -926,7 +926,7 @@ export class SessionManager {
           // Clear stale session so ensureSession() creates fresh on next call
           this.channelSessions.delete(channelId);
           this.sessionChannels.delete(sessionId);
-          clearChannelSession(channelId);
+          try { await clearChannelSession(channelId); } catch (e) { log.warn('Failed to clear channel session during retry recovery:', e); }
           throw err;
         }
         // Last resort: new session
@@ -946,7 +946,7 @@ export class SessionManager {
    * session is stale (backend no longer recognizes it).
    */
   async reloadMcp(channelId: string): Promise<void> {
-    const sessionId = this.channelSessions.get(channelId) ?? getChannelSession(channelId);
+    const sessionId = this.channelSessions.get(channelId) ?? await getChannelSession(channelId);
     const session = sessionId ? this.bridge.getSession(sessionId) : undefined;
     if (!session) {
       log.info(`No active session for ${channelId.slice(0, 8)}... — falling back to full reload`);
@@ -974,7 +974,7 @@ export class SessionManager {
    * session is stale.
    */
   async reloadSkills(channelId: string): Promise<void> {
-    const sessionId = this.channelSessions.get(channelId) ?? getChannelSession(channelId);
+    const sessionId = this.channelSessions.get(channelId) ?? await getChannelSession(channelId);
     const session = sessionId ? this.bridge.getSession(sessionId) : undefined;
     if (!session) {
       log.info(`No active session for ${channelId.slice(0, 8)}... — falling back to full reload`);
@@ -999,7 +999,7 @@ export class SessionManager {
    * Silently no-ops if no active session (pref is already persisted).
    */
   async toggleSkillRpc(channelId: string, skillName: string, action: 'enable' | 'disable'): Promise<void> {
-    const sessionId = this.channelSessions.get(channelId) ?? getChannelSession(channelId);
+    const sessionId = this.channelSessions.get(channelId) ?? await getChannelSession(channelId);
     const session = sessionId ? this.bridge.getSession(sessionId) : undefined;
     if (!session) return; // Pref already persisted; will apply on next session create
     if (action === 'enable') {
@@ -1012,7 +1012,7 @@ export class SessionManager {
 
   /** Switch the model for a channel's session. */
   async switchModel(channelId: string, model: string, provider?: string | null): Promise<void> {
-    const currentPrefs = this.getEffectivePrefs(channelId);
+    const currentPrefs = await this.getEffectivePrefs(channelId);
     const currentProvider = currentPrefs.provider ?? null;
     const newProvider = provider ?? null;
     const providerChanged = currentProvider !== newProvider;
@@ -1023,41 +1023,42 @@ export class SessionManager {
       // Set prefs before newSession so createNewSession picks up the new provider,
       // but restore on failure so the channel isn't left in a broken state.
       const prevModel = currentPrefs.model;
-      setChannelPrefs(channelId, { model, provider: newProvider });
+      await setChannelPrefs(channelId, { model, provider: newProvider });
       try {
         await this.newSession(channelId);
       } catch (err) {
         log.warn(`Provider switch failed, reverting prefs:`, err);
-        setChannelPrefs(channelId, { model: prevModel, provider: currentProvider });
+        try { await setChannelPrefs(channelId, { model: prevModel, provider: currentProvider }); } catch (e) { log.warn('Failed to revert prefs after provider switch failure:', e); }
         throw err;
       }
     } else if (newProvider && this.wireApiChanged(newProvider, currentPrefs.model ?? '', model)) {
       // Same provider but wireApi differs between models — need fresh session
       log.info(`wireApi change for provider ${newProvider}, model ${currentPrefs.model} → ${model} — creating new session`);
       const prevModel = currentPrefs.model;
-      setChannelPrefs(channelId, { model, provider: newProvider });
+      await setChannelPrefs(channelId, { model, provider: newProvider });
       try {
         await this.newSession(channelId);
       } catch (err) {
         log.warn(`wireApi switch failed, reverting prefs:`, err);
-        setChannelPrefs(channelId, { model: prevModel, provider: currentProvider });
+        try { await setChannelPrefs(channelId, { model: prevModel, provider: currentProvider }); } catch (e) { log.warn('Failed to revert prefs after wireApi switch failure:', e); }
         throw err;
       }
     } else {
       // Same provider — use RPC model switch (with session retry)
       await this.withSessionRetry(channelId, (sid) => this.bridge.switchSessionModel(sid, model));
-      setChannelPrefs(channelId, { model, provider: newProvider });
+      try { await setChannelPrefs(channelId, { model, provider: newProvider }); }
+      catch (e) { log.warn('Model switched but failed to persist preference:', e); }
     }
 
     // Clear stale context window tokens so /context falls back to tokenLimit during transition
     this.contextWindowTokens.delete(channelId);
 
     // Update cached context window tokens for the new model (best-effort)
-    this.bridge.listModels(getConfig().providers).then(models => {
+    this.bridge.listModels(getConfig().providers).then(async (models) => {
       // Guard against rapid switches: only cache if the channel is still on this model
-      const prefs = this.getEffectivePrefs(channelId);
+      const prefs = await this.getEffectivePrefs(channelId);
       if (prefs.model === model) {
-        this.cacheContextWindowTokens(channelId, model, models);
+        await this.cacheContextWindowTokens(channelId, model, models);
       }
     }).catch(() => { /* best-effort */ });
   }
@@ -1084,7 +1085,8 @@ export class SessionManager {
         await this.bridge.deselectAgent(sid);
       }
     });
-    setChannelPrefs(channelId, { agent });
+    try { await setChannelPrefs(channelId, { agent }); }
+    catch (e) { log.warn('Agent switched but failed to persist preference:', e); }
   }
 
   /**
@@ -1092,18 +1094,19 @@ export class SessionManager {
    * Uses the current model so only the reasoning effort changes — no full session reload needed.
    */
   async setReasoningEffort(channelId: string, effort: string): Promise<void> {
-    const prefs = this.getEffectivePrefs(channelId);
+    const prefs = await this.getEffectivePrefs(channelId);
     const model = prefs.model;
     await this.withSessionRetry(channelId, (sid) =>
       this.bridge.switchSessionModel(sid, model, { reasoningEffort: effort })
     );
-    setChannelPrefs(channelId, { reasoningEffort: effort });
+    try { await setChannelPrefs(channelId, { reasoningEffort: effort }); }
+    catch (e) { log.warn('Reasoning effort set but failed to persist preference:', e); }
   }
 
   /** Get effective preferences for a channel (config merged with runtime overrides). */
-  getEffectivePrefs(channelId: string): ChannelPrefs & { model: string; verbose: boolean; threadedReplies: boolean; permissionMode: string; triggerMode: 'mention' | 'all' } {
-    const configChannel = getChannelConfig(channelId);
-    const storedPrefs = getChannelPrefs(channelId);
+  async getEffectivePrefs(channelId: string): Promise<ChannelPrefs & { model: string; verbose: boolean; threadedReplies: boolean; permissionMode: string; triggerMode: 'mention' | 'all' }> {
+    const configChannel = await getChannelConfig(channelId);
+    const storedPrefs = await getChannelPrefs(channelId);
     return {
       model: storedPrefs?.model ?? configChannel.model ?? 'claude-sonnet-4.6',
       provider: storedPrefs?.provider ?? null,
@@ -1141,14 +1144,15 @@ export class SessionManager {
         return result.mode;
       } catch { /* fall through to prefs */ }
     }
-    const prefs = getChannelPrefs(channelId);
+    const prefs = await getChannelPrefs(channelId);
     return prefs?.sessionMode ?? 'interactive';
   }
 
   /** Set the session mode (interactive, plan, autopilot). Persists to channel prefs. Does not change yolo/permission state. */
   async setSessionMode(channelId: string, mode: 'interactive' | 'plan' | 'autopilot'): Promise<string> {
     const result = await this.withSessionRetry(channelId, (sid) => this.bridge.setSessionMode(sid, mode));
-    setChannelPrefs(channelId, { sessionMode: result.mode });
+    try { await setChannelPrefs(channelId, { sessionMode: result.mode }); }
+    catch (e) { log.warn('Session mode set but failed to persist preference:', e); }
     return result.mode;
   }
 
@@ -1273,30 +1277,34 @@ export class SessionManager {
   }
 
   /** Resolve a pending permission request (first in queue). */
-  resolvePermission(channelId: string, allow: boolean, remember?: boolean): boolean {
+  async resolvePermission(channelId: string, allow: boolean, remember?: boolean): Promise<boolean> {
     const queue = this.pendingPermissions.get(channelId);
     if (!queue || queue.length === 0) return false;
 
     const pending = queue.shift()!;
 
-    if (remember && !pending.fromHook) {
-      const action = allow ? 'allow' : 'deny';
-      if (pending.serverName) {
-        // MCP tool: save at server level so all tools on this server are covered
-        addPermissionRule(channelId, `mcp:${pending.serverName}`, '*', action as 'allow' | 'deny');
-        log.info(`Saved ${action} rule for MCP server "${pending.serverName}" in channel ${channelId}`);
-      } else if (pending.commands.length > 0) {
-        for (const cmd of pending.commands) {
-          addPermissionRule(channelId, pending.toolName, cmd, action as 'allow' | 'deny');
-        }
-      } else {
-        addPermissionRule(channelId, pending.toolName, '*', action as 'allow' | 'deny');
-      }
-    }
-
+    // Resolve the permission first — don't let persistence failures block the SDK callback
     pending.resolve(allow
       ? { kind: 'approved' }
       : { kind: 'denied-interactively-by-user' });
+
+    if (remember && !pending.fromHook) {
+      const action = allow ? 'allow' : 'deny';
+      try {
+        if (pending.serverName) {
+          await addPermissionRule(channelId, `mcp:${pending.serverName}`, '*', action as 'allow' | 'deny');
+          log.info(`Saved ${action} rule for MCP server "${pending.serverName}" in channel ${channelId}`);
+        } else if (pending.commands.length > 0) {
+          for (const cmd of pending.commands) {
+            await addPermissionRule(channelId, pending.toolName, cmd, action as 'allow' | 'deny');
+          }
+        } else {
+          await addPermissionRule(channelId, pending.toolName, '*', action as 'allow' | 'deny');
+        }
+      } catch (err) {
+        log.warn('Failed to persist permission rule (permission was still applied):', err);
+      }
+    }
 
     if (queue.length === 0) {
       this.pendingPermissions.delete(channelId);
@@ -1375,20 +1383,25 @@ export class SessionManager {
   }
 
   /** Save previous permission mode before auto-enabling yolo. */
-  saveYoloPreviousState(channelId: string): void {
-    const prefs = getChannelPrefs(channelId);
-    const channelConfig = getChannelConfig(channelId);
+  async saveYoloPreviousState(channelId: string): Promise<void> {
+    const prefs = await getChannelPrefs(channelId);
+    const channelConfig = await getChannelConfig(channelId);
     const current = prefs?.permissionMode ?? channelConfig.permissionMode;
     this.yoloPreviousState.set(channelId, current);
   }
 
   /** Revert yolo to previous state (called on session.idle after plan implementation). */
-  revertYoloIfNeeded(channelId: string): boolean {
+  async revertYoloIfNeeded(channelId: string): Promise<boolean> {
     const previous = this.yoloPreviousState.get(channelId);
     if (previous === undefined) return false;
     this.yoloPreviousState.delete(channelId);
-    setChannelPrefs(channelId, { permissionMode: previous });
-    return true;
+    try {
+      await setChannelPrefs(channelId, { permissionMode: previous });
+      return true;
+    } catch (err) {
+      log.warn(`Failed to revert yolo permissionMode for ${channelId.slice(0, 8)}...:`, err);
+      return false;
+    }
   }
 
   /** Debounced plan change handler — calls callback after debounce window. */
@@ -1404,8 +1417,8 @@ export class SessionManager {
   }
 
   /** Get the current session ID for a channel (if any). */
-  getSessionId(channelId: string): string | undefined {
-    return this.channelSessions.get(channelId) ?? getChannelSession(channelId) ?? undefined;
+  async getSessionId(channelId: string): Promise<string | undefined> {
+    return this.channelSessions.get(channelId) ?? await getChannelSession(channelId) ?? undefined;
   }
 
   /** Abort the current turn for a channel's session. */
@@ -1423,10 +1436,10 @@ export class SessionManager {
   }
 
   /** Get info about the current session for a channel. */
-  getSessionInfo(channelId: string): { sessionId: string; model: string; agent: string | null } | null {
+  async getSessionInfo(channelId: string): Promise<{ sessionId: string; model: string; agent: string | null } | null> {
     const sessionId = this.channelSessions.get(channelId);
     if (!sessionId) return null;
-    const prefs = this.getEffectivePrefs(channelId);
+    const prefs = await this.getEffectivePrefs(channelId);
     return { sessionId, model: prefs.model, agent: prefs.agent ?? null };
   }
 
@@ -1439,11 +1452,11 @@ export class SessionManager {
   }
 
   /** Cache the model's max_context_window_tokens for accurate /context display. */
-  private cacheContextWindowTokens(channelId: string, modelId: string, modelList: any[]): void {
+  private async cacheContextWindowTokens(channelId: string, modelId: string, modelList: any[]): Promise<void> {
     let model = modelList.find((m: any) => m.id === modelId);
     // For BYOK models, the merged list has provider-prefixed IDs (e.g., "ollama-local:qwen3:8b")
     if (!model) {
-      const prefs = getChannelPrefs(channelId);
+      const prefs = await getChannelPrefs(channelId);
       if (prefs?.provider) {
         model = modelList.find((m: any) => m.id === `${prefs.provider}:${modelId}`);
       }
@@ -1468,7 +1481,7 @@ export class SessionManager {
 
   /** List past sessions for this channel's working directory. */
   async listChannelSessions(channelId: string): Promise<Array<{ sessionId: string; startTime: Date; modifiedTime: Date; summary?: string; isCurrent: boolean }>> {
-    const workingDirectory = this.resolveWorkingDirectory(channelId);
+    const workingDirectory = await this.resolveWorkingDirectory(channelId);
     const sessions = await this.bridge.listSessions({ cwd: workingDirectory });
     const currentId = this.channelSessions.get(channelId);
     return sessions.map(s => ({
@@ -1483,15 +1496,15 @@ export class SessionManager {
   // --- Private helpers ---
 
   /** Resolve working directory: SQLite workspace override → channel config → default workspace path. */
-  private resolveWorkingDirectory(channelId: string): string {
-    const botName = getChannelBotName(channelId);
-    const override = getWorkspaceOverride(botName);
+  private async resolveWorkingDirectory(channelId: string): Promise<string> {
+    const botName = await getChannelBotName(channelId);
+    const override = await getWorkspaceOverride(botName);
     if (override) return override.workingDirectory;
 
-    const config = getChannelConfig(channelId);
+    const config = await getChannelConfig(channelId);
     if (config.workingDirectory) return config.workingDirectory;
 
-    return getWorkspacePath(botName);
+    return await getWorkspacePath(botName);
   }
 
   /** Build the system message config for session create/resume.
@@ -1529,18 +1542,18 @@ export class SessionManager {
   }
 
   private async createNewSession(channelId: string): Promise<string> {
-    const prefs = this.getEffectivePrefs(channelId);
-    const workingDirectory = this.resolveWorkingDirectory(channelId);
+    const prefs = await this.getEffectivePrefs(channelId);
+    const workingDirectory = await this.resolveWorkingDirectory(channelId);
 
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
 
     const reasoningEffort = prefs.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | undefined;
     const skillDirectories = discoverSkillDirectories(workingDirectory);
-    const customTools = this.buildCustomTools(channelId);
+    const customTools = await this.buildCustomTools(channelId);
     const disabledSkills = prefs.disabledSkills?.length ? prefs.disabledSkills : undefined;
 
     // Resolve fallback configuration
-    const configChannel = getChannelConfig(channelId);
+    const configChannel = await getChannelConfig(channelId);
     const configFallbacks = configChannel.fallbackModels ?? getConfig().defaults.fallbackModels;
 
     // Resolve BYOK provider if set in prefs
@@ -1628,11 +1641,11 @@ export class SessionManager {
 
     this.sessionMcpServers.set(channelId, new Set(Object.keys(resolvedMcpServers)));
     this.sessionSkillDirs.set(channelId, new Set(skillDirectories));
-    this.cacheContextWindowTokens(channelId, usedModel, modelList);
+    await this.cacheContextWindowTokens(channelId, usedModel, modelList);
 
     if (didFallback) {
       log.info(`Model fallback: "${prefs.model}" → "${usedModel}" for channel ${channelId}`);
-      setChannelPrefs(channelId, { model: usedModel });
+      await setChannelPrefs(channelId, { model: usedModel });
 
       // Emit a user-visible warning via session event
       this.eventHandler?.(session.sessionId, channelId, {
@@ -1646,7 +1659,7 @@ export class SessionManager {
     const sessionId = session.sessionId;
     this.channelSessions.set(channelId, sessionId);
     this.sessionChannels.set(sessionId, channelId);
-    setChannelSession(channelId, sessionId);
+    await setChannelSession(channelId, sessionId);
 
     this.attachSessionEvents(session, channelId);
 
@@ -1655,12 +1668,12 @@ export class SessionManager {
   }
 
   private async attachSession(channelId: string, sessionId: string): Promise<void> {
-    const prefs = this.getEffectivePrefs(channelId);
-    const workingDirectory = this.resolveWorkingDirectory(channelId);
+    const prefs = await this.getEffectivePrefs(channelId);
+    const workingDirectory = await this.resolveWorkingDirectory(channelId);
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
     const reasoningEffort = prefs.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | undefined;
     const skillDirectories = discoverSkillDirectories(workingDirectory);
-    const customTools = this.buildCustomTools(channelId);
+    const customTools = await this.buildCustomTools(channelId);
     const disabledSkills = prefs.disabledSkills?.length ? prefs.disabledSkills : undefined;
 
     const mcpServers = this.resolveMcpServers(workingDirectory);
@@ -1706,11 +1719,11 @@ export class SessionManager {
 
     // Cache context window tokens for /context display (best-effort, non-blocking)
     const resumeModel = prefs.model;
-    this.bridge.listModels(getConfig().providers).then(models => {
+    this.bridge.listModels(getConfig().providers).then(async (models) => {
       // Guard against model changes before this resolves
-      const currentPrefs = this.getEffectivePrefs(channelId);
+      const currentPrefs = await this.getEffectivePrefs(channelId);
       if (currentPrefs.model === resumeModel) {
-        this.cacheContextWindowTokens(channelId, resumeModel, models);
+        await this.cacheContextWindowTokens(channelId, resumeModel, models);
       }
     }).catch(() => { /* best-effort */ });
   }
@@ -1741,7 +1754,7 @@ export class SessionManager {
     const nextContext = extendContext(opts.context, opts.targetBot);
 
     // Resolve target bot's workspace
-    const targetWorkspace = getWorkspacePath(opts.targetBot);
+    const targetWorkspace = await getWorkspacePath(opts.targetBot);
     const targetBotConfig = this.getTargetBotConfig(opts.targetBot);
 
     // Resolve agent definition
@@ -1752,7 +1765,7 @@ export class SessionManager {
     );
 
     // Build workspace awareness
-    const workspaceMap = getBotWorkspaceMap(opts.targetBot);
+    const workspaceMap = await getBotWorkspaceMap(opts.targetBot);
     const workspacePrompt = buildWorkspacePrompt(workspaceMap);
     const callerPrompt = buildCallerPrompt(opts.context);
 
@@ -1777,7 +1790,7 @@ export class SessionManager {
 
     // Build custom tools for ephemeral session (ask_agent with propagated context)
     // Pass target bot name so chained calls use B's identity (not A's channel)
-    const ephemeralTools = this.buildEphemeralTools(opts.targetBot, nextContext);
+    const ephemeralTools = await this.buildEphemeralTools(opts.targetBot, nextContext);
 
     let session: CopilotSession | undefined;
     try {
@@ -1798,17 +1811,19 @@ export class SessionManager {
       const response = await this.sendAndWaitForIdle(session, opts.message, timeout);
 
       const durationMs = Date.now() - startTime;
-      recordAgentCall({
-        callerBot: opts.callerBot,
-        targetBot: opts.targetBot,
-        targetAgent: opts.agent,
-        messageSummary: opts.message.slice(0, 500),
-        responseSummary: response.slice(0, 500),
-        durationMs,
-        success: true,
-        chainId: opts.context.chainId,
-        depth: nextContext.depth,
-      });
+      try {
+        await recordAgentCall({
+          callerBot: opts.callerBot,
+          targetBot: opts.targetBot,
+          targetAgent: opts.agent,
+          messageSummary: opts.message.slice(0, 500),
+          responseSummary: response.slice(0, 500),
+          durationMs,
+          success: true,
+          chainId: opts.context.chainId,
+          depth: nextContext.depth,
+        });
+      } catch (e) { log.warn('Failed to record successful agent call:', e); }
 
       log.info(`Ephemeral call ${opts.callerBot}→${opts.targetBot}: ${durationMs}ms, ${response.length} chars`);
       return { success: true, response };
@@ -1816,17 +1831,19 @@ export class SessionManager {
     } catch (err: any) {
       const durationMs = Date.now() - startTime;
       const errorMsg = err?.message ?? 'unknown error';
-      recordAgentCall({
-        callerBot: opts.callerBot,
-        targetBot: opts.targetBot,
-        targetAgent: opts.agent,
-        messageSummary: opts.message.slice(0, 500),
-        durationMs,
-        success: false,
-        error: errorMsg,
-        chainId: opts.context.chainId,
-        depth: nextContext.depth,
-      });
+      try {
+        await recordAgentCall({
+          callerBot: opts.callerBot,
+          targetBot: opts.targetBot,
+          targetAgent: opts.agent,
+          messageSummary: opts.message.slice(0, 500),
+          durationMs,
+          success: false,
+          error: errorMsg,
+          chainId: opts.context.chainId,
+          depth: nextContext.depth,
+        });
+      } catch (e) { log.warn('Failed to record agent call during error handling:', e); }
 
       log.error(`Ephemeral call ${opts.callerBot}→${opts.targetBot} failed: ${errorMsg}`);
       return { success: false, error: 'ephemeral_session_error', detail: errorMsg };
@@ -1927,7 +1944,7 @@ export class SessionManager {
         const toolName = (request as any).toolName ?? (request as any).tool_name ?? (request as any).name ?? reqKind;
         if (opts.grantTools.includes(toolName)) {
           // Verify caller has this permission
-          const callerResult = checkPermission(opts.callerChannelId, toolName, '*');
+          const callerResult = await checkPermission(opts.callerChannelId, toolName, '*');
           if (callerResult === 'allow') {
             return { kind: 'approved' };
           }
@@ -1938,12 +1955,12 @@ export class SessionManager {
       // Use a synthetic scope for the target bot
       const targetScope = `bot:${opts.targetBot}`;
       const toolName = (request as any).toolName ?? (request as any).tool_name ?? (request as any).name ?? reqKind;
-      const storedResult = checkPermission(targetScope, toolName, '*');
+      const storedResult = await checkPermission(targetScope, toolName, '*');
       if (storedResult === 'allow') return { kind: 'approved' };
       if (storedResult === 'deny') return { kind: 'denied-by-rules' };
 
       // 6. Caller channel's stored rules (merged — supplement target)
-      const callerResult = checkPermission(opts.callerChannelId, toolName, '*');
+      const callerResult = await checkPermission(opts.callerChannelId, toolName, '*');
       if (callerResult === 'allow') return { kind: 'approved' };
 
       // 7. Autopilot: approve remaining if enabled
@@ -1958,13 +1975,13 @@ export class SessionManager {
   }
 
   /** Build custom tools for an ephemeral inter-agent session. */
-  private buildEphemeralTools(currentBotName: string, context: InterAgentContext): any[] {
+  private async buildEphemeralTools(currentBotName: string, context: InterAgentContext): Promise<any[]> {
     const tools: any[] = [];
     const iaConfig = getInterAgentConfig();
 
     // Only register ask_agent if there's remaining depth
     if (iaConfig.enabled && context.depth < (iaConfig.maxDepth ?? 3)) {
-      tools.push(this.buildAskAgentToolDef(currentBotName, context, true));
+      tools.push(await this.buildAskAgentToolDef(currentBotName, context, true));
     }
 
     return tools;
@@ -1983,8 +2000,8 @@ export class SessionManager {
 
   /** Build the ask_agent tool definition (shared by normal and ephemeral sessions).
    *  When callerBotDirect is true, channelIdOrBot is the bot name directly (for ephemeral sessions). */
-  private buildAskAgentToolDef(channelIdOrBot: string, parentContext?: InterAgentContext, callerBotDirect = false): any {
-    const callerBot = callerBotDirect ? channelIdOrBot : getChannelBotName(channelIdOrBot);
+  private async buildAskAgentToolDef(channelIdOrBot: string, parentContext?: InterAgentContext, callerBotDirect = false): Promise<any> {
+    const callerBot = callerBotDirect ? channelIdOrBot : await getChannelBotName(channelIdOrBot);
     const channelId = callerBotDirect ? undefined : channelIdOrBot;
 
     return {
@@ -2069,15 +2086,15 @@ export class SessionManager {
   }
 
   /** Build custom tool definitions to pass to SDK session creation. */
-  private buildCustomTools(channelId: string): any[] {
+  private async buildCustomTools(channelId: string): Promise<any[]> {
     const tools: any[] = [];
 
     if (this.sendFileHandler) {
       const handler = this.sendFileHandler;
-      const config = getChannelConfig(channelId);
-      const botName = getChannelBotName(channelId);
-      const workDir = this.resolveWorkingDirectory(channelId);
-      const allowPaths = getWorkspaceAllowPaths(botName, config.platform);
+      const config = await getChannelConfig(channelId);
+      const botName = await getChannelBotName(channelId);
+      const workDir = await this.resolveWorkingDirectory(channelId);
+      const allowPaths = await getWorkspaceAllowPaths(botName, config.platform);
 
       tools.push({
         name: 'send_file',
@@ -2121,10 +2138,10 @@ export class SessionManager {
     // Show file contents in chat (renamed from show_file — CLI doesn't support overridesBuiltInTool yet)
     if (this.getAdapterForChannel) {
       const adapterResolver = this.getAdapterForChannel;
-      const showWorkDir = this.resolveWorkingDirectory(channelId);
-      const showBotName = getChannelBotName(channelId);
-      const showConfig = getChannelConfig(channelId);
-      const showAllowPaths = getWorkspaceAllowPaths(showBotName, showConfig.platform);
+      const showWorkDir = await this.resolveWorkingDirectory(channelId);
+      const showBotName = await getChannelBotName(channelId);
+      const showConfig = await getChannelConfig(channelId);
+      const showAllowPaths = await getWorkspaceAllowPaths(showBotName, showConfig.platform);
 
       tools.push({
         name: 'show_file_in_chat',
@@ -2157,7 +2174,7 @@ export class SessionManager {
               return { content: 'File path is outside the allowed workspace.' };
             }
 
-            const adapter = adapterResolver(channelId);
+            const adapter = await adapterResolver(channelId);
             if (!adapter) return { content: 'No adapter available for this channel.' };
 
             const ext = path.extname(realPath).slice(1) || 'txt';
@@ -2210,8 +2227,8 @@ export class SessionManager {
     }
 
     // Admin-only onboarding tools
-    const config = getChannelConfig(channelId);
-    const botName = getChannelBotName(channelId);
+    const config = await getChannelConfig(channelId);
+    const botName = await getChannelBotName(channelId);
     const isAdmin = isBotAdmin(config.platform, botName);
 
     if (isAdmin && this.getAdapterForChannel) {
@@ -2224,7 +2241,7 @@ export class SessionManager {
         parameters: { type: 'object', properties: {} },
         handler: async () => {
           try {
-            const adapter = adapterResolver(channelId);
+            const adapter = await adapterResolver(channelId);
             if (!adapter?.getTeams) return { content: 'Platform does not support team listing.' };
 
             const teams = await adapter.getTeams();
@@ -2280,7 +2297,7 @@ export class SessionManager {
           threaded_replies: boolean;
         }) => {
           try {
-            const adapter = adapterResolver(channelId);
+            const adapter = await adapterResolver(channelId);
             if (!adapter) return { content: 'Error: No adapter available for this channel.' };
 
             const result = await onboardProject(adapter, {
@@ -2327,8 +2344,8 @@ export class SessionManager {
         },
         handler: async (args: { bot_name: string; path: string }) => {
           try {
-            const existing = getWorkspaceOverride(args.bot_name);
-            const workDir = existing?.workingDirectory ?? getWorkspacePath(args.bot_name);
+            const existing = await getWorkspaceOverride(args.bot_name);
+            const workDir = existing?.workingDirectory ?? await getWorkspacePath(args.bot_name);
             const currentPaths = existing?.allowPaths ?? [];
             const resolvedPath = path.resolve(args.path);
 
@@ -2349,7 +2366,7 @@ export class SessionManager {
               return { content: `"${args.bot_name}" already has access to ${resolvedPath}.` };
             }
             const newPaths = [...currentPaths, resolvedPath];
-            setWorkspaceOverride(args.bot_name, workDir, newPaths);
+            await setWorkspaceOverride(args.bot_name, workDir, newPaths);
             return {
               content: `✅ Granted "${args.bot_name}" access to ${resolvedPath}.\nCurrent allowed paths: ${JSON.stringify(newPaths)}\n\nTo apply: delete the agent's AGENTS.md and run /new in its channel (or restart the bridge).`,
             };
@@ -2373,11 +2390,11 @@ export class SessionManager {
         },
         handler: async (args: { bot_name: string; path: string }) => {
           try {
-            const existing = getWorkspaceOverride(args.bot_name);
+            const existing = await getWorkspaceOverride(args.bot_name);
             if (!existing) return { content: `No workspace override found for "${args.bot_name}".` };
             const resolvedPath = path.resolve(args.path);
             const newPaths = existing.allowPaths.filter(p => path.resolve(p) !== resolvedPath);
-            setWorkspaceOverride(args.bot_name, existing.workingDirectory, newPaths);
+            await setWorkspaceOverride(args.bot_name, existing.workingDirectory, newPaths);
             return {
               content: `✅ Revoked "${args.bot_name}" access to ${resolvedPath}.\nRemaining allowed paths: ${JSON.stringify(newPaths)}\n\nTo apply: delete the agent's AGENTS.md and run /new in its channel (or restart the bridge).`,
             };
@@ -2394,7 +2411,7 @@ export class SessionManager {
         parameters: { type: 'object', properties: {} },
         handler: async () => {
           try {
-            const overrides = listWorkspaceOverrides();
+            const overrides = await listWorkspaceOverrides();
             const overrideMap = new Map(overrides.map(o => [o.botName, o]));
 
             // Enumerate all configured bots across platforms
@@ -2410,12 +2427,12 @@ export class SessionManager {
 
             if (botNames.size === 0) return { content: 'No agents configured.' };
 
-            const lines = [...botNames].sort().map(name => {
+            const lines = await Promise.all([...botNames].sort().map(async (name) => {
               const override = overrideMap.get(name);
-              const workspace = override?.workingDirectory ?? getWorkspacePath(name);
+              const workspace = override?.workingDirectory ?? await getWorkspacePath(name);
               const extra = override?.allowPaths ?? [];
               return `**${name}**\n  Workspace: ${workspace}\n  Extra paths: ${extra.length > 0 ? extra.join(', ') : '(none)'}`;
-            });
+            }));
             return { content: lines.join('\n\n') };
           } catch (err: any) {
             return { content: `Failed: ${err?.message ?? 'unknown error'}` };
@@ -2427,14 +2444,14 @@ export class SessionManager {
     // Inter-agent tool: ask_agent (only when enabled in config)
     const iaConfig = getInterAgentConfig();
     if (iaConfig.enabled) {
-      tools.push(this.buildAskAgentToolDef(channelId));
+      tools.push(await this.buildAskAgentToolDef(channelId));
     }
 
     // Scheduler tool: create/list/cancel/pause/resume scheduled tasks
-    tools.push(this.buildScheduleToolDef(channelId));
+    tools.push(await this.buildScheduleToolDef(channelId));
 
     // Bridge documentation tool
-    tools.push(this.buildBridgeDocsTool(channelId));
+    tools.push(await this.buildBridgeDocsTool(channelId));
 
     // No-reply tool: agent calls this instead of emitting "NO_REPLY" text
     tools.push({
@@ -2465,8 +2482,8 @@ export class SessionManager {
   }
 
   /** Build the schedule tool definition for creating/managing scheduled tasks. */
-  private buildScheduleToolDef(channelId: string): any {
-    const botName = getChannelBotName(channelId);
+  private async buildScheduleToolDef(channelId: string): Promise<any> {
+    const botName = await getChannelBotName(channelId);
 
     return {
       name: 'schedule',
@@ -2520,7 +2537,7 @@ export class SessionManager {
             case 'create': {
               if (!args.prompt) return { content: 'Error: prompt is required for create.' };
               if (!args.cron && !args.run_at) return { content: 'Error: either cron or run_at is required.' };
-              const task = addJob({
+              const task = await addJob({
                 channelId,
                 botName,
                 prompt: args.prompt,
@@ -2536,7 +2553,7 @@ export class SessionManager {
               return { content: JSON.stringify({ success: true, id: task.id, type, nextRun: nextRunLocal, timezone: tz, description: task.description }) };
             }
             case 'list': {
-              const tasks = listJobs(channelId);
+              const tasks = await listJobs(channelId);
               if (tasks.length === 0) return { content: 'No scheduled tasks for this channel.' };
               const summary = tasks.map(t => {
                 const tz = t.timezone ?? 'UTC';
@@ -2555,17 +2572,17 @@ export class SessionManager {
             }
             case 'cancel': {
               if (!args.id) return { content: 'Error: id is required for cancel.' };
-              const removed = removeJob(args.id, channelId);
+              const removed = await removeJob(args.id, channelId);
               return { content: removed ? `Task ${args.id} cancelled and removed.` : `Task ${args.id} not found.` };
             }
             case 'pause': {
               if (!args.id) return { content: 'Error: id is required for pause.' };
-              const paused = pauseJob(args.id, channelId);
+              const paused = await pauseJob(args.id, channelId);
               return { content: paused ? `Task ${args.id} paused.` : `Task ${args.id} not found.` };
             }
             case 'resume': {
               if (!args.id) return { content: 'Error: id is required for resume.' };
-              const resumed = resumeJob(args.id, channelId);
+              const resumed = await resumeJob(args.id, channelId);
               return { content: resumed ? `Task ${args.id} resumed.` : `Task ${args.id} not found or failed to resume.` };
             }
             default:
@@ -2578,9 +2595,9 @@ export class SessionManager {
     };
   }
 
-  private buildBridgeDocsTool(channelId: string): any {
-    const channelConfig = getChannelConfig(channelId);
-    const botName = getChannelBotName(channelId);
+  private async buildBridgeDocsTool(channelId: string): Promise<any> {
+    const channelConfig = await getChannelConfig(channelId);
+    const botName = await getChannelBotName(channelId);
     const isAdmin = isBotAdmin(channelConfig.platform, botName);
 
     return {
@@ -2598,7 +2615,7 @@ export class SessionManager {
         required: [],
       },
       handler: async (args: { topic?: string }) => {
-        const sessionInfo = this.getSessionInfo(channelId);
+        const sessionInfo = await this.getSessionInfo(channelId);
         return {
           content: getBridgeDocs({
             topic: args.topic,
@@ -2625,12 +2642,12 @@ export class SessionManager {
     this.sessionUnsubscribes.set(session.sessionId, unsub);
   }
 
-  private handlePermissionRequest(
+  private async handlePermissionRequest(
     channelId: string,
     request: any,
     invocation: { sessionId: string },
   ): Promise<any> {
-    const prefs = this.getEffectivePrefs(channelId);
+    const prefs = await this.getEffectivePrefs(channelId);
 
     // Hardcoded safety denies — checked before autopilot, cannot be overridden
     const reqKind = (request as any).kind;
@@ -2654,10 +2671,10 @@ export class SessionManager {
     }
 
     // Check config-level permission rules first (CLI-compatible syntax)
-    const config = getChannelConfig(channelId);
-    const botName = getChannelBotName(channelId);
-    const resolvedDir = this.resolveWorkingDirectory(channelId);
-    const workspaceAllowPaths = getWorkspaceAllowPaths(botName, config.platform);
+    const config = await getChannelConfig(channelId);
+    const botName = await getChannelBotName(channelId);
+    const resolvedDir = await this.resolveWorkingDirectory(channelId);
+    const workspaceAllowPaths = await getWorkspaceAllowPaths(botName, config.platform);
     const configResult = evaluateConfigPermissions(request as any, resolvedDir, workspaceAllowPaths, isBotAdmin(config.platform, botName));
     if (configResult === 'allow') {
       return Promise.resolve({ kind: 'approved' });
@@ -2675,9 +2692,11 @@ export class SessionManager {
     const toolInput = request.input ?? (request as any).arguments ?? (request as any).parameters ?? request;
     const commands = extractCommandPatterns(toolInput);
 
+    // Check stored permission rules (DB errors fall through to interactive prompt)
+    try {
     // For MCP tools, check server-level rules first (covers all tools on that server)
     if (kind === 'mcp' && serverName) {
-      const serverResult = checkPermission(channelId, `mcp:${serverName}`, '*');
+      const serverResult = await checkPermission(channelId, `mcp:${serverName}`, '*');
       if (serverResult === 'allow') {
         log.debug(`MCP "${serverName}" auto-approved by stored rule`);
         return Promise.resolve({ kind: 'approved' });
@@ -2689,7 +2708,7 @@ export class SessionManager {
     }
 
     if (commands.length > 0) {
-      const results = commands.map(cmd => checkPermission(channelId, toolName, cmd));
+      const results = await Promise.all(commands.map(cmd => checkPermission(channelId, toolName, cmd)));
       if (results.every(r => r === 'allow')) {
         const hasWrapper = commands.some(cmd => SHELL_WRAPPERS.has(cmd));
         if (!hasWrapper) {
@@ -2700,9 +2719,12 @@ export class SessionManager {
         return Promise.resolve({ kind: 'denied-by-rules' });
       }
     } else {
-      const result = checkPermission(channelId, toolName, '*');
+      const result = await checkPermission(channelId, toolName, '*');
       if (result === 'allow') return Promise.resolve({ kind: 'approved' });
       if (result === 'deny') return Promise.resolve({ kind: 'denied-by-rules' });
+    }
+    } catch (err) {
+      log.warn('Permission check failed, falling through to interactive:', err);
     }
 
     // No rule matched — need to ask the user via chat

@@ -485,37 +485,37 @@ describe('channel prefs provider field', () => {
     store = await import('../state/store.js');
   });
 
-  it('stores and retrieves provider in channel prefs', () => {
+  it('stores and retrieves provider in channel prefs', async () => {
     const testChannel = `byok-test-${Date.now()}`;
-    store.setChannelPrefs(testChannel, { model: 'qwen3:8b', provider: 'ollama' });
-    const prefs = store.getChannelPrefs(testChannel);
+    await store.setChannelPrefs(testChannel, { model: 'qwen3:8b', provider: 'ollama' });
+    const prefs = await store.getChannelPrefs(testChannel);
     expect(prefs).not.toBeNull();
     expect(prefs!.provider).toBe('ollama');
     expect(prefs!.model).toBe('qwen3:8b');
   });
 
-  it('returns null provider when not set', () => {
+  it('returns null provider when not set', async () => {
     const testChannel = `byok-test-${Date.now()}-noprov`;
-    store.setChannelPrefs(testChannel, { model: 'claude-sonnet-4.6' });
-    const prefs = store.getChannelPrefs(testChannel);
+    await store.setChannelPrefs(testChannel, { model: 'claude-sonnet-4.6' });
+    const prefs = await store.getChannelPrefs(testChannel);
     expect(prefs).not.toBeNull();
     expect(prefs!.provider).toBeNull();
   });
 
-  it('updates provider on existing prefs', () => {
+  it('updates provider on existing prefs', async () => {
     const testChannel = `byok-test-${Date.now()}-update`;
-    store.setChannelPrefs(testChannel, { model: 'claude-sonnet-4.6' });
-    store.setChannelPrefs(testChannel, { provider: 'ollama' });
-    const prefs = store.getChannelPrefs(testChannel);
+    await store.setChannelPrefs(testChannel, { model: 'claude-sonnet-4.6' });
+    await store.setChannelPrefs(testChannel, { provider: 'ollama' });
+    const prefs = await store.getChannelPrefs(testChannel);
     expect(prefs!.provider).toBe('ollama');
     expect(prefs!.model).toBe('claude-sonnet-4.6');
   });
 
-  it('clears provider by setting to null', () => {
+  it('clears provider by setting to null', async () => {
     const testChannel = `byok-test-${Date.now()}-clear`;
-    store.setChannelPrefs(testChannel, { provider: 'ollama' });
-    store.setChannelPrefs(testChannel, { provider: null });
-    const prefs = store.getChannelPrefs(testChannel);
+    await store.setChannelPrefs(testChannel, { provider: 'ollama' });
+    await store.setChannelPrefs(testChannel, { provider: null });
+    const prefs = await store.getChannelPrefs(testChannel);
     expect(prefs!.provider).toBeNull();
   });
 });

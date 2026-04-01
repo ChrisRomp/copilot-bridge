@@ -136,27 +136,27 @@ describe('/model command listing', () => {
     },
   };
 
-  it('groups models by provider in listing', () => {
-    const result = handleCommand(channelId, '/model', sessionInfo, prefs, meta, allModels, undefined, null, providers);
+  it('groups models by provider in listing', async () => {
+    const result = await handleCommand(channelId, '/model', sessionInfo, prefs, meta, allModels, undefined, null, providers);
     expect(result.handled).toBe(true);
     expect(result.response).toContain('GitHub Copilot');
     expect(result.response).toContain('ollama-local');
   });
 
-  it('shows current model indicator for Copilot model', () => {
-    const result = handleCommand(channelId, '/model', sessionInfo, prefs, meta, allModels, undefined, null, providers);
+  it('shows current model indicator for Copilot model', async () => {
+    const result = await handleCommand(channelId, '/model', sessionInfo, prefs, meta, allModels, undefined, null, providers);
     expect(result.response).toContain('← current');
   });
 
-  it('filters by provider name', () => {
-    const result = handleCommand(channelId, '/model ollama-local', sessionInfo, prefs, meta, allModels, undefined, null, providers);
+  it('filters by provider name', async () => {
+    const result = await handleCommand(channelId, '/model ollama-local', sessionInfo, prefs, meta, allModels, undefined, null, providers);
     expect(result.handled).toBe(true);
     expect(result.response).toContain('qwen3:8b');
     expect(result.response).not.toContain('claude-sonnet');
   });
 
-  it('hides Billing column for BYOK provider sections', () => {
-    const result = handleCommand(channelId, '/model', sessionInfo, prefs, meta, allModels, undefined, null, providers);
+  it('hides Billing column for BYOK provider sections', async () => {
+    const result = await handleCommand(channelId, '/model', sessionInfo, prefs, meta, allModels, undefined, null, providers);
     // Copilot section should have Billing in table header
     const sections = result.response!.split('**ollama-local**');
     expect(sections[0]).toContain('| Model | Billing |');
@@ -165,13 +165,13 @@ describe('/model command listing', () => {
     expect(byokTable).not.toContain('Billing');
   });
 
-  it('hides Billing column when filtering to BYOK provider', () => {
-    const result = handleCommand(channelId, '/model ollama-local', sessionInfo, prefs, meta, allModels, undefined, null, providers);
+  it('hides Billing column when filtering to BYOK provider', async () => {
+    const result = await handleCommand(channelId, '/model ollama-local', sessionInfo, prefs, meta, allModels, undefined, null, providers);
     expect(result.response).not.toContain('Billing');
   });
 
-  it('shows no-provider listing without providers', () => {
-    const result = handleCommand(channelId, '/model', sessionInfo, prefs, meta, copilotModels);
+  it('shows no-provider listing without providers', async () => {
+    const result = await handleCommand(channelId, '/model', sessionInfo, prefs, meta, copilotModels);
     expect(result.handled).toBe(true);
     expect(result.response).not.toContain('GitHub Copilot'); // no grouping without providers
     expect(result.response).toContain('claude-sonnet-4.6');
@@ -196,37 +196,37 @@ describe('/model switch (provider-aware)', () => {
     },
   };
 
-  it('returns provider in payload for BYOK model switch', () => {
-    const result = handleCommand(channelId, '/model ollama-local:qwen3:8b', sessionInfo, prefs, meta, allModels, undefined, null, providers);
+  it('returns provider in payload for BYOK model switch', async () => {
+    const result = await handleCommand(channelId, '/model ollama-local:qwen3:8b', sessionInfo, prefs, meta, allModels, undefined, null, providers);
     expect(result.action).toBe('switch_model');
     expect(result.payload).toEqual({ modelId: 'qwen3:8b', provider: 'ollama-local' });
   });
 
-  it('returns null provider for Copilot model switch', () => {
-    const result = handleCommand(channelId, '/model gpt-5.4', sessionInfo, prefs, meta, allModels, undefined, null, providers);
+  it('returns null provider for Copilot model switch', async () => {
+    const result = await handleCommand(channelId, '/model gpt-5.4', sessionInfo, prefs, meta, allModels, undefined, null, providers);
     expect(result.action).toBe('switch_model');
     expect(result.payload).toEqual({ modelId: 'gpt-5.4', provider: null });
   });
 
-  it('returns bare model ID (not prefixed) in payload', () => {
-    const result = handleCommand(channelId, '/model azure-prod:gpt-5', sessionInfo, prefs, meta, allModels, undefined, null, providers);
+  it('returns bare model ID (not prefixed) in payload', async () => {
+    const result = await handleCommand(channelId, '/model azure-prod:gpt-5', sessionInfo, prefs, meta, allModels, undefined, null, providers);
     expect(result.payload).toEqual({ modelId: 'gpt-5', provider: 'azure-prod' });
   });
 
-  it('resolves bare BYOK model name to correct provider', () => {
-    const result = handleCommand(channelId, '/model qwen3:8b', sessionInfo, prefs, meta, allModels, undefined, null, providers);
+  it('resolves bare BYOK model name to correct provider', async () => {
+    const result = await handleCommand(channelId, '/model qwen3:8b', sessionInfo, prefs, meta, allModels, undefined, null, providers);
     expect(result.action).toBe('switch_model');
     expect(result.payload).toEqual({ modelId: 'qwen3:8b', provider: 'ollama-local' });
   });
 
-  it('returns structured payload even when models list unavailable', () => {
-    const result = handleCommand(channelId, '/model some-model', sessionInfo, prefs, meta, [], undefined, null, providers);
+  it('returns structured payload even when models list unavailable', async () => {
+    const result = await handleCommand(channelId, '/model some-model', sessionInfo, prefs, meta, [], undefined, null, providers);
     expect(result.action).toBe('switch_model');
     expect(result.payload).toEqual({ modelId: 'some-model', provider: null });
   });
 
-  it('parses provider prefix when models list unavailable', () => {
-    const result = handleCommand(channelId, '/model ollama-local:qwen3:8b', sessionInfo, prefs, meta, [], undefined, null, providers);
+  it('parses provider prefix when models list unavailable', async () => {
+    const result = await handleCommand(channelId, '/model ollama-local:qwen3:8b', sessionInfo, prefs, meta, [], undefined, null, providers);
     expect(result.action).toBe('switch_model');
     expect(result.payload).toEqual({ modelId: 'qwen3:8b', provider: 'ollama-local' });
   });

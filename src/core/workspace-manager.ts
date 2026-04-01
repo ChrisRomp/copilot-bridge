@@ -51,17 +51,17 @@ function validateBotName(name: string): void {
   }
 }
 
-export function getWorkspacePath(botName: string): string {
+export async function getWorkspacePath(botName: string): Promise<string> {
   validateBotName(botName);
-  const override = getWorkspaceOverride(botName);
+  const override = await getWorkspaceOverride(botName);
   if (override) {
     return override.workingDirectory;
   }
   return path.join(WORKSPACES_DIR, botName);
 }
 
-export function getWorkspaceAllowPaths(botName: string, platformName?: string): string[] {
-  const override = getWorkspaceOverride(botName);
+export async function getWorkspaceAllowPaths(botName: string, platformName?: string): Promise<string[]> {
+  const override = await getWorkspaceOverride(botName);
   let paths = override?.allowPaths ?? [];
 
   // Admin bots automatically get access to the workspaces directory and config home
@@ -75,8 +75,8 @@ export function getWorkspaceAllowPaths(botName: string, platformName?: string): 
   return paths;
 }
 
-export function initWorkspace(botName: string, overridePath?: string, adminOverride?: boolean): string {
-  const workspacePath = overridePath ?? getWorkspacePath(botName);
+export async function initWorkspace(botName: string, overridePath?: string, adminOverride?: boolean): Promise<string> {
+  const workspacePath = overridePath ?? await getWorkspacePath(botName);
   if (!fs.existsSync(workspacePath)) {
     fs.mkdirSync(workspacePath, { recursive: true });
   }
@@ -85,7 +85,7 @@ export function initWorkspace(botName: string, overridePath?: string, adminOverr
 
   const agentsFile = path.join(workspacePath, 'AGENTS.md');
   if (!fs.existsSync(agentsFile)) {
-    const allowPaths = admin ? getWorkspaceAllowPaths(botName) : (getWorkspaceOverride(botName)?.allowPaths ?? []);
+    const allowPaths = admin ? await getWorkspaceAllowPaths(botName) : ((await getWorkspaceOverride(botName))?.allowPaths ?? []);
     fs.writeFileSync(agentsFile, generateAgentsTemplate(botName, workspacePath, allowPaths, admin), 'utf-8');
   }
 
@@ -101,7 +101,7 @@ export function initWorkspace(botName: string, overridePath?: string, adminOverr
   return workspacePath;
 }
 
-export function listWorkspaces(): Array<{ botName: string; path: string; isOverride: boolean; allowPaths: string[] }> {
+export async function listWorkspaces(): Promise<Array<{ botName: string; path: string; isOverride: boolean; allowPaths: string[] }>> {
   const results = new Map<string, { botName: string; path: string; isOverride: boolean; allowPaths: string[] }>();
 
   // Scan filesystem
@@ -119,7 +119,7 @@ export function listWorkspaces(): Array<{ botName: string; path: string; isOverr
   }
 
   // Merge SQLite overrides
-  for (const override of listWorkspaceOverrides()) {
+  for (const override of await listWorkspaceOverrides()) {
     results.set(override.botName, {
       botName: override.botName,
       path: override.workingDirectory,

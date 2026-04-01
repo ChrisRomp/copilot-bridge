@@ -79,7 +79,7 @@ async function main() {
 
   // --- Test 6: Dynamic channel SQLite CRUD ---
   console.log('6. Dynamic channel persistence');
-  addDynamicChannel({
+  await addDynamicChannel({
     channelId,
     platform: platformName,
     name: TEST_CHANNEL_NAME,
@@ -87,13 +87,13 @@ async function main() {
     workingDirectory: '/tmp/test-workspace',
     isDM: false,
   });
-  const stored = getDynamicChannel(channelId);
+  const stored = await getDynamicChannel(channelId);
   if (!stored) throw new Error('Dynamic channel not found in SQLite');
   console.log(`   Stored: ${stored.channelId} → ${stored.workingDirectory}`);
-  const all = getDynamicChannels();
+  const all = await getDynamicChannels();
   console.log(`   Total dynamic channels: ${all.length}`);
-  removeDynamicChannel(channelId);
-  const afterRemove = getDynamicChannel(channelId);
+  await removeDynamicChannel(channelId);
+  const afterRemove = await getDynamicChannel(channelId);
   if (afterRemove) throw new Error('Dynamic channel still exists after removal');
   console.log(`   Removed: confirmed\n`);
 

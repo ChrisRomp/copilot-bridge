@@ -43,9 +43,9 @@ export function describeCron(cronExpr: string): string {
 let deps: SchedulerDeps | null = null;
 
 /** Initialize the scheduler — load persisted jobs and start them. */
-export function initScheduler(schedulerDeps: SchedulerDeps): void {
+export async function initScheduler(schedulerDeps: SchedulerDeps): Promise<void> {
   deps = schedulerDeps;
-  const tasks = getEnabledScheduledTasks();
+  const tasks = await getEnabledScheduledTasks();
   let started = 0;
   let missed = 0;
   const missedByChannel = new Map<string, string[]>();
@@ -58,7 +58,7 @@ export function initScheduler(schedulerDeps: SchedulerDeps): void {
       list.push(task.description ?? task.prompt.slice(0, 60));
       missedByChannel.set(task.channelId, list);
       // Delete the one-off (it won't run again)
-      deleteScheduledTask(task.id);
+      await deleteScheduledTask(task.id);
       continue;
     }
 
@@ -75,7 +75,7 @@ export function initScheduler(schedulerDeps: SchedulerDeps): void {
     const summary = descriptions.length === 1
       ? descriptions[0]
       : `${descriptions.length} tasks: ${descriptions.join(', ')}`;
-    insertTaskHistory({
+    await insertTaskHistory({
       taskId: 'system', channelId,
       prompt: summary, description: `Missed while offline`,
       timezone: 'UTC',
@@ -91,7 +91,7 @@ export function initScheduler(schedulerDeps: SchedulerDeps): void {
 }
 
 /** Create and persist a new scheduled task. */
-export function addJob(opts: {
+export async function addJob(opts: {
   channelId: string;
   botName: string;
   prompt: string;
@@ -100,7 +100,7 @@ export function addJob(opts: {
   timezone?: string;
   createdBy?: string;
   description?: string;
-}): ScheduledTask {
+}): Promise<ScheduledTask> {
   if (!opts.cronExpr && !opts.runAt) {
     throw new Error('Either cronExpr or runAt must be provided');
   }
@@ -141,15 +141,15 @@ export function addJob(opts: {
     createdAt: new Date().toISOString(),
   };
 
-  insertScheduledTask(task);
+  await insertScheduledTask(task);
   startJob(task);
   log.info(`Job ${id} created: ${opts.description ?? opts.cronExpr ?? opts.runAt}`);
   return task;
 }
 
 /** Remove a job (stops and deletes from DB). Optionally scoped to a channel. */
-export function removeJob(id: string, channelId?: string): boolean {
-  const task = getScheduledTask(id);
+export async function removeJob(id: string, channelId?: string): Promise<boolean> {
+  const task = await getScheduledTask(id);
   if (!task) return false;
   if (channelId && task.channelId !== channelId) return false;
   const existing = activeJobs.get(id);
@@ -157,14 +157,14 @@ export function removeJob(id: string, channelId?: string): boolean {
     existing.stop();
     activeJobs.delete(id);
   }
-  deleteScheduledTask(id);
+  await deleteScheduledTask(id);
   log.info(`Job ${id} removed`);
   return true;
 }
 
 /** Pause a job (stops timer, keeps in DB). Optionally scoped to a channel. */
-export function pauseJob(id: string, channelId?: string): boolean {
-  const task = getScheduledTask(id);
+export async function pauseJob(id: string, channelId?: string): Promise<boolean> {
+  const task = await getScheduledTask(id);
   if (!task) return false;
   if (channelId && task.channelId !== channelId) return false;
   const job = activeJobs.get(id);
@@ -172,37 +172,37 @@ export function pauseJob(id: string, channelId?: string): boolean {
     job.stop();
     activeJobs.delete(id);
   }
-  updateScheduledTaskEnabled(id, false);
+  await updateScheduledTaskEnabled(id, false);
   log.info(`Job ${id} paused`);
   return true;
 }
 
 /** Resume a paused job. Optionally scoped to a channel. */
-export function resumeJob(id: string, channelId?: string): boolean {
-  const task = getScheduledTask(id);
+export async function resumeJob(id: string, channelId?: string): Promise<boolean> {
+  const task = await getScheduledTask(id);
   if (!task) return false;
   if (channelId && task.channelId !== channelId) return false;
-  updateScheduledTaskEnabled(id, true);
+  await updateScheduledTaskEnabled(id, true);
   try {
     startJob({ ...task, enabled: true });
     log.info(`Job ${id} resumed`);
     return true;
   } catch (err: any) {
-    updateScheduledTaskEnabled(id, false);
+    await updateScheduledTaskEnabled(id, false);
     log.error(`Failed to resume job ${id}: ${err?.message}`);
     return false;
   }
 }
 
 /** List jobs for a channel (or all if no channelId). */
-export function listJobs(channelId?: string): ScheduledTask[] {
-  if (channelId) return getScheduledTasksForChannel(channelId);
-  return getEnabledScheduledTasks();
+export async function listJobs(channelId?: string): Promise<ScheduledTask[]> {
+  if (channelId) return await getScheduledTasksForChannel(channelId);
+  return await getEnabledScheduledTasks();
 }
 
 /** Get a job by ID. */
-export function getJob(id: string): ScheduledTask | null {
-  return getScheduledTask(id);
+export async function getJob(id: string): Promise<ScheduledTask | null> {
+  return await getScheduledTask(id);
 }
 
 /** Stop all active jobs (for shutdown). */
@@ -241,7 +241,7 @@ async function executeJob(taskId: string, isOneOff: boolean): Promise<void> {
     return;
   }
 
-  const task = getScheduledTask(taskId);
+  const task = await getScheduledTask(taskId);
   if (!task || !task.enabled) return;
 
   const now = new Date().toISOString();
@@ -250,7 +250,7 @@ async function executeJob(taskId: string, isOneOff: boolean): Promise<void> {
   try {
     await deps.sendMessage(task.channelId, task.prompt);
 
-    insertTaskHistory({
+    await insertTaskHistory({
       taskId: task.id, channelId: task.channelId,
       prompt: task.prompt, description: task.description,
       timezone: task.timezone,
@@ -265,11 +265,11 @@ async function executeJob(taskId: string, isOneOff: boolean): Promise<void> {
         nextRun = job.nextDate().toISO() ?? undefined;
       }
     }
-    updateScheduledTaskLastRun(taskId, now, nextRun);
+    await updateScheduledTaskLastRun(taskId, now, nextRun);
   } catch (err: any) {
     log.error(`Job ${taskId} execution failed: ${err?.message}`);
     try {
-      insertTaskHistory({
+      await insertTaskHistory({
         taskId: task.id, channelId: task.channelId,
         prompt: task.prompt, description: task.description,
         timezone: task.timezone,
@@ -285,7 +285,7 @@ async function executeJob(taskId: string, isOneOff: boolean): Promise<void> {
     const job = activeJobs.get(taskId);
     if (job) job.stop();
     activeJobs.delete(taskId);
-    deleteScheduledTask(taskId);
+    await deleteScheduledTask(taskId);
     log.info(`One-off job ${taskId} completed and removed`);
   }
 }

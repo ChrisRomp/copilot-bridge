@@ -32,8 +32,8 @@ const providers = {
 // --- /provider list ---
 
 describe('/provider command', () => {
-  it('lists configured providers', () => {
-    const result = handleCommand(channelId, '/provider', sessionInfo, prefs, meta, [], undefined, null, providers);
+  it('lists configured providers', async () => {
+    const result = await handleCommand(channelId, '/provider', sessionInfo, prefs, meta, [], undefined, null, providers);
     expect(result.handled).toBe(true);
     expect(result.response).toContain('ollama-local');
     expect(result.response).toContain('azure-prod');
@@ -41,21 +41,21 @@ describe('/provider command', () => {
     expect(result.response).toContain('qwen3:8b');
   });
 
-  it('shows helpful message when no providers configured', () => {
-    const result = handleCommand(channelId, '/provider', sessionInfo, prefs, meta, []);
+  it('shows helpful message when no providers configured', async () => {
+    const result = await handleCommand(channelId, '/provider', sessionInfo, prefs, meta, []);
     expect(result.handled).toBe(true);
     expect(result.response).toContain('No BYOK providers');
     expect(result.response).toContain('config.json');
   });
 
-  it('/providers alias works', () => {
-    const result = handleCommand(channelId, '/providers', sessionInfo, prefs, meta, [], undefined, null, providers);
+  it('/providers alias works', async () => {
+    const result = await handleCommand(channelId, '/providers', sessionInfo, prefs, meta, [], undefined, null, providers);
     expect(result.handled).toBe(true);
     expect(result.response).toContain('ollama-local');
   });
 
-  it('shows auth method in provider listing', () => {
-    const result = handleCommand(channelId, '/provider', sessionInfo, prefs, meta, [], undefined, null, providers);
+  it('shows auth method in provider listing', async () => {
+    const result = await handleCommand(channelId, '/provider', sessionInfo, prefs, meta, [], undefined, null, providers);
     expect(result.response).toContain('apiKeyEnv: AZURE_KEY');
     expect(result.response).toContain('none'); // ollama has no auth
   });
@@ -64,22 +64,22 @@ describe('/provider command', () => {
 // --- /provider test ---
 
 describe('/provider test', () => {
-  it('returns provider_test action for known provider', () => {
-    const result = handleCommand(channelId, '/provider test ollama-local', sessionInfo, prefs, meta, [], undefined, null, providers);
+  it('returns provider_test action for known provider', async () => {
+    const result = await handleCommand(channelId, '/provider test ollama-local', sessionInfo, prefs, meta, [], undefined, null, providers);
     expect(result.handled).toBe(true);
     expect(result.action).toBe('provider_test');
     expect(result.payload).toBe('ollama-local');
   });
 
-  it('returns error for unknown provider', () => {
-    const result = handleCommand(channelId, '/provider test nonexistent', sessionInfo, prefs, meta, [], undefined, null, providers);
+  it('returns error for unknown provider', async () => {
+    const result = await handleCommand(channelId, '/provider test nonexistent', sessionInfo, prefs, meta, [], undefined, null, providers);
     expect(result.handled).toBe(true);
     expect(result.response).toContain('Unknown provider');
     expect(result.action).toBeUndefined();
   });
 
-  it('is case-insensitive on provider name', () => {
-    const result = handleCommand(channelId, '/provider test OLLAMA-LOCAL', sessionInfo, prefs, meta, [], undefined, null, providers);
+  it('is case-insensitive on provider name', async () => {
+    const result = await handleCommand(channelId, '/provider test OLLAMA-LOCAL', sessionInfo, prefs, meta, [], undefined, null, providers);
     expect(result.action).toBe('provider_test');
     expect(result.payload).toBe('ollama-local');
   });
@@ -88,29 +88,29 @@ describe('/provider test', () => {
 // --- /provider add|remove guidance ---
 
 describe('/provider add|remove', () => {
-  it('guides non-admin user to config.json for add', () => {
-    const result = handleCommand(channelId, '/provider add ollama', sessionInfo, prefs, meta, [], undefined, null, providers);
+  it('guides non-admin user to config.json for add', async () => {
+    const result = await handleCommand(channelId, '/provider add ollama', sessionInfo, prefs, meta, [], undefined, null, providers);
     expect(result.handled).toBe(true);
     expect(result.response).toContain('config.json');
     expect(result.response).toContain('/reload config');
   });
 
-  it('offers to help when bot is admin', () => {
+  it('offers to help when bot is admin', async () => {
     const adminMeta = { workingDirectory: '/tmp', bot: 'admin' };
-    const result = handleCommand(channelId, '/provider add ollama', sessionInfo, prefs, adminMeta, [], undefined, null, providers);
+    const result = await handleCommand(channelId, '/provider add ollama', sessionInfo, prefs, adminMeta, [], undefined, null, providers);
     expect(result.handled).toBe(true);
     expect(result.response).toContain('I can help');
     expect(result.response).not.toContain('Ask the');
   });
 
-  it('guides user to config.json for remove', () => {
-    const result = handleCommand(channelId, '/provider remove azure-prod', sessionInfo, prefs, meta, [], undefined, null, providers);
+  it('guides user to config.json for remove', async () => {
+    const result = await handleCommand(channelId, '/provider remove azure-prod', sessionInfo, prefs, meta, [], undefined, null, providers);
     expect(result.handled).toBe(true);
     expect(result.response).toContain('config.json');
   });
 
-  it('guides user to config.json for delete', () => {
-    const result = handleCommand(channelId, '/provider delete azure-prod', sessionInfo, prefs, meta, [], undefined, null, providers);
+  it('guides user to config.json for delete', async () => {
+    const result = await handleCommand(channelId, '/provider delete azure-prod', sessionInfo, prefs, meta, [], undefined, null, providers);
     expect(result.handled).toBe(true);
     expect(result.response).toContain('config.json');
   });
@@ -119,8 +119,8 @@ describe('/provider add|remove', () => {
 // --- /provider unknown subcommand ---
 
 describe('/provider unknown subcommand', () => {
-  it('shows usage for unknown subcommand', () => {
-    const result = handleCommand(channelId, '/provider foo', sessionInfo, prefs, meta, [], undefined, null, providers);
+  it('shows usage for unknown subcommand', async () => {
+    const result = await handleCommand(channelId, '/provider foo', sessionInfo, prefs, meta, [], undefined, null, providers);
     expect(result.handled).toBe(true);
     expect(result.response).toContain('Unknown subcommand');
     expect(result.response).toContain('/provider test');

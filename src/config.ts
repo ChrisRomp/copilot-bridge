@@ -530,13 +530,13 @@ export function getInterAgentConfig(): InterAgentConfig {
   return config.interAgent ?? { enabled: false };
 }
 
-export function getChannelConfig(channelId: string): ChannelConfig & { permissionMode: string } {
+export async function getChannelConfig(channelId: string): Promise<ChannelConfig & { permissionMode: string }> {
   const config = getConfig();
   let channel = config.channels.find(c => c.id === channelId);
 
   // Fall back to dynamic channels from SQLite
   if (!channel) {
-    const dyn = getDynamicChannel(channelId);
+    const dyn = await getDynamicChannel(channelId);
     if (dyn) {
       channel = {
         id: dyn.channelId,
@@ -557,7 +557,7 @@ export function getChannelConfig(channelId: string): ChannelConfig & { permissio
   if (!channel) throw new Error(`No config found for channel "${channelId}"`);
   
   // Resolve agent: channel-level overrides bot-level default
-  const botConfig = getChannelBotConfig(channelId);
+  const botConfig = await getChannelBotConfig(channelId);
   const resolvedAgent = channel.agent !== undefined ? channel.agent
     : botConfig?.agent !== undefined ? botConfig.agent
     : config.defaults.agent;
@@ -574,10 +574,10 @@ export function getChannelConfig(channelId: string): ChannelConfig & { permissio
 }
 
 /** Check if a channel ID is in our configured channels list (static or dynamic) */
-export function isConfiguredChannel(channelId: string): boolean {
+export async function isConfiguredChannel(channelId: string): Promise<boolean> {
   const config = getConfig();
   if (config.channels.some(c => c.id === channelId)) return true;
-  return getDynamicChannel(channelId) !== null;
+  return (await getDynamicChannel(channelId)) !== null;
 }
 
 /**
@@ -605,13 +605,13 @@ export function markChannelAsDM(channelId: string): void {
  * Get the resolved bot token for a channel.
  * Supports both single-bot (botToken) and multi-bot (bots map) configs.
  */
-export function getChannelBotToken(channelId: string): string {
+export async function getChannelBotToken(channelId: string): Promise<string> {
   const config = getConfig();
   let channel: { platform: string; bot?: string } | undefined = config.channels.find(c => c.id === channelId);
 
   // Fall back to dynamic channels
   if (!channel) {
-    const dyn = getDynamicChannel(channelId);
+    const dyn = await getDynamicChannel(channelId);
     if (dyn) channel = { platform: dyn.platform, bot: dyn.bot };
   }
 
@@ -631,12 +631,12 @@ export function getChannelBotToken(channelId: string): string {
 }
 
 /** Get the BotConfig for a channel (if multi-bot). */
-export function getChannelBotConfig(channelId: string): BotConfig | null {
+export async function getChannelBotConfig(channelId: string): Promise<BotConfig | null> {
   const config = getConfig();
   let channel: { platform: string; bot?: string } | undefined = config.channels.find(c => c.id === channelId);
 
   if (!channel) {
-    const dyn = getDynamicChannel(channelId);
+    const dyn = await getDynamicChannel(channelId);
     if (dyn) channel = { platform: dyn.platform, bot: dyn.bot };
   }
 
@@ -704,12 +704,12 @@ export function getAdminBotName(platformName: string): string | null {
 }
 
 /** Get the bot name a channel uses. */
-export function getChannelBotName(channelId: string): string {
+export async function getChannelBotName(channelId: string): Promise<string> {
   const config = getConfig();
   let channel: { platform: string; bot?: string } | undefined = config.channels.find(c => c.id === channelId);
 
   if (!channel) {
-    const dyn = getDynamicChannel(channelId);
+    const dyn = await getDynamicChannel(channelId);
     if (dyn) channel = { platform: dyn.platform, bot: dyn.bot };
   }
 
