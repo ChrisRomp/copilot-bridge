@@ -83,6 +83,9 @@ export function getStore(): StateStore {
 // ---------------------------------------------------------------------------
 
 // -- Sessions ---------------------------------------------------------------
+export async function withTransaction<T>(fn: () => Promise<T>): Promise<T> {
+  return store().withTransaction(fn);
+}
 export async function getChannelSession(channelId: string) {
   return store().getChannelSession(channelId);
 }

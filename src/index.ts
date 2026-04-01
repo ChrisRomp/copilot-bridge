@@ -427,7 +427,7 @@ async function main(): Promise<void> {
       }
       const customStore: StateStore = new StoreClass(config.database.options);
       // Validate required StateStore methods beyond just initialize()
-      const required = ['initialize', 'close', 'ping', 'getChannelSession', 'setChannelPrefs', 'checkPermission', 'getChannelPrefs'];
+      const required = ['initialize', 'close', 'ping', 'withTransaction', 'getChannelSession', 'setChannelPrefs', 'checkPermission', 'getChannelPrefs'];
       const missing = required.filter(m => typeof (customStore as any)[m] !== 'function');
       if (missing.length > 0) {
         throw new Error(`Custom store missing required methods: ${missing.join(', ')}`);

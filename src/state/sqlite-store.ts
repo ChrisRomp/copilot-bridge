@@ -340,6 +340,19 @@ export class SqliteStateStore implements StateStore {
     }
   }
 
+  async withTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    const db = this.getDb();
+    db.exec('BEGIN');
+    try {
+      const result = await fn();
+      db.exec('COMMIT');
+      return result;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // -- Sessions -------------------------------------------------------------
 
   async getChannelSession(channelId: string): Promise<string | null> {

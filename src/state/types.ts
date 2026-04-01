@@ -117,6 +117,9 @@ export interface StateStore {
   /** Return `true` if the backing store is reachable. */
   ping(): Promise<boolean>;
 
+  /** Run a set of operations atomically. Implementations handle isolation internally. */
+  withTransaction<T>(fn: () => Promise<T>): Promise<T>;
+
   // -- Sessions --------------------------------------------------------------
 
   /** Get the active Copilot session ID for a channel, or `null`. */
