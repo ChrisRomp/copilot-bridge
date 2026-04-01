@@ -1173,6 +1173,11 @@ export async function getTaskHistory(channelId: string, limit = 20): Promise<Tas
 // --- Cleanup ---
 
 export async function closeDb(): Promise<void> {
-  _db?.close();
-  _db = null;
+  try {
+    _db?.close();
+  } catch (err) {
+    log.warn('Failed to close database cleanly:', err);
+  } finally {
+    _db = null;
+  }
 }

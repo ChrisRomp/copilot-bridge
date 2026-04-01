@@ -656,7 +656,7 @@ async function main(): Promise<void> {
       await streaming.cleanup();
     }
     await bridge.stop();
-    await closeDb();
+    try { await closeDb(); } catch (err) { log.warn('Failed to close database during shutdown:', err); }
     log.info('Goodbye.');
     process.exit(0);
   };
@@ -2413,8 +2413,12 @@ async function handleSessionEvent(
           activeStreams.delete(channelId);
         }
         // Revert yolo if it was temporarily enabled for plan implementation
-        if (await sessionManager.revertYoloIfNeeded(channelId)) {
-          log.info(`Reverted yolo state on idle for ${channelId.slice(0, 8)}...`);
+        try {
+          if (await sessionManager.revertYoloIfNeeded(channelId)) {
+            log.info(`Reverted yolo state on idle for ${channelId.slice(0, 8)}...`);
+          }
+        } catch (err) {
+          log.warn(`Failed to revert yolo state on idle for ${channelId.slice(0, 8)}...:`, err);
         }
         // Clean up temp files from downloaded attachments
         void cleanupTempFiles(channelId).catch(() => { /* best-effort */ });
@@ -2497,6 +2501,6 @@ async function postRestartNotices(): Promise<void> {
 // Start the bridge
 main().catch(async (err) => {
   log.error('Fatal error:', err);
-  await closeDb();
+  try { await closeDb(); } catch { /* best-effort */ }
   process.exit(1);
 });

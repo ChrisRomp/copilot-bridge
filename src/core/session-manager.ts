@@ -1395,8 +1395,13 @@ export class SessionManager {
     const previous = this.yoloPreviousState.get(channelId);
     if (previous === undefined) return false;
     this.yoloPreviousState.delete(channelId);
-    await setChannelPrefs(channelId, { permissionMode: previous });
-    return true;
+    try {
+      await setChannelPrefs(channelId, { permissionMode: previous });
+      return true;
+    } catch (err) {
+      log.warn(`Failed to revert yolo permissionMode for ${channelId.slice(0, 8)}...:`, err);
+      return false;
+    }
   }
 
   /** Debounced plan change handler — calls callback after debounce window. */
