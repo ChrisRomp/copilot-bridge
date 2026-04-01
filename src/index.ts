@@ -421,12 +421,17 @@ async function main(): Promise<void> {
         ? pathToFileURL(modulePath).href
         : modulePath;
       const mod = await import(moduleSpecifier);
-      const StoreClass = mod.default ?? mod.StateStore ?? mod;
-      if (typeof StoreClass !== 'function') {
-        throw new Error(`Module does not export a constructor (got ${typeof StoreClass})`);
+      const storeExport = mod.default ?? mod.StateStore ?? mod;
+      let customStore: StateStore;
+      if (typeof storeExport === 'function') {
+        customStore = new storeExport(config.database.options);
+      } else if (typeof storeExport === 'object' && storeExport !== null) {
+        // Accept a pre-constructed instance
+        customStore = storeExport as StateStore;
+      } else {
+        throw new Error(`Module does not export a constructor or StateStore instance (got ${typeof storeExport})`);
       }
-      const customStore: StateStore = new StoreClass(config.database.options);
-      // Validate required StateStore methods beyond just initialize()
+      // Validate required StateStore methods
       const required = ['initialize', 'close', 'ping', 'withTransaction', 'getChannelSession', 'setChannelPrefs', 'checkPermission', 'getChannelPrefs'];
       const missing = required.filter(m => typeof (customStore as any)[m] !== 'function');
       if (missing.length > 0) {
