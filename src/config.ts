@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgentConfig, AccessConfig, BridgeProviderConfig, LogRotationConfig } from './types.js';
+import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgentConfig, AccessConfig, BridgeProviderConfig, LogRotationConfig, DatabaseConfig } from './types.js';
 import type { SDKProviderConfig } from './core/bridge.js';
 import { getDynamicChannel } from './state/store.js';
 import { createLogger } from './logger.js';
@@ -258,7 +258,10 @@ function validateAndNormalize(raw: any): AppConfig {
     interAgent: raw.interAgent,
     providers: raw.providers,
     telemetry: raw.telemetry,
-    database: raw.database,
+    database: raw.database && typeof raw.database === 'object' ? {
+      module: typeof raw.database.module === 'string' ? raw.database.module : undefined,
+      options: raw.database.options && typeof raw.database.options === 'object' ? raw.database.options : undefined,
+    } as DatabaseConfig : undefined,
   };
 }
 

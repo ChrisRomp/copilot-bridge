@@ -17,6 +17,7 @@ import { enterQuietMode, exitQuietMode, isQuiet } from './core/quiet-mode.js';
 import { createLogger, setLogLevel, initLogFile } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig, DatabaseConfig } from './types.js';
 
@@ -415,7 +416,11 @@ async function main(): Promise<void> {
       const modulePath = config.database.module.startsWith('.')
         ? path.resolve(process.cwd(), config.database.module)
         : config.database.module;
-      const mod = await import(modulePath);
+      // Use file:// URL for absolute paths (required by ESM on Windows)
+      const moduleSpecifier = path.isAbsolute(modulePath)
+        ? pathToFileURL(modulePath).href
+        : modulePath;
+      const mod = await import(moduleSpecifier);
       const StoreClass = mod.default ?? mod.StateStore ?? mod;
       if (typeof StoreClass !== 'function') {
         throw new Error(`Module does not export a constructor (got ${typeof StoreClass})`);

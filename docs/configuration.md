@@ -451,7 +451,7 @@ By default, the bridge uses SQLite at `~/.copilot-bridge/state.db`. The state la
 }
 ```
 
-- **`module`** — Path to a JS module. Must export a class (default export or named) that implements `StateStore` from `src/state/types.ts`.
+- **`module`** — Path to a JS module. Must export a class (default export, named `StateStore` export, or the module itself) that implements the `StateStore` interface. See [StateStore interface](../src/state/types.ts) for the contract.
 - **`options`** — Arbitrary object passed to the custom store's constructor.
 
 When `database` is omitted (the default), the built-in `SqliteStateStore` is used with no additional configuration.

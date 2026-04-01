@@ -109,7 +109,7 @@ export interface AppConfig {
 }
 
 export interface DatabaseConfig {
-  /** Path to a JS/TS module exporting a StateStore class as its default export. */
+  /** Path to a JS/TS module that provides a StateStore implementation (default export, named `StateStore` export, or the module object itself). */
   module: string;
   /** Arbitrary options passed to the custom store constructor. */
   options?: Record<string, unknown>;
