@@ -105,6 +105,14 @@ export interface AppConfig {
   interAgent?: InterAgentConfig;
   providers?: Record<string, BridgeProviderConfig>;
   telemetry?: BridgeTelemetryConfig;
+  database?: DatabaseConfig;
+}
+
+export interface DatabaseConfig {
+  /** Path to a JS/TS module that provides a StateStore implementation (default export, named `StateStore` export, or the module object itself). */
+  module: string;
+  /** Arbitrary options passed to the custom store constructor. */
+  options?: Record<string, unknown>;
 }
 
 // Inter-agent communication config

@@ -29,7 +29,9 @@ src/
 │       ├── adapter.ts          # Mattermost WebSocket + REST adapter
 │       └── streaming.ts        # Edit-in-place streaming with throttle
 └── state/
-    └── store.ts                # SQLite persistence (sessions, prefs, permissions)
+    ├── types.ts              # StateStore interface + shared data types
+    ├── sqlite-store.ts       # SqliteStateStore (built-in default backend)
+    └── store.ts              # Thin facade — delegates to active StateStore
 ```
 
 ## Message flow
@@ -75,7 +77,9 @@ Optional methods:
 
 ## Persistence
 
-SQLite database at `~/.copilot-bridge/state.db` (WAL mode) via `src/state/store.ts`:
+The state layer uses a pluggable `StateStore` interface (`src/state/types.ts`). The built-in default is `SqliteStateStore` (`src/state/sqlite-store.ts`), which uses SQLite at `~/.copilot-bridge/state.db` (WAL mode). `src/state/store.ts` is a thin facade — callers import from it unchanged while the backing implementation can be swapped via `database.module` in config.
+
+Tables managed by the default SQLite backend:
 
 - **channel_sessions** — Maps channels to active Copilot session IDs
 - **channel_prefs** — Per-channel preferences (model, agent, verbose, trigger mode, reasoning effort, etc.)

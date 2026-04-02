@@ -120,7 +120,7 @@ Use `createLogger(tag)` from `src/logger.ts`. Tags identify the subsystem (e.g.,
 
 ### State Persistence
 
-SQLite database at `~/.copilot-bridge/state.db` via `src/state/store.ts`. Uses WAL mode. Stores channel sessions, preferences, and permission rules.
+Pluggable state store via the `StateStore` interface (`src/state/types.ts`). The built-in default is `SqliteStateStore` (`src/state/sqlite-store.ts`), which uses SQLite at `~/.copilot-bridge/state.db` in WAL mode. `src/state/store.ts` is a thin facade that delegates to the active backend — all callers import from `store.ts` unchanged. Custom backends (Postgres, etc.) can be loaded via the `database.module` config option.
 
 ### Filing Issues
 

@@ -6,7 +6,8 @@ import { formatEvent, formatPermissionRequest, formatUserInputRequest } from './
 import { WorkspaceWatcher, initWorkspace, getWorkspacePath } from './core/workspace-manager.js';
 import { MattermostAdapter } from './channels/mattermost/adapter.js';
 import { StreamingHandler } from './channels/mattermost/streaming.js';
-import { getChannelPrefs, setChannelPrefs, getAllChannelSessions, closeDb, listPermissionRulesForScope, removePermissionRule, clearPermissionRules, getTaskHistory } from './state/store.js';
+import { initStore, getChannelPrefs, setChannelPrefs, getAllChannelSessions, closeDb, listPermissionRulesForScope, removePermissionRule, clearPermissionRules, getTaskHistory } from './state/store.js';
+import type { StateStore } from './state/types.js';
 import { extractThreadRequest, resolveThreadRoot } from './core/thread-utils.js';
 import { initScheduler, stopAll as stopScheduler, listJobs, removeJob, pauseJob, resumeJob, formatInTimezone, describeCron } from './core/scheduler.js';
 import { markBusy, markIdle, markIdleImmediate, isBusy, waitForChannelIdle, cancelIdleDebounce } from './core/channel-idle.js';
@@ -16,8 +17,9 @@ import { enterQuietMode, exitQuietMode, isQuiet } from './core/quiet-mode.js';
 import { createLogger, setLogLevel, initLogFile } from './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import os from 'node:os';
-import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig } from './types.js';
+import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig, DatabaseConfig } from './types.js';
 
 const log = createLogger('bridge');
 
@@ -405,6 +407,45 @@ async function main(): Promise<void> {
     }
   });
   configWatcher.start();
+
+  // Initialize state store (must happen before any DB access)
+  if (config.database?.module) {
+    try {
+      log.info(`Loading custom state store from ${config.database.module}...`);
+      // Resolve relative paths against CWD, not the dist/ directory
+      const modulePath = config.database.module.startsWith('.')
+        ? path.resolve(process.cwd(), config.database.module)
+        : config.database.module;
+      // Use file:// URL for absolute paths (required by ESM on Windows)
+      const moduleSpecifier = path.isAbsolute(modulePath)
+        ? pathToFileURL(modulePath).href
+        : modulePath;
+      const mod = await import(moduleSpecifier);
+      const storeExport = mod.default ?? mod.StateStore ?? mod;
+      let customStore: StateStore;
+      if (typeof storeExport === 'function') {
+        customStore = new storeExport(config.database.options);
+      } else if (typeof storeExport === 'object' && storeExport !== null) {
+        // Accept a pre-constructed instance
+        customStore = storeExport as StateStore;
+      } else {
+        throw new Error(`Module does not export a constructor or StateStore instance (got ${typeof storeExport})`);
+      }
+      // Validate required StateStore methods
+      const required = ['initialize', 'close', 'ping', 'withTransaction', 'getChannelSession', 'setChannelPrefs', 'checkPermission', 'getChannelPrefs'];
+      const missing = required.filter(m => typeof (customStore as any)[m] !== 'function');
+      if (missing.length > 0) {
+        throw new Error(`Custom store missing required methods: ${missing.join(', ')}`);
+      }
+      await initStore(customStore);
+      log.info(`Custom state store loaded from ${config.database.module}`);
+    } catch (err) {
+      log.error(`Failed to load custom state store from ${config.database.module}:`, err);
+      process.exit(1);
+    }
+  } else {
+    await initStore();
+  }
 
   // Initialize Copilot SDK bridge
   const { telemetry: sdkTelemetry, env: telemetryEnv } = resolveTelemetryConfig(config);
@@ -2501,6 +2542,6 @@ async function postRestartNotices(): Promise<void> {
 // Start the bridge
 main().catch(async (err) => {
   log.error('Fatal error:', err);
-  try { await closeDb(); } catch { /* best-effort */ }
+  try { await closeDb(); } catch (err) { log.warn('Failed to close database during fatal error handler:', err); }
   process.exit(1);
 });
