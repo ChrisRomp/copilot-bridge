@@ -142,6 +142,7 @@ Commands are intercepted by the bridge before reaching the Copilot session. The 
 | Command | Description |
 |---------|-------------|
 | \`/status\` | Show session info, model, mode, context usage |
+| \`/config\` | Show effective channel config with source attribution |
 | \`/context\` | Show context window usage |
 | \`/verbose\` | Toggle verbose tool output |
 | \`/mcp\` | Show loaded MCP servers and their source |
