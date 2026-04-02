@@ -453,7 +453,7 @@ export async function resolveEffectiveConfig(
 
 /** Escape a string for safe inclusion in a markdown table cell. */
 function escapeTableCell(s: string): string {
-  return s.replace(/\|/g, '\\|').replace(/\n/g, ' ').replace(/`/g, "'");
+  return s.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, ' ').replace(/`/g, "'");
 }
 
 /**
