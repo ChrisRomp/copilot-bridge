@@ -772,8 +772,16 @@ describe('formatConfigTable', () => {
       { setting: 'reasoningEffort', value: '\u2014', source: '(not set)' },
     ];
     const output = formatConfigTable(fields, '#test', 'config.json');
-    // Unset values should show the em dash without backticks
     expect(output).toContain('| \u2014 |');
     expect(output).not.toContain('`\u2014`');
+  });
+
+  it('escapes pipe characters and newlines in values', () => {
+    const fields: ConfigField[] = [
+      { setting: 'test', value: 'a|b\nc', source: 'test' },
+    ];
+    const output = formatConfigTable(fields, '#test', 'config.json');
+    expect(output).not.toContain('| a|b');
+    expect(output).toContain('a\\|b c');
   });
 });

@@ -451,19 +451,25 @@ export async function resolveEffectiveConfig(
   return { fields, channelSource, channelName };
 }
 
+/** Escape a string for safe inclusion in a markdown table cell. */
+function escapeTableCell(s: string): string {
+  return s.replace(/\|/g, '\\|').replace(/\n/g, ' ').replace(/`/g, "'");
+}
+
 /**
  * Format the effective config as a markdown table for chat display.
  */
 export function formatConfigTable(fields: ConfigField[], channelName: string, channelSource: string): string {
   const lines = [
-    `\u2699\uFE0F **Channel Config** \u2014 ${channelName}`,
+    `\u2699\uFE0F **Channel Config** \u2014 ${escapeTableCell(channelName)}`,
     `Source: ${channelSource}`,
     '',
     '| Setting | Value | Source |',
     '|:--|:--|:--|',
   ];
   for (const f of fields) {
-    const val = f.value === '\u2014' ? '\u2014' : `\`${f.value}\``;
+    const escaped = escapeTableCell(f.value);
+    const val = f.value === '\u2014' ? '\u2014' : `\`${escaped}\``;
     lines.push(`| ${f.setting} | ${val} | ${f.source} |`);
   }
   return lines.join('\n');
