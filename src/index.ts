@@ -205,14 +205,14 @@ async function cleanupTempFiles(channelId: string): Promise<void> {
     for (const file of files) {
       try {
         fs.unlinkSync(path.join(tempDir, file));
-      } catch { /* best effort */ }
+      } catch (err) { log.debug(`Failed to remove temp file ${file}:`, err); }
     }
     // Remove the now-empty channel temp directory
-    try { fs.rmdirSync(tempDir); } catch { /* best effort */ }
+    try { fs.rmdirSync(tempDir); } catch (err) { log.debug(`Failed to remove temp dir ${tempDir}:`, err); }
     if (files.length > 0) {
       log.info(`Cleaned up ${files.length} temp file(s) for ${channelId.slice(0, 8)}...`);
     }
-  } catch { /* best effort */ }
+  } catch (err) { log.debug(`cleanupTempFiles(${channelId.slice(0, 8)}) failed:`, err); }
 }
 
 async function getAdapterForChannel(channelId: string): Promise<{ adapter: ChannelAdapter; streaming: StreamingHandler } | null> {
@@ -398,7 +398,7 @@ async function main(): Promise<void> {
           for (const ch of getConfig().channels) {
             if (ch.bot === botName && !ch.isDM) {
               const warnings = result.restartNeeded.map(r => `  ⚠️ ${r}`).join('\n');
-              adapter.sendMessage(ch.id, `**Config reloaded** with changes that need a restart:\n${warnings}`).catch(() => {});
+              adapter.sendMessage(ch.id, `**Config reloaded** with changes that need a restart:\n${warnings}`).catch((err) => { log.debug('Failed to send config reload notification:', err); });
               break; // one admin channel is enough
             }
           }
@@ -660,7 +660,7 @@ async function main(): Promise<void> {
           const failedStream = activeStreams.get(channelId);
           if (failedStream) {
             const r = await getAdapterForChannel(channelId);
-            if (r) await r.streaming.cancelStream(failedStream, err?.message ?? 'Scheduled job failed').catch(() => {});
+            if (r) await r.streaming.cancelStream(failedStream, err?.message ?? 'Scheduled job failed').catch((e: any) => { log.debug('cancelStream failed:', e); });
             activeStreams.delete(channelId);
           }
           throw err;
@@ -866,7 +866,7 @@ async function handleMidTurnMessage(
       const effPrefs = await sessionManager.getEffectivePrefs(msg.channelId);
       let models: any[] | undefined;
       if (['model', 'models', 'status'].includes(parsed.command)) {
-        try { models = await sessionManager.listModels(); } catch { models = undefined; }
+        try { models = await sessionManager.listModels(); } catch (err) { log.warn('listModels failed (mid-turn):', err); models = undefined; }
       }
       const mcpInfo = undefined;
       const contextUsage = sessionManager.getContextUsage(msg.channelId);
@@ -915,7 +915,7 @@ async function handleMidTurnMessage(
   await sessionManager.sendMidTurn(msg.channelId, text, msg.userId);
 
   // Acknowledge with ⚡ reaction (best-effort)
-  try { adapter.addReaction?.(msg.postId, 'zap')?.catch(() => {}); } catch { /* best-effort */ }
+  try { adapter.addReaction?.(msg.postId, 'zap')?.catch((err: any) => { log.debug('addReaction failed:', err); }); } catch (err) { log.debug('addReaction threw:', err); }
 }
 
 /** Test BYOK provider connectivity by hitting its models endpoint. */
@@ -1076,7 +1076,8 @@ async function handleInboundMessage(
   if (parsed && ['model', 'models', 'status', 'reasoning'].includes(parsed.command)) {
     try {
       models = await sessionManager.listModels();
-    } catch {
+    } catch (err) {
+      log.warn('listModels failed:', err);
       // Check if the failure is an auth issue
       const auth = await sessionManager.getAuthStatus();
       if (!auth.isAuthenticated) {
@@ -1240,7 +1241,7 @@ async function handleInboundMessage(
                   { threadRootId: threadRoot });
               }
             }
-          } catch { /* plan surfacing is best-effort */ }
+          } catch (planErr) { log.debug('Plan surfacing failed (best-effort):', planErr); /* plan surfacing is best-effort */ }
         } catch (err: any) {
           await adapter.updateMessage(msg.channelId, resumeAck, `❌ Failed to resume session: ${err?.message ?? 'unknown error'}`);
         }
@@ -1557,14 +1558,14 @@ async function handleInboundMessage(
             await setChannelPrefs(msg.channelId, { disabledSkills: allNames });
             // Apply via RPC for each skill
             for (const name of allNames) {
-              try { await sessionManager.toggleSkillRpc(msg.channelId, name, 'disable'); } catch { /* best-effort */ }
+              try { await sessionManager.toggleSkillRpc(msg.channelId, name, 'disable'); } catch (err) { log.debug(`toggleSkillRpc disable ${name} failed:`, err); }
             }
             await adapter.sendMessage(msg.channelId, `🔴 Disabled all ${allNames.length} skills.`, { threadRootId: threadRoot });
           } else {
             const allNames = [...currentDisabled];
             await setChannelPrefs(msg.channelId, { disabledSkills: [] });
             for (const name of allNames) {
-              try { await sessionManager.toggleSkillRpc(msg.channelId, name, 'enable'); } catch { /* best-effort */ }
+              try { await sessionManager.toggleSkillRpc(msg.channelId, name, 'enable'); } catch (err) { log.debug(`toggleSkillRpc enable ${name} failed:`, err); }
             }
             await adapter.sendMessage(msg.channelId, `🟢 Enabled all skills.`, { threadRootId: threadRoot });
           }
@@ -1601,7 +1602,7 @@ async function handleInboundMessage(
           await setChannelPrefs(msg.channelId, { disabledSkills: [...currentDisabled] });
           // Apply each toggle via RPC (best-effort — pref is already persisted)
           for (const name of matched) {
-            try { await sessionManager.toggleSkillRpc(msg.channelId, name, toggleAction); } catch { /* best-effort */ }
+            try { await sessionManager.toggleSkillRpc(msg.channelId, name, toggleAction); } catch (err) { log.debug(`toggleSkillRpc ${toggleAction} ${name} failed:`, err); }
           }
         }
 
@@ -1891,7 +1892,7 @@ async function handleInboundMessage(
 
     console.log(`[bridge] Forwarding to Copilot: "${text}"`);
     log.info(`Forwarding to Copilot: "${text.slice(0, 100)}"`);
-    adapter.setTyping(msg.channelId).catch(() => {});
+    adapter.setTyping(msg.channelId).catch((err: any) => { log.debug("setTyping failed:", err); });
 
     // Atomically swap streams via eventLocks to prevent event interleaving
     const threadRoot = resolveThreadRoot(msg, threadRequested, channelConfig);
@@ -2288,7 +2289,7 @@ async function handleSessionEvent(
           } else if (formatted.content) {
             streaming.appendDelta(streamKey, formatted.content);
           }
-          adapter.setTyping(channelId).catch(() => {});
+          adapter.setTyping(channelId).catch((err: any) => { log.debug("setTyping failed:", err); });
           break;
         }
       }
@@ -2311,7 +2312,7 @@ async function handleSessionEvent(
           streaming.appendDelta(streamKey, formatted.content);
         }
       }
-      adapter.setTyping(channelId).catch(() => {});
+      adapter.setTyping(channelId).catch((err: any) => { log.debug("setTyping failed:", err); });
       break;
     }
     case 'tool_start':
@@ -2462,7 +2463,7 @@ async function handleSessionEvent(
           log.warn(`Failed to revert yolo state on idle for ${channelId.slice(0, 8)}...:`, err);
         }
         // Clean up temp files from downloaded attachments
-        void cleanupTempFiles(channelId).catch(() => { /* best-effort */ });
+        void cleanupTempFiles(channelId).catch((err) => { log.debug('cleanupTempFiles failed:', err); });
       }
       break;
   }

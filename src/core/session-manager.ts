@@ -63,7 +63,10 @@ export function parseEnvFile(filePath: string): Record<string, string> {
       if (key) vars[key] = value;
     }
     return vars;
-  } catch {
+  } catch (err: any) {
+    if (err?.code !== 'ENOENT') {
+      log.warn(`Failed to parse .env file ${filePath}:`, err);
+    }
     return {};
   }
 }
@@ -158,7 +161,7 @@ function loadMcpServers(): Record<string, any> {
             walk(full);
           }
         }
-      } catch { /* permission errors etc */ }
+      } catch (err) { log.debug('FS walk permission error:', err); }
     };
     walk(pluginsDir);
   }
@@ -345,7 +348,7 @@ function discoverSkillDirectories(workingDirectory: string): string[] {
               walk(full, depth + 1);
             }
           }
-        } catch { /* permission errors etc */ }
+        } catch (err) { log.debug('Skill dir walk permission error:', err); }
       };
       walk(pluginsDir, 0);
     }
@@ -360,7 +363,7 @@ function discoverSkillDirectories(workingDirectory: string): string[] {
           dirs.push(path.join(skillsRoot, entry.name));
         }
       }
-    } catch { /* permission errors etc */ }
+    } catch (err) { log.debug('Skill root readdir failed:', err); }
   }
 
   if (dirs.length > 0) {
@@ -438,6 +441,15 @@ export class SessionManager {
     this.bridge = bridge;
     this.mcpServers = loadMcpServers();
     ensureWorkspacesDir();
+  }
+
+  /** Best-effort session destroy with logging. */
+  private async safeDestroySession(sessionId: string): Promise<void> {
+    try {
+      await this.bridge.destroySession(sessionId);
+    } catch (err) {
+      log.debug(`destroySession(${sessionId.slice(0, 8)}) failed (best-effort):`, err);
+    }
   }
 
   /** Resolve hooks for a workspace, caching the result. */
@@ -594,7 +606,7 @@ export class SessionManager {
           const content = fs.readFileSync(skillFile, 'utf8');
           const descMatch = content.match(/^description:\s*["']?(.+?)["']?\s*$/m);
           if (descMatch) description = descMatch[1];
-        } catch { /* skip */ }
+        } catch (err) { log.debug(`Failed to read SKILL.md for ${name}:`, err); }
       }
 
       skills.push({ name, description, source, pending: sessionDirs ? !sessionDirs.has(dir) : undefined, disabled: disabledSet.has(name) });
@@ -657,7 +669,7 @@ export class SessionManager {
       if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
       try {
         await this.bridge.destroySession(existingId);
-      } catch { /* best-effort */ }
+      } catch (err) { log.debug(`destroySession(${existingId.slice(0, 8)}) failed (best-effort):`, err); }
       this.channelSessions.delete(channelId);
       this.sessionChannels.delete(existingId);
       this.contextUsage.delete(channelId);
@@ -686,7 +698,7 @@ export class SessionManager {
     // in-memory state (including MCP connections), allowing a clean re-init.
     const unsub = this.sessionUnsubscribes.get(existingId);
     if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
-    try { await this.bridge.destroySession(existingId); } catch { /* best-effort */ }
+    await this.safeDestroySession(existingId);
 
     // Re-read global MCP servers so /reload picks up user-level config changes
     this.mcpServers = loadMcpServers();
@@ -733,7 +745,7 @@ export class SessionManager {
     if (existingId) {
       const unsub = this.sessionUnsubscribes.get(existingId);
       if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
-      try { await this.bridge.destroySession(existingId); } catch { /* best-effort */ }
+      await this.safeDestroySession(existingId);
       this.channelSessions.delete(channelId);
       this.sessionChannels.delete(existingId);
       this.contextUsage.delete(channelId);
@@ -751,7 +763,7 @@ export class SessionManager {
     if (otherChannel) {
       const unsub = this.sessionUnsubscribes.get(targetSessionId);
       if (unsub) { unsub(); this.sessionUnsubscribes.delete(targetSessionId); }
-      try { await this.bridge.destroySession(targetSessionId); } catch { /* best-effort */ }
+      await this.safeDestroySession(targetSessionId);
       this.channelSessions.delete(otherChannel);
       this.sessionChannels.delete(targetSessionId);
       this.contextUsage.delete(otherChannel);
@@ -805,7 +817,7 @@ export class SessionManager {
         try {
           const models = await this.bridge.listModels(getConfig().providers);
           availableModels = models.map(m => m.id);
-        } catch { /* best-effort */ }
+        } catch (err) { log.debug('listModels for fallback chain failed:', err); }
 
         const byokPrefixes = Object.keys(getConfig().providers ?? {});
         const chain = buildFallbackChain(prefs.model, availableModels, configFallbacks, byokPrefixes);
@@ -845,7 +857,7 @@ export class SessionManager {
         log.info(`Attempting to re-attach session ${sessionId}...`);
         const unsub = this.sessionUnsubscribes.get(sessionId);
         if (unsub) { unsub(); this.sessionUnsubscribes.delete(sessionId); }
-        try { await this.bridge.destroySession(sessionId); } catch { /* best-effort */ }
+        await this.safeDestroySession(sessionId);
         await this.attachSession(channelId, sessionId);
         const reconnected = this.bridge.getSession(sessionId);
         if (reconnected) {
@@ -918,7 +930,7 @@ export class SessionManager {
       try {
         const unsub = this.sessionUnsubscribes.get(sessionId);
         if (unsub) { unsub(); this.sessionUnsubscribes.delete(sessionId); }
-        try { await this.bridge.destroySession(sessionId); } catch { /* best-effort */ }
+        await this.safeDestroySession(sessionId);
         await this.attachSession(channelId, sessionId);
       } catch (attachErr: any) {
         log.warn(`Re-attach failed for ${sessionId}:`, attachErr?.message ?? attachErr);
@@ -1060,7 +1072,7 @@ export class SessionManager {
       if (prefs.model === model) {
         await this.cacheContextWindowTokens(channelId, model, models);
       }
-    }).catch(() => { /* best-effort */ });
+    }).catch((err) => { log.debug("listModels (context cache) failed:", err); });
   }
 
   /** Check if two models on the same provider have different wireApi settings. */
@@ -1125,7 +1137,8 @@ export class SessionManager {
     try {
       const models = await this.bridge.listModels(getConfig().providers);
       return models.find(m => m.id === modelId) ?? null;
-    } catch {
+    } catch (err) {
+      log.warn('getModelInfo: listModels failed:', err);
       return null;
     }
   }
@@ -1142,7 +1155,7 @@ export class SessionManager {
       try {
         const result = await this.withSessionRetry(channelId, (sid) => this.bridge.getSessionMode(sid), false);
         return result.mode;
-      } catch { /* fall through to prefs */ }
+      } catch (err) { log.debug(`getSessionMode(${channelId.slice(0, 8)}) failed, falling through to prefs:`, err); }
     }
     const prefs = await getChannelPrefs(channelId);
     return prefs?.sessionMode ?? 'interactive';
@@ -1163,7 +1176,8 @@ export class SessionManager {
     try {
       const result = await this.withSessionRetry(channelId, (sid) => this.bridge.readPlan(sid), false);
       return { exists: result.exists, content: result.content };
-    } catch {
+    } catch (err) {
+      log.warn(`readPlan failed for ${channelId.slice(0, 8)}:`, err);
       return { exists: false, content: null };
     }
   }
@@ -1175,7 +1189,8 @@ export class SessionManager {
     try {
       await this.withSessionRetry(channelId, (sid) => this.bridge.deletePlan(sid), false);
       return true;
-    } catch {
+    } catch (err) {
+      log.warn(`deletePlan failed for ${channelId.slice(0, 8)}:`, err);
       return false;
     }
   }
@@ -1217,7 +1232,7 @@ export class SessionManager {
     try {
       const models = await this.bridge.listModels(getConfig().providers);
       availableIds = models.map(m => m.id);
-    } catch { /* best-effort */ }
+    } catch (err) { log.debug('listModels for plan summarization failed:', err); }
 
     let model: string | undefined;
     for (const candidate of SessionManager.SUMMARIZER_MODELS) {
@@ -1244,7 +1259,7 @@ export class SessionManager {
       return null;
     } finally {
       if (session) {
-        try { await this.bridge.destroySession(session.sessionId); } catch { /* best-effort */ }
+        await this.safeDestroySession(session.sessionId);
       }
     }
   }
@@ -1262,7 +1277,7 @@ export class SessionManager {
     try {
       const mode = await this.getSessionMode(channelId);
       inPlanMode = mode === 'plan';
-    } catch { /* best-effort */ }
+    } catch (err) { log.debug(`getSessionMode for plan surfacing (${channelId.slice(0, 8)}) failed:`, err); }
 
     return { exists: true, summary, inPlanMode };
   }
@@ -1271,7 +1286,8 @@ export class SessionManager {
   async getAuthStatus(): Promise<{ isAuthenticated: boolean; statusMessage?: string; login?: string }> {
     try {
       return await this.bridge.getAuthStatus();
-    } catch {
+    } catch (err) {
+      log.warn('getAuthStatus failed:', err);
       return { isAuthenticated: false, statusMessage: 'Unable to check auth status' };
     }
   }
@@ -1571,8 +1587,8 @@ export class SessionManager {
     try {
       modelList = await this.bridge.listModels(getConfig().providers);
       availableModels = modelList.map(m => m.id);
-    } catch {
-      log.warn('Failed to fetch model list for fallback resolution');
+    } catch (err) {
+      log.warn('Failed to fetch model list for fallback resolution:', err);
     }
 
     const resolvedMcpServers = this.resolveMcpServers(workingDirectory);
@@ -1725,7 +1741,7 @@ export class SessionManager {
       if (currentPrefs.model === resumeModel) {
         await this.cacheContextWindowTokens(channelId, resumeModel, models);
       }
-    }).catch(() => { /* best-effort */ });
+    }).catch((err) => { log.debug("listModels (context cache) failed:", err); });
   }
 
   /**
@@ -1850,7 +1866,7 @@ export class SessionManager {
 
     } finally {
       if (session) {
-        try { await this.bridge.destroySession(session.sessionId); } catch { /* best-effort */ }
+        await this.safeDestroySession(session.sessionId);
       }
     }
   }
@@ -2115,7 +2131,8 @@ export class SessionManager {
             let realPath: string;
             try {
               realPath = fs.realpathSync(resolved);
-            } catch {
+            } catch (err) {
+              log.debug(`send_file: realpathSync failed for "${resolved}":`, err);
               return { content: 'File not found.' };
             }
             // Validate the real file path is within workspace or allowed paths
@@ -2164,7 +2181,8 @@ export class SessionManager {
             let realPath: string;
             try {
               realPath = fs.realpathSync(resolved);
-            } catch {
+            } catch (err) {
+              log.debug(`show_file: realpathSync failed for "${resolved}":`, err);
               return { content: 'File not found.' };
             }
             const allowed = [showWorkDir, ...showAllowPaths];
@@ -2187,7 +2205,8 @@ export class SessionManager {
               try {
                 content = execFileSync('git', ['diff', '--', realPath], { cwd: dir, encoding: 'utf-8', timeout: 5000 });
                 if (!content.trim()) content = '(no pending changes)';
-              } catch {
+              } catch (err) {
+                log.debug(`show_file: git diff failed for "${realPath}":`, err);
                 content = '(not a git repository or git diff failed)';
               }
               await adapter.sendMessage(channelId, `**${fileName}** (diff)\n\`\`\`\`diff\n${content}\n\`\`\`\``);
