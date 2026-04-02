@@ -1,6 +1,6 @@
 import { setChannelPrefs, getChannelPrefs, getGlobalSetting, setGlobalSetting, getDynamicChannel } from '../state/store.js';
 import { discoverAgentDefinitions, discoverAgentNames } from './inter-agent.js';
-import { isBotAdminAny, getConfig, getChannelBotConfig } from '../config.js';
+import { isBotAdminAny, getConfig, getChannelBotConfig, getChannelBotName } from '../config.js';
 import type { BridgeProviderConfig } from '../types.js';
 
 const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
@@ -384,10 +384,24 @@ export async function resolveEffectiveConfig(
   }
   fields.push({ setting: 'model', ...modelResolved });
 
-  // Agent: session active > prefs > channel > bot default > defaults
-  fields.push({ setting: 'agent', ...resolve('agent',
-    channelObj?.agent, botConfig?.agent, defaults.agent,
-    prefs?.agent, sessionInfo?.agent) });
+  // Agent: needs special handling because null is an explicit "deselect" value
+  // Matches session-manager.ts getEffectivePrefs() logic
+  let agentField: ConfigField;
+  if (sessionInfo?.agent !== undefined && sessionInfo.agent !== null) {
+    agentField = { setting: 'agent', value: sessionInfo.agent, source: 'session (active)' };
+  } else if (prefs?.agent !== undefined) {
+    // agent: null in prefs is an explicit deselect
+    agentField = { setting: 'agent', value: prefs.agent ?? '\u2014', source: 'channel prefs' };
+  } else if (channelObj?.agent !== undefined) {
+    agentField = { setting: 'agent', value: channelObj.agent ?? '\u2014', source: channelSource };
+  } else if (botConfig?.agent !== undefined) {
+    agentField = { setting: 'agent', value: botConfig.agent ?? '\u2014', source: 'bot default' };
+  } else if (defaults.agent !== undefined && defaults.agent !== null) {
+    agentField = { setting: 'agent', value: defaults.agent, source: 'defaults' };
+  } else {
+    agentField = { setting: 'agent', value: '\u2014', source: '(not set)' };
+  }
+  fields.push(agentField);
 
   // Trigger mode
   fields.push({ setting: 'triggerMode', ...resolve('triggerMode',
@@ -440,12 +454,13 @@ export async function resolveEffectiveConfig(
       : '(not set)',
   });
 
+  const resolvedBotName = channelMeta?.bot ?? await getChannelBotName(channelId);
   fields.push({
     setting: 'bot',
-    value: channelMeta?.bot ?? channelObj?.bot ?? 'default',
+    value: resolvedBotName,
     source: channelMeta?.bot ? 'runtime'
       : channelObj?.bot ? channelSource
-      : '(default)',
+      : 'platform default',
   });
 
   return { fields, channelSource, channelName };

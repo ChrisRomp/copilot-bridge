@@ -595,6 +595,7 @@ describe('/config', () => {
   beforeEach(() => {
     vi.spyOn(config, 'getConfig').mockReturnValue(mockConfig as any);
     vi.spyOn(config, 'getChannelBotConfig').mockResolvedValue(null);
+    vi.spyOn(config, 'getChannelBotName').mockResolvedValue('default');
     vi.spyOn(store, 'getDynamicChannel').mockResolvedValue(null);
     vi.spyOn(store, 'getChannelPrefs').mockResolvedValue(null);
   });
@@ -636,6 +637,7 @@ describe('resolveEffectiveConfig', () => {
   beforeEach(() => {
     vi.spyOn(config, 'getConfig').mockReturnValue(mockConfig as any);
     vi.spyOn(config, 'getChannelBotConfig').mockResolvedValue(null);
+    vi.spyOn(config, 'getChannelBotName').mockResolvedValue('default');
     vi.spyOn(store, 'getDynamicChannel').mockResolvedValue(null);
     vi.spyOn(store, 'getChannelPrefs').mockResolvedValue(null);
   });
@@ -751,6 +753,23 @@ describe('resolveEffectiveConfig', () => {
     const bot = result.fields.find(f => f.setting === 'bot');
     expect(ws?.source).toBe('runtime');
     expect(bot?.source).toBe('runtime');
+  });
+
+  it('agent: null in prefs is an explicit deselect', async () => {
+    vi.spyOn(store, 'getChannelPrefs').mockResolvedValue({ agent: null });
+    vi.spyOn(config, 'getChannelBotConfig').mockResolvedValue({ token: 'x', agent: 'bot-agent' });
+    const result = await resolveEffectiveConfig('ch1');
+    const agent = result.fields.find(f => f.setting === 'agent');
+    expect(agent?.value).toBe('\u2014');
+    expect(agent?.source).toBe('channel prefs');
+  });
+
+  it('resolves bot name via platform default', async () => {
+    vi.spyOn(config, 'getChannelBotName').mockResolvedValue('copilot');
+    const result = await resolveEffectiveConfig('ch1');
+    const bot = result.fields.find(f => f.setting === 'bot');
+    expect(bot?.value).toBe('copilot');
+    expect(bot?.source).toBe('platform default');
   });
 });
 
