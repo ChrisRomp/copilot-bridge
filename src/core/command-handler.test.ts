@@ -1,8 +1,23 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { handleCommand, parseCommand, type ModelInfo } from './command-handler.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { handleCommand, parseCommand, resolveEffectiveConfig, formatConfigTable, type ModelInfo, type ConfigField } from './command-handler.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import * as config from '../config.js';
+import * as store from '../state/store.js';
+
+const mockConfig = {
+  platforms: {},
+  channels: [],
+  defaults: {
+    model: 'claude-sonnet-4.5',
+    agent: null,
+    triggerMode: 'mention' as const,
+    threadedReplies: true,
+    verbose: false,
+    permissionMode: 'interactive' as const,
+  },
+};
 
 // --- parseCommand ---
 
@@ -571,5 +586,194 @@ describe('/skills command', () => {
     expect(result.handled).toBe(true);
     expect(result.action).toBe('skill_toggle');
     expect(result.payload).toEqual({ action: 'disable', targets: ['humanizer'] });
+  });
+});
+
+// --- /config ---
+
+describe('/config', () => {
+  beforeEach(() => {
+    vi.spyOn(config, 'getConfig').mockReturnValue(mockConfig as any);
+    vi.spyOn(config, 'getChannelBotConfig').mockResolvedValue(null);
+    vi.spyOn(store, 'getDynamicChannel').mockResolvedValue(null);
+    vi.spyOn(store, 'getChannelPrefs').mockResolvedValue(null);
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('returns handled with response', async () => {
+    const result = await handleCommand('ch1', '/config');
+    expect(result.handled).toBe(true);
+    expect(result.response).toBeDefined();
+    expect(result.response).toContain('Channel Config');
+  });
+
+  it('shows source attribution in table', async () => {
+    const result = await handleCommand('ch1', '/config');
+    expect(result.response).toContain('Source');
+    expect(result.response).toContain('model');
+    expect(result.response).toContain('defaults');
+  });
+
+  it('reflects session info when provided', async () => {
+    const sessionInfo = { sessionId: 'sess-123', model: 'claude-opus-4.6', agent: 'researcher' };
+    const result = await handleCommand('ch1', '/config', sessionInfo);
+    expect(result.response).toContain('claude-opus-4.6');
+    expect(result.response).toContain('researcher');
+    expect(result.response).toContain('session (active)');
+  });
+
+  it('shows channel meta when provided', async () => {
+    const meta = { workingDirectory: '/home/test/project', bot: 'mybot' };
+    const result = await handleCommand('ch1', '/config', undefined, undefined, meta);
+    expect(result.response).toContain('/home/test/project');
+    expect(result.response).toContain('mybot');
+  });
+});
+
+// --- resolveEffectiveConfig / formatConfigTable ---
+
+describe('resolveEffectiveConfig', () => {
+  beforeEach(() => {
+    vi.spyOn(config, 'getConfig').mockReturnValue(mockConfig as any);
+    vi.spyOn(config, 'getChannelBotConfig').mockResolvedValue(null);
+    vi.spyOn(store, 'getDynamicChannel').mockResolvedValue(null);
+    vi.spyOn(store, 'getChannelPrefs').mockResolvedValue(null);
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('returns fields array with settings', async () => {
+    const result = await resolveEffectiveConfig('ch1');
+    expect(result.fields.length).toBeGreaterThan(0);
+    const settingNames = result.fields.map(f => f.setting);
+    expect(settingNames).toContain('model');
+    expect(settingNames).toContain('agent');
+    expect(settingNames).toContain('triggerMode');
+    expect(settingNames).toContain('verbose');
+    expect(settingNames).toContain('permissionMode');
+  });
+
+  it('attributes defaults source when no overrides', async () => {
+    const result = await resolveEffectiveConfig('ch1');
+    const model = result.fields.find(f => f.setting === 'model');
+    expect(model?.source).toBe('defaults');
+    expect(model?.value).toBe('claude-sonnet-4.5');
+  });
+
+  it('session info overrides defaults for model and agent', async () => {
+    const result = await resolveEffectiveConfig('ch1',
+      { sessionId: 's1', model: 'test-model', agent: 'test-agent' });
+    const model = result.fields.find(f => f.setting === 'model');
+    const agent = result.fields.find(f => f.setting === 'agent');
+    expect(model?.value).toBe('test-model');
+    expect(model?.source).toBe('session (active)');
+    expect(agent?.value).toBe('test-agent');
+    expect(agent?.source).toBe('session (active)');
+  });
+
+  it('channel prefs override defaults', async () => {
+    vi.spyOn(store, 'getChannelPrefs').mockResolvedValue({ model: 'gpt-5.1', verbose: true });
+    const result = await resolveEffectiveConfig('ch1');
+    const model = result.fields.find(f => f.setting === 'model');
+    const verbose = result.fields.find(f => f.setting === 'verbose');
+    expect(model?.value).toBe('gpt-5.1');
+    expect(model?.source).toBe('channel prefs');
+    expect(verbose?.value).toBe('On');
+    expect(verbose?.source).toBe('channel prefs');
+  });
+
+  it('identifies static channel source', async () => {
+    vi.spyOn(config, 'getConfig').mockReturnValue({
+      ...mockConfig,
+      channels: [{ id: 'ch-static', platform: 'mm', name: 'test-channel', workingDirectory: '/tmp', triggerMode: 'all', threadedReplies: false, verbose: false, model: 'opus' }],
+    } as any);
+    const result = await resolveEffectiveConfig('ch-static');
+    expect(result.channelSource).toBe('config.json');
+    expect(result.channelName).toBe('test-channel');
+  });
+
+  it('identifies dynamic channel source', async () => {
+    vi.spyOn(store, 'getDynamicChannel').mockResolvedValue({
+      channelId: 'ch-dyn', platform: 'mm', name: 'dyn-channel',
+      workingDirectory: '/tmp', isDM: false, createdAt: '', updatedAt: '',
+    });
+    const result = await resolveEffectiveConfig('ch-dyn');
+    expect(result.channelSource).toBe('dynamic (SQLite)');
+  });
+
+  it('identifies DM auto-discovered source', async () => {
+    vi.spyOn(store, 'getDynamicChannel').mockResolvedValue({
+      channelId: 'ch-dm', platform: 'mm', name: 'dm-channel',
+      workingDirectory: '/tmp', isDM: true, createdAt: '', updatedAt: '',
+    });
+    const result = await resolveEffectiveConfig('ch-dm');
+    expect(result.channelSource).toBe('DM (auto-discovered)');
+  });
+
+  it('bot default fills agent when channel has none', async () => {
+    vi.spyOn(config, 'getChannelBotConfig').mockResolvedValue({ token: 'x', agent: 'bot-agent' });
+    const result = await resolveEffectiveConfig('ch1');
+    const agent = result.fields.find(f => f.setting === 'agent');
+    expect(agent?.value).toBe('bot-agent');
+    expect(agent?.source).toBe('bot default');
+  });
+
+  it('includes provider prefix on model when set in prefs', async () => {
+    vi.spyOn(store, 'getChannelPrefs').mockResolvedValue({ model: 'qwen3:8b', provider: 'ollama' });
+    const result = await resolveEffectiveConfig('ch1');
+    const model = result.fields.find(f => f.setting === 'model');
+    expect(model?.value).toBe('ollama:qwen3:8b');
+  });
+
+  it('does NOT prepend provider when model comes from session', async () => {
+    vi.spyOn(store, 'getChannelPrefs').mockResolvedValue({ provider: 'ollama' });
+    const result = await resolveEffectiveConfig('ch1',
+      { sessionId: 's1', model: 'claude-opus-4.6', agent: null });
+    const model = result.fields.find(f => f.setting === 'model');
+    expect(model?.value).toBe('claude-opus-4.6');
+    expect(model?.source).toBe('session (active)');
+  });
+
+  it('workspace source is channelSource when from channel config', async () => {
+    vi.spyOn(config, 'getConfig').mockReturnValue({
+      ...mockConfig,
+      channels: [{ id: 'ch-ws', platform: 'mm', name: 'ws-test', workingDirectory: '/project', triggerMode: 'all', threadedReplies: false, verbose: false }],
+    } as any);
+    const result = await resolveEffectiveConfig('ch-ws');
+    const ws = result.fields.find(f => f.setting === 'workspace');
+    expect(ws?.value).toBe('/project');
+    expect(ws?.source).toBe('config.json');
+  });
+
+  it('workspace source is runtime when from channelMeta', async () => {
+    const result = await resolveEffectiveConfig('ch1', undefined,
+      { workingDirectory: '/runtime/path', bot: 'mybot' });
+    const ws = result.fields.find(f => f.setting === 'workspace');
+    const bot = result.fields.find(f => f.setting === 'bot');
+    expect(ws?.source).toBe('runtime');
+    expect(bot?.source).toBe('runtime');
+  });
+});
+
+describe('formatConfigTable', () => {
+  it('produces markdown table', () => {
+    const fields: ConfigField[] = [
+      { setting: 'model', value: 'claude-opus-4.6', source: 'defaults' },
+      { setting: 'verbose', value: 'Off', source: 'config.json' },
+    ];
+    const output = formatConfigTable(fields, '#test', 'config.json');
+    expect(output).toContain('Channel Config');
+    expect(output).toContain('#test');
+    expect(output).toContain('| model |');
+    expect(output).toContain('defaults');
+  });
+
+  it('shows em dash for unset values without backticks', () => {
+    const fields: ConfigField[] = [
+      { setting: 'reasoningEffort', value: '\u2014', source: '(not set)' },
+    ];
+    const output = formatConfigTable(fields, '#test', 'config.json');
+    // Unset values should show the em dash without backticks
+    expect(output).toContain('| \u2014 |');
+    expect(output).not.toContain('`\u2014`');
   });
 });

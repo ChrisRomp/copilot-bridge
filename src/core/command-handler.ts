@@ -1,6 +1,6 @@
-import { setChannelPrefs, getChannelPrefs, getGlobalSetting, setGlobalSetting } from '../state/store.js';
+import { setChannelPrefs, getChannelPrefs, getGlobalSetting, setGlobalSetting, getDynamicChannel } from '../state/store.js';
 import { discoverAgentDefinitions, discoverAgentNames } from './inter-agent.js';
-import { isBotAdminAny } from '../config.js';
+import { isBotAdminAny, getConfig, getChannelBotConfig } from '../config.js';
 import type { BridgeProviderConfig } from '../types.js';
 
 const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
@@ -300,6 +300,175 @@ function extractAgentDescription(content: string): string {
   return '';
 }
 
+// ---------------------------------------------------------------------------
+// /config — effective channel configuration with source attribution
+// ---------------------------------------------------------------------------
+
+export interface ConfigField {
+  setting: string;
+  value: string;
+  source: string;
+}
+
+/**
+ * Resolve the effective configuration for a channel, with source attribution.
+ * Each field includes the resolved value and which layer set it.
+ */
+export async function resolveEffectiveConfig(
+  channelId: string,
+  sessionInfo?: { sessionId: string; model: string; agent: string | null },
+  channelMeta?: { workingDirectory?: string; bot?: string },
+): Promise<{ fields: ConfigField[]; channelSource: string; channelName: string }> {
+  const config = getConfig();
+  const defaults = config.defaults;
+  const prefs = await getChannelPrefs(channelId);
+
+  // Determine channel source
+  const staticChannel = config.channels.find(c => c.id === channelId);
+  const dynChannel = staticChannel ? null : await getDynamicChannel(channelId);
+  const channelSource = staticChannel ? 'config.json' : dynChannel?.isDM ? 'DM (auto-discovered)' : dynChannel ? 'dynamic (SQLite)' : 'unknown';
+  const channelName = staticChannel?.name ?? dynChannel?.name ?? channelId;
+
+  // Bot-level defaults
+  const botConfig = await getChannelBotConfig(channelId);
+  const channelObj = staticChannel ?? (dynChannel ? {
+    model: dynChannel.model,
+    agent: dynChannel.agent,
+    triggerMode: dynChannel.triggerMode,
+    threadedReplies: dynChannel.threadedReplies,
+    verbose: dynChannel.verbose,
+    bot: dynChannel.bot,
+    workingDirectory: dynChannel.workingDirectory,
+  } : null);
+
+  // Helper to resolve a field through the layer stack
+  function resolve(
+    field: string,
+    channelVal: unknown,
+    botVal: unknown,
+    defaultVal: unknown,
+    prefsVal: unknown,
+    sessionVal: unknown,
+  ): { value: string; source: string } {
+    // Session overrides (active model/agent) take precedence
+    if (sessionVal !== undefined && sessionVal !== null) {
+      return { value: String(sessionVal), source: 'session (active)' };
+    }
+    // Channel prefs (persisted runtime overrides)
+    if (prefsVal !== undefined && prefsVal !== null) {
+      return { value: String(prefsVal), source: 'channel prefs' };
+    }
+    // Channel config (static or dynamic)
+    if (channelVal !== undefined && channelVal !== null) {
+      return { value: String(channelVal), source: channelSource };
+    }
+    // Bot-level default
+    if (botVal !== undefined && botVal !== null) {
+      return { value: String(botVal), source: 'bot default' };
+    }
+    // Global defaults
+    if (defaultVal !== undefined && defaultVal !== null) {
+      return { value: String(defaultVal), source: 'defaults' };
+    }
+    return { value: '\u2014', source: '(not set)' };
+  }
+
+  const fields: ConfigField[] = [];
+
+  // Model: session active > prefs > channel > defaults
+  const modelResolved = resolve('model',
+    channelObj?.model, null, defaults.model,
+    prefs?.model, sessionInfo?.model);
+  if (prefs?.provider && modelResolved.source === 'channel prefs') {
+    modelResolved.value = `${prefs.provider}:${modelResolved.value}`;
+  }
+  fields.push({ setting: 'model', ...modelResolved });
+
+  // Agent: session active > prefs > channel > bot default > defaults
+  fields.push({ setting: 'agent', ...resolve('agent',
+    channelObj?.agent, botConfig?.agent, defaults.agent,
+    prefs?.agent, sessionInfo?.agent) });
+
+  // Trigger mode
+  fields.push({ setting: 'triggerMode', ...resolve('triggerMode',
+    channelObj?.triggerMode, null, defaults.triggerMode,
+    null, null) });
+
+  // Threaded replies
+  const threadedResolved = resolve('threadedReplies',
+    channelObj?.threadedReplies, null, defaults.threadedReplies,
+    prefs?.threadedReplies, null);
+  threadedResolved.value = threadedResolved.value === 'true' ? 'On' : threadedResolved.value === 'false' ? 'Off' : threadedResolved.value;
+  fields.push({ setting: 'threadedReplies', ...threadedResolved });
+
+  // Verbose
+  const verboseResolved = resolve('verbose',
+    channelObj?.verbose, null, defaults.verbose,
+    prefs?.verbose, null);
+  verboseResolved.value = verboseResolved.value === 'true' ? 'On' : verboseResolved.value === 'false' ? 'Off' : verboseResolved.value;
+  fields.push({ setting: 'verbose', ...verboseResolved });
+
+  // Permission mode
+  fields.push({ setting: 'permissionMode', ...resolve('permissionMode',
+    null, null, defaults.permissionMode,
+    prefs?.permissionMode, null) });
+
+  // Reasoning effort
+  fields.push({ setting: 'reasoningEffort', ...resolve('reasoningEffort',
+    null, null, null,
+    prefs?.reasoningEffort, null) });
+
+  // Session mode
+  fields.push({ setting: 'sessionMode', ...resolve('sessionMode',
+    null, null, 'interactive',
+    prefs?.sessionMode, null) });
+
+  // Disabled skills
+  const disabledSkills = prefs?.disabledSkills;
+  fields.push({
+    setting: 'disabledSkills',
+    value: disabledSkills?.length ? disabledSkills.join(', ') : '\u2014',
+    source: disabledSkills?.length ? 'channel prefs' : '(none)',
+  });
+
+  // Workspace & bot (admin-visible)
+  fields.push({
+    setting: 'workspace',
+    value: channelMeta?.workingDirectory ?? channelObj?.workingDirectory ?? '\u2014',
+    source: channelMeta?.workingDirectory ? 'runtime'
+      : channelObj?.workingDirectory ? channelSource
+      : '(not set)',
+  });
+
+  fields.push({
+    setting: 'bot',
+    value: channelMeta?.bot ?? channelObj?.bot ?? 'default',
+    source: channelMeta?.bot ? 'runtime'
+      : channelObj?.bot ? channelSource
+      : '(default)',
+  });
+
+  return { fields, channelSource, channelName };
+}
+
+/**
+ * Format the effective config as a markdown table for chat display.
+ */
+export function formatConfigTable(fields: ConfigField[], channelName: string, channelSource: string): string {
+  const lines = [
+    `\u2699\uFE0F **Channel Config** \u2014 ${channelName}`,
+    `Source: ${channelSource}`,
+    '',
+    '| Setting | Value | Source |',
+    '|:--|:--|:--|',
+  ];
+  for (const f of fields) {
+    const val = f.value === '\u2014' ? '\u2014' : `\`${f.value}\``;
+    lines.push(`| ${f.setting} | ${val} | ${f.source} |`);
+  }
+  return lines.join('\n');
+}
+
 export function parseCommand(text: string): { command: string; args: string } | null {
   const trimmed = text.trim();
   if (!trimmed.startsWith('/')) return null;
@@ -597,6 +766,11 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
       return { handled: true, response: lines.join('\n') };
     }
 
+    case 'config': {
+      const { fields, channelSource, channelName } = await resolveEffectiveConfig(channelId, sessionInfo, channelMeta);
+      return { handled: true, response: formatConfigTable(fields, channelName, channelSource) };
+    }
+
     case 'context': {
       if (!contextUsage) {
         return { handled: true, response: '📊 Context usage not available yet. Send a message first.' };
@@ -701,6 +875,7 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
         '`/stop` — Stop the current task',
         '`/model [name]` — List or switch models',
         '`/status` — Show session info',
+        '`/config` — Show effective channel configuration',
         '`/context` — Show context window usage',
         '`/verbose` — Toggle tool call visibility',
         '`/autopilot` — Toggle autopilot mode',
@@ -730,6 +905,7 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
           '`/agents` — List available agent definitions',
           '`/reasoning <level>` — Set reasoning effort (low/medium/high/xhigh)',
           '`/context` — Show context window usage',
+          '`/config` — Show effective channel config with source attribution',
           '`/verbose` — Toggle tool call visibility',
           '`/status` — Show session info',
           '',
