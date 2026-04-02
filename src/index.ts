@@ -643,7 +643,7 @@ async function main(): Promise<void> {
               activeStreams.delete(channelId);
             }
           });
-          eventLocks.set(channelId, evTask.catch(() => {}));
+          eventLocks.set(channelId, evTask.catch((err) => { log.debug("Event lock task failed:", err); }));
           await evTask;
           markBusy(channelId);
         }
@@ -668,7 +668,7 @@ async function main(): Promise<void> {
           clearQuiet();
         }
       });
-      channelLocks.set(channelId, task.catch(() => {}));
+      channelLocks.set(channelId, task.catch((err) => { log.debug("Channel lock task failed:", err); }));
       await task;
       return '';
     },
@@ -909,7 +909,7 @@ async function handleMidTurnMessage(
     const newKey = await resolved.streaming.startStream(msg.channelId);
     activeStreams.set(msg.channelId, newKey);
   });
-  eventLocks.set(msg.channelId, evTask.catch(() => {}));
+  eventLocks.set(msg.channelId, evTask.catch((err) => { log.debug("Event lock task failed:", err); }));
   await evTask;
 
   await sessionManager.sendMidTurn(msg.channelId, text, msg.userId);
@@ -1800,7 +1800,7 @@ async function handleInboundMessage(
             const streamKey = await streaming.startStream(msg.channelId, threadRoot);
             activeStreams.set(msg.channelId, streamKey);
           });
-          eventLocks.set(msg.channelId, evTask.catch(() => {}));
+          eventLocks.set(msg.channelId, evTask.catch((err) => { log.debug("Event lock task failed:", err); }));
           await evTask;
 
           markBusy(msg.channelId);
@@ -1907,7 +1907,7 @@ async function handleInboundMessage(
       const streamKey = await streaming.startStream(msg.channelId, threadRoot);
       activeStreams.set(msg.channelId, streamKey);
     });
-    eventLocks.set(msg.channelId, evTask.catch(() => {}));
+    eventLocks.set(msg.channelId, evTask.catch((err) => { log.debug("Event lock task failed:", err); }));
     await evTask;
 
     // Mark busy before send so mid-turn messages arriving during the await are steered
@@ -1940,7 +1940,7 @@ async function handleInboundMessage(
             `📋 **Existing plan found** — ${result.summary}. \`/plan show\` to review.`,
             { threadRootId: threadRootForPlan });
         }
-      }).catch(() => { /* best-effort */ });
+      }).catch((err) => { log.debug('surfacePlanIfExists failed:', err); });
     }
 
     // Hold the channelLock until session.idle so queued work (scheduler, etc.)

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -21,9 +21,12 @@ describe('error logging', () => {
 
   describe('parseEnvFile', () => {
     it('does not log on ENOENT (missing file is expected)', () => {
-      const result = parseEnvFile('/tmp/nonexistent-env-file-test');
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-test-'));
+      const missingPath = path.join(tmpDir, 'nonexistent.env');
+      const result = parseEnvFile(missingPath);
       expect(result).toEqual({});
       expect(mockLog.warn).not.toHaveBeenCalled();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
     it('logs warn on non-ENOENT errors', () => {
