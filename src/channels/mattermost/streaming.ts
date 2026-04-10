@@ -102,6 +102,14 @@ export class StreamingHandler {
       } catch (err) {
         log.error(`Failed to finalize message:`, err);
       }
+    } else {
+      // No content (e.g. no_reply) — delete the placeholder "Working..." message
+      try {
+        await this.adapter.deleteMessage(stream.channelId, stream.messageId);
+        log.info(`Deleted empty stream message ${stream.messageId.slice(0, 8)}...`);
+      } catch (err) {
+        log.warn(`Failed to delete empty stream message:`, err);
+      }
     }
   }
 

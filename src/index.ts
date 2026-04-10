@@ -2044,6 +2044,29 @@ async function handleSessionEvent(
     log.debug(`SDK ${event.type}: ${JSON.stringify(event.data).slice(0, 200)}`);
   } else if (event.type === 'session.compaction_start' || event.type === 'session.compaction_complete') {
     // Already logged above; skip duplicate debug line
+  } else if (event.type === 'session.mcp_servers_loaded') {
+    const servers = (event.data as Record<string, unknown>)?.servers;
+    if (Array.isArray(servers)) {
+      const failed = servers.filter((s: Record<string, unknown>) => s.status === 'failed');
+      if (failed.length > 0) {
+        for (const s of failed) {
+          log.warn(`MCP server "${s.name}" failed to connect: ${s.error || 'unknown error'}`);
+        }
+      }
+      const names = servers.map((s: Record<string, unknown>) => `${s.name} (${s.status})`).join(', ');
+      log.info(`MCP servers loaded: ${names}`);
+    } else {
+      log.info(`SDK ${event.type}: ${JSON.stringify(event.data).slice(0, 500)}`);
+    }
+  } else if (event.type === 'session.mcp_server_status_changed') {
+    const d = event.data as Record<string, unknown>;
+    if (d?.status === 'failed') {
+      log.warn(`MCP server "${d.name}" status changed to failed: ${d.error || 'unknown error'}`);
+    } else {
+      log.info(`MCP server "${d?.name}" status: ${d?.status}`);
+    }
+  } else if (event.type?.startsWith('mcp.')) {
+    log.info(`SDK ${event.type}: ${JSON.stringify(event.data).slice(0, 500)}`);
   } else {
     log.debug(`SDK event: ${event.type}`);
   }
