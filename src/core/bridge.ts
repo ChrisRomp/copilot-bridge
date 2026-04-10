@@ -86,6 +86,7 @@ export class CopilotBridge {
     onUserInputRequest?: UserInputHandler;
     systemMessage?: SystemMessageConfig;
     customAgents?: CustomAgentConfig[];
+    enableConfigDiscovery?: boolean;
     tools?: Tool[];
     hooks?: SessionHooks;
     infiniteSessions?: boolean;
@@ -107,6 +108,7 @@ export class CopilotBridge {
       streaming: true,
       systemMessage: opts.systemMessage,
       customAgents: opts.customAgents,
+      enableConfigDiscovery: opts.enableConfigDiscovery,
       tools: opts.tools,
       hooks: opts.hooks,
       ...(opts.infiniteSessions ? { infiniteSessions: { enabled: true } } : { infiniteSessions: { enabled: false } }),
@@ -122,6 +124,7 @@ export class CopilotBridge {
       onUserInputRequest?: UserInputHandler;
       systemMessage?: SystemMessageConfig;
       customAgents?: CustomAgentConfig[];
+      enableConfigDiscovery?: boolean;
       configDir?: string;
       workingDirectory?: string;
       provider?: SDKProviderConfig;
@@ -146,6 +149,7 @@ export class CopilotBridge {
       streaming: true,
       systemMessage: opts?.systemMessage,
       customAgents: opts?.customAgents,
+      enableConfigDiscovery: opts?.enableConfigDiscovery,
       configDir: opts?.configDir,
       workingDirectory: opts?.workingDirectory,
       provider: opts?.provider,

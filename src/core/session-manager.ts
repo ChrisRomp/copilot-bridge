@@ -1090,13 +1090,26 @@ export class SessionManager {
 
   /** Switch the agent for a channel's session. */
   async switchAgent(channelId: string, agent: string | null): Promise<void> {
-    await this.withSessionRetry(channelId, async (sid) => {
-      if (agent) {
-        await this.bridge.selectAgent(sid, agent);
-      } else {
-        await this.bridge.deselectAgent(sid);
+    try {
+      await this.withSessionRetry(channelId, async (sid) => {
+        if (agent) {
+          await this.bridge.selectAgent(sid, agent);
+        } else {
+          await this.bridge.deselectAgent(sid);
+        }
+      });
+    } catch (err: any) {
+      const msg = String(err?.message ?? err);
+      if (agent && msg.includes('not found') && msg.toLowerCase().includes('agent')) {
+        // Agent not in current session — save pref and create a new session with config discovery
+        log.info(`Agent "${agent}" not in current session, creating new session with config discovery`);
+        try { await setChannelPrefs(channelId, { agent }); }
+        catch (e) { log.warn('Failed to persist agent preference:', e); }
+        await this.newSession(channelId);
+        return;
       }
-    });
+      throw err;
+    }
     try { await setChannelPrefs(channelId, { agent }); }
     catch (e) { log.warn('Agent switched but failed to persist preference:', e); }
   }
@@ -1607,6 +1620,7 @@ export class SessionManager {
           configDir: defaultConfigDir,
           reasoningEffort: reasoningEffort ?? undefined,
           agent: prefs.agent ?? undefined,
+          enableConfigDiscovery: true,
           mcpServers: resolvedMcpServers,
           skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
           disabledSkills,
@@ -1624,6 +1638,7 @@ export class SessionManager {
     let session: any;
     let usedModel: string;
     let didFallback: boolean;
+    let agentFallback = false;
 
     try {
       const result = await tryWithFallback(
@@ -1637,9 +1652,46 @@ export class SessionManager {
       usedModel = result.usedModel;
       didFallback = result.didFallback;
     } catch (err: any) {
-      // Enhance error message with BYOK context (only when provider actually resolved)
-      if (providerName && sdkProvider) {
-        const msg = String(err?.message ?? err);
+      const msg = String(err?.message ?? err);
+
+      // Agent not found — clear the pref and retry without the agent
+      if (prefs.agent && msg.includes('not found') && msg.toLowerCase().includes('agent')) {
+        log.warn(`Agent "${prefs.agent}" not found for channel ${channelId}, falling back to default`);
+        prefs.agent = null;
+        try { await setChannelPrefs(channelId, { agent: null }); }
+        catch (e) { log.warn('Failed to clear agent pref:', e); }
+
+        // Rebuild createWithModel without the agent
+        const createWithModelNoAgent = async (model: string) => {
+          return withWorkspaceEnv(workingDirectory, () =>
+            this.bridge.createSession({
+              model,
+              provider: sdkProvider || undefined,
+              workingDirectory,
+              configDir: defaultConfigDir,
+              reasoningEffort: reasoningEffort ?? undefined,
+              enableConfigDiscovery: true,
+              mcpServers: resolvedMcpServers,
+              skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
+              disabledSkills,
+              onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
+              onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
+              tools: customTools.length > 0 ? customTools : undefined,
+              hooks,
+              infiniteSessions: getConfig().infiniteSessions,
+              systemMessage: this.buildSystemMessage(),
+            })
+          );
+        };
+        const result = await tryWithFallback(
+          prefs.model, availableModels, configFallbacks, createWithModelNoAgent, byokPrefixes,
+        );
+        session = result.result;
+        usedModel = result.usedModel;
+        didFallback = result.didFallback;
+        agentFallback = true;
+      } else if (providerName && sdkProvider) {
+        // Enhance error message with BYOK context (only when provider actually resolved)
         const provConfig = getConfig().providers?.[providerName];
         if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('fetch failed')) {
           throw new Error(`Provider "${providerName}" is unreachable at ${provConfig?.baseUrl ?? 'unknown URL'}. Check that the service is running.`);
@@ -1651,8 +1703,9 @@ export class SessionManager {
           throw new Error(`Model "${prefs.model}" not found on provider "${providerName}". Check the model ID in your config.`);
         }
         throw new Error(`Provider "${providerName}" error: ${msg}`);
+      } else {
+        throw err;
       }
-      throw err;
     }
 
     this.sessionMcpServers.set(channelId, new Set(Object.keys(resolvedMcpServers)));
@@ -1668,6 +1721,15 @@ export class SessionManager {
         type: 'assistant.message',
         data: {
           content: `⚠️ Model \`${prefs.model}\` is unavailable. Switched to \`${usedModel}\`.`,
+        },
+      });
+    }
+
+    if (agentFallback) {
+      this.eventHandler?.(session.sessionId, channelId, {
+        type: 'assistant.message',
+        data: {
+          content: `⚠️ Agent not found. Reverted to default. Use \`/agent\` to select a new agent.`,
         },
       });
     }
@@ -1717,6 +1779,7 @@ export class SessionManager {
         provider: sdkProvider || undefined,
         reasoningEffort: reasoningEffort ?? undefined,
         agent: prefs.agent ?? undefined,
+        enableConfigDiscovery: true,
         mcpServers,
         skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
         disabledSkills,
