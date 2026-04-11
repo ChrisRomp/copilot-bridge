@@ -308,17 +308,17 @@ export function extractCommandPatterns(input: unknown): string[] {
 }
 
 /**
- * Discover skill directories following Copilot CLI conventions:
+ * Discover skill directories NOT covered by the SDK's enableConfigDiscovery.
+ * The SDK auto-discovers workspace-level skills (<workspace>/.github/skills/, etc.)
+ * so we only need to supply sources it doesn't scan:
  * - ~/.copilot/skills/ (user-level)
  * - ~/.agents/skills/ (user-level)
- * - <workspace>/.github/skills/ (project-level)
- * - <workspace>/.agents/skills/ (project-level)
  * - Plugin skills from ~/.copilot/installed-plugins/ (lowest priority)
  *
  * Per CLI spec, skills use first-found-wins dedup by name.
  * Plugin skills are appended last so user/workspace skills take precedence.
  */
-function discoverSkillDirectories(workingDirectory: string): string[] {
+function discoverSkillDirectories(_workingDirectory: string): string[] {
   const home = process.env.HOME;
   const roots: string[] = [];
 
@@ -327,10 +327,6 @@ function discoverSkillDirectories(workingDirectory: string): string[] {
     roots.push(path.join(home, '.copilot', 'skills'));
     roots.push(path.join(home, '.agents', 'skills'));
   }
-  // Project-level skills (standard)
-  roots.push(path.join(workingDirectory, '.github', 'skills'));
-  // Project-level skills (legacy)
-  roots.push(path.join(workingDirectory, '.agents', 'skills'));
 
   // Plugin skills (lowest priority — appended last so earlier sources win)
   if (home) {
@@ -370,6 +366,21 @@ function discoverSkillDirectories(workingDirectory: string): string[] {
     log.info(`Discovered ${dirs.length} skill(s): ${dirs.map(d => path.basename(d)).join(', ')}`);
   }
   return dirs;
+}
+
+/**
+ * Convert discovered agent definitions to SDK CustomAgentConfig[].
+ * This lets the SDK resolve plugin/user agents by name (they aren't on the SDK's search path).
+ */
+function buildCustomAgents(workingDirectory: string): { name: string; prompt: string; description?: string }[] {
+  const definitions = discoverAgentDefinitions(workingDirectory);
+  if (definitions.size === 0) return [];
+  const agents: { name: string; prompt: string; description?: string }[] = [];
+  for (const [name, def] of definitions) {
+    agents.push({ name, prompt: def.content });
+  }
+  log.debug(`Built ${agents.length} custom agent(s) for SDK: ${agents.map(a => a.name).join(', ')}`);
+  return agents;
 }
 
 /** Extract a succinct summary from plan content (first heading + first body line, ~150 chars max). */
@@ -1611,6 +1622,8 @@ export class SessionManager {
       log.debug(`Hooks resolved for session create: ${Object.keys(hooks).join(', ')}`);
     }
 
+    const customAgents = buildCustomAgents(workingDirectory);
+
     const createWithModel = async (model: string) => {
       return withWorkspaceEnv(workingDirectory, () =>
         this.bridge.createSession({
@@ -1626,6 +1639,7 @@ export class SessionManager {
           disabledSkills,
           onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
           onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
+          customAgents: customAgents.length > 0 ? customAgents : undefined,
           tools: customTools.length > 0 ? customTools : undefined,
           hooks,
           infiniteSessions: getConfig().infiniteSessions,
@@ -1676,6 +1690,7 @@ export class SessionManager {
               disabledSkills,
               onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
               onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
+              customAgents: customAgents.length > 0 ? customAgents : undefined,
               tools: customTools.length > 0 ? customTools : undefined,
               hooks,
               infiniteSessions: getConfig().infiniteSessions,
@@ -1761,6 +1776,8 @@ export class SessionManager {
       log.debug(`Hooks resolved for session resume: ${Object.keys(hooks).join(', ')}`);
     }
 
+    const customAgents = buildCustomAgents(workingDirectory);
+
     // Resolve BYOK provider for resume
     const providerName = prefs.provider ?? null;
     let sdkProvider = providerName
@@ -1783,6 +1800,7 @@ export class SessionManager {
         mcpServers,
         skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
         disabledSkills,
+        customAgents: customAgents.length > 0 ? customAgents : undefined,
         tools: customTools.length > 0 ? customTools : undefined,
         hooks,
         infiniteSessions: getConfig().infiniteSessions,
