@@ -308,17 +308,10 @@ export function extractCommandPatterns(input: unknown): string[] {
 }
 
 /**
- * Discover skill directories NOT covered by the SDK's enableConfigDiscovery.
- * The SDK auto-discovers workspace-level skills (<workspace>/.github/skills/, etc.)
- * so we only need to supply sources it doesn't scan:
- * - ~/.copilot/skills/ (user-level)
- * - ~/.agents/skills/ (user-level)
- * - Plugin skills from ~/.copilot/installed-plugins/ (lowest priority)
- *
- * Per CLI spec, skills use first-found-wins dedup by name.
- * Plugin skills are appended last so user/workspace skills take precedence.
+ * Discover ALL skill directories (user, plugin, AND workspace).
+ * Used by getSkillInfo() for display in /skills listing.
  */
-function discoverSkillDirectories(_workingDirectory: string): string[] {
+function discoverAllSkillDirectories(workingDirectory: string): string[] {
   const home = process.env.HOME;
   const roots: string[] = [];
 
@@ -327,6 +320,10 @@ function discoverSkillDirectories(_workingDirectory: string): string[] {
     roots.push(path.join(home, '.copilot', 'skills'));
     roots.push(path.join(home, '.agents', 'skills'));
   }
+  // Project-level skills (standard)
+  roots.push(path.join(workingDirectory, '.github', 'skills'));
+  // Project-level skills (legacy)
+  roots.push(path.join(workingDirectory, '.agents', 'skills'));
 
   // Plugin skills (lowest priority — appended last so earlier sources win)
   if (home) {
@@ -350,6 +347,49 @@ function discoverSkillDirectories(_workingDirectory: string): string[] {
     }
   }
 
+  return resolveSkillRoots(roots);
+}
+
+/**
+ * Discover skill directories NOT covered by the SDK's enableConfigDiscovery.
+ * The SDK auto-discovers workspace-level skills (<workspace>/.github/skills/, etc.)
+ * so we only supply sources it doesn't scan: user-level and plugin skills.
+ * Callers that set enableConfigDiscovery: true should use this to avoid duplicates.
+ */
+function discoverExtraSkillDirectories(): string[] {
+  const home = process.env.HOME;
+  if (!home) return [];
+  const roots: string[] = [];
+
+  // User-level skills
+  roots.push(path.join(home, '.copilot', 'skills'));
+  roots.push(path.join(home, '.agents', 'skills'));
+
+  // Plugin skills
+  const pluginsDir = path.join(home, '.copilot', 'installed-plugins');
+  if (fs.existsSync(pluginsDir)) {
+    const walk = (dir: string, depth: number) => {
+      if (depth > 3) return;
+      try {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (!entry.isDirectory()) continue;
+          const full = path.join(dir, entry.name);
+          if (entry.name === 'skills') {
+            roots.push(full);
+          } else {
+            walk(full, depth + 1);
+          }
+        }
+      } catch (err) { log.debug('Skill dir walk permission error:', err); }
+    };
+    walk(pluginsDir, 0);
+  }
+
+  return resolveSkillRoots(roots);
+}
+
+/** Expand skill roots into individual skill directories. */
+function resolveSkillRoots(roots: string[]): string[] {
   const dirs: string[] = [];
   for (const skillsRoot of roots) {
     if (!fs.existsSync(skillsRoot)) continue;
@@ -590,7 +630,7 @@ export class SessionManager {
   /** Get skill info for a channel — discovers skills and reads their descriptions from SKILL.md frontmatter. */
   async getSkillInfo(channelId: string): Promise<{ name: string; description: string; source: string; pending?: boolean; disabled?: boolean }[]> {
     const workingDirectory = await this.resolveWorkingDirectory(channelId);
-    const dirs = discoverSkillDirectories(workingDirectory);
+    const dirs = discoverAllSkillDirectories(workingDirectory);
     const sessionDirs = this.sessionSkillDirs.get(channelId);
     const prefs = await getChannelPrefs(channelId);
     const disabledSet = new Set(prefs?.disabledSkills ?? []);
@@ -1588,7 +1628,7 @@ export class SessionManager {
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
 
     const reasoningEffort = prefs.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | undefined;
-    const skillDirectories = discoverSkillDirectories(workingDirectory);
+    const skillDirectories = discoverExtraSkillDirectories();
     const customTools = await this.buildCustomTools(channelId);
     const disabledSkills = prefs.disabledSkills?.length ? prefs.disabledSkills : undefined;
 
@@ -1765,7 +1805,7 @@ export class SessionManager {
     const workingDirectory = await this.resolveWorkingDirectory(channelId);
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
     const reasoningEffort = prefs.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | undefined;
-    const skillDirectories = discoverSkillDirectories(workingDirectory);
+    const skillDirectories = discoverExtraSkillDirectories();
     const customTools = await this.buildCustomTools(channelId);
     const disabledSkills = prefs.disabledSkills?.length ? prefs.disabledSkills : undefined;
 
@@ -1879,7 +1919,7 @@ export class SessionManager {
     }
 
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
-    const skillDirectories = discoverSkillDirectories(targetWorkspace);
+    const skillDirectories = discoverExtraSkillDirectories();
     const hooks = await this.resolveHooks(targetWorkspace);
 
     // Build ephemeral permission handler
@@ -1895,6 +1935,7 @@ export class SessionManager {
         this.bridge.createSession({
           workingDirectory: targetWorkspace,
           configDir: defaultConfigDir,
+          enableConfigDiscovery: true,
           mcpServers: this.resolveMcpServers(targetWorkspace),
           skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
           onPermissionRequest: ephemeralPermissionHandler,
