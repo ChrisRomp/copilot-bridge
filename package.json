@@ -42,10 +42,10 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@github/copilot-sdk": "^0.2.0",
+    "@github/copilot-sdk": "^0.2.2",
     "@mattermost/client": "^11.5.0",
     "@mattermost/types": "^11.5.0",
-    "@slack/bolt": "^4.6.0",
+    "@slack/bolt": "^4.7.0",
     "better-sqlite3": "^12.6.2",
     "cron": "^4.4.0",
     "cronstrue": "^3.14.0",
@@ -57,6 +57,6 @@
     "@types/better-sqlite3": "^7.6.12",
     "@types/ws": "^8.5.14",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.2"
+    "vitest": "^4.1.4"
   }
 }

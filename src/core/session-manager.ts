@@ -308,17 +308,10 @@ export function extractCommandPatterns(input: unknown): string[] {
 }
 
 /**
- * Discover skill directories following Copilot CLI conventions:
- * - ~/.copilot/skills/ (user-level)
- * - ~/.agents/skills/ (user-level)
- * - <workspace>/.github/skills/ (project-level)
- * - <workspace>/.agents/skills/ (project-level)
- * - Plugin skills from ~/.copilot/installed-plugins/ (lowest priority)
- *
- * Per CLI spec, skills use first-found-wins dedup by name.
- * Plugin skills are appended last so user/workspace skills take precedence.
+ * Discover ALL skill directories (user, plugin, AND workspace).
+ * Used by getSkillInfo() for display in /skills listing.
  */
-function discoverSkillDirectories(workingDirectory: string): string[] {
+function discoverAllSkillDirectories(workingDirectory: string): string[] {
   const home = process.env.HOME;
   const roots: string[] = [];
 
@@ -354,6 +347,49 @@ function discoverSkillDirectories(workingDirectory: string): string[] {
     }
   }
 
+  return resolveSkillRoots(roots);
+}
+
+/**
+ * Discover skill directories NOT covered by the SDK's enableConfigDiscovery.
+ * The SDK auto-discovers workspace-level skills (<workspace>/.github/skills/, etc.)
+ * so we only supply sources it doesn't scan: user-level and plugin skills.
+ * Callers that set enableConfigDiscovery: true should use this to avoid duplicates.
+ */
+function discoverExtraSkillDirectories(): string[] {
+  const home = process.env.HOME;
+  if (!home) return [];
+  const roots: string[] = [];
+
+  // User-level skills
+  roots.push(path.join(home, '.copilot', 'skills'));
+  roots.push(path.join(home, '.agents', 'skills'));
+
+  // Plugin skills
+  const pluginsDir = path.join(home, '.copilot', 'installed-plugins');
+  if (fs.existsSync(pluginsDir)) {
+    const walk = (dir: string, depth: number) => {
+      if (depth > 3) return;
+      try {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (!entry.isDirectory()) continue;
+          const full = path.join(dir, entry.name);
+          if (entry.name === 'skills') {
+            roots.push(full);
+          } else {
+            walk(full, depth + 1);
+          }
+        }
+      } catch (err) { log.debug('Skill dir walk permission error:', err); }
+    };
+    walk(pluginsDir, 0);
+  }
+
+  return resolveSkillRoots(roots);
+}
+
+/** Expand skill roots into individual skill directories. */
+function resolveSkillRoots(roots: string[]): string[] {
   const dirs: string[] = [];
   for (const skillsRoot of roots) {
     if (!fs.existsSync(skillsRoot)) continue;
@@ -370,6 +406,34 @@ function discoverSkillDirectories(workingDirectory: string): string[] {
     log.info(`Discovered ${dirs.length} skill(s): ${dirs.map(d => path.basename(d)).join(', ')}`);
   }
   return dirs;
+}
+
+/**
+ * Convert discovered agent definitions to SDK CustomAgentConfig[].
+ * This lets the SDK resolve plugin/user agents by name (they aren't on the SDK's search path).
+ */
+function buildCustomAgents(workingDirectory: string): { name: string; prompt: string; description?: string }[] {
+  const definitions = discoverAgentDefinitions(workingDirectory);
+  if (definitions.size === 0) return [];
+  const agents: { name: string; prompt: string; description?: string }[] = [];
+  for (const [name, def] of definitions) {
+    const description = extractFrontmatterField(def.content, 'description');
+    agents.push({ name, prompt: def.content, ...(description ? { description } : {}) });
+  }
+  log.debug(`Built ${agents.length} custom agent(s) for SDK: ${agents.map(a => a.name).join(', ')}`);
+  return agents;
+}
+
+/** Extract a field value from YAML frontmatter. */
+function extractFrontmatterField(content: string, field: string): string | undefined {
+  const lines = content.split('\n');
+  if (lines[0]?.trim() !== '---') return undefined;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') break;
+    const match = lines[i].match(new RegExp(`^${field}:\\s*(.+)`, 'i'));
+    if (match) return match[1].trim().replace(/^["']|["']$/g, '');
+  }
+  return undefined;
 }
 
 /** Extract a succinct summary from plan content (first heading + first body line, ~150 chars max). */
@@ -579,7 +643,7 @@ export class SessionManager {
   /** Get skill info for a channel — discovers skills and reads their descriptions from SKILL.md frontmatter. */
   async getSkillInfo(channelId: string): Promise<{ name: string; description: string; source: string; pending?: boolean; disabled?: boolean }[]> {
     const workingDirectory = await this.resolveWorkingDirectory(channelId);
-    const dirs = discoverSkillDirectories(workingDirectory);
+    const dirs = discoverAllSkillDirectories(workingDirectory);
     const sessionDirs = this.sessionSkillDirs.get(channelId);
     const prefs = await getChannelPrefs(channelId);
     const disabledSet = new Set(prefs?.disabledSkills ?? []);
@@ -1090,13 +1154,26 @@ export class SessionManager {
 
   /** Switch the agent for a channel's session. */
   async switchAgent(channelId: string, agent: string | null): Promise<void> {
-    await this.withSessionRetry(channelId, async (sid) => {
-      if (agent) {
-        await this.bridge.selectAgent(sid, agent);
-      } else {
-        await this.bridge.deselectAgent(sid);
+    try {
+      await this.withSessionRetry(channelId, async (sid) => {
+        if (agent) {
+          await this.bridge.selectAgent(sid, agent);
+        } else {
+          await this.bridge.deselectAgent(sid);
+        }
+      });
+    } catch (err: any) {
+      const msg = String(err?.message ?? err).toLowerCase();
+      if (agent && msg.includes('not found') && msg.includes('agent')) {
+        // Agent not in current session — save pref and create a new session with config discovery
+        log.info(`Agent "${agent}" not in current session, creating new session with config discovery`);
+        try { await setChannelPrefs(channelId, { agent }); }
+        catch (e) { log.warn('Failed to persist agent preference:', e); }
+        await this.newSession(channelId);
+        return;
       }
-    });
+      throw err;
+    }
     try { await setChannelPrefs(channelId, { agent }); }
     catch (e) { log.warn('Agent switched but failed to persist preference:', e); }
   }
@@ -1564,7 +1641,7 @@ export class SessionManager {
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
 
     const reasoningEffort = prefs.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | undefined;
-    const skillDirectories = discoverSkillDirectories(workingDirectory);
+    const skillDirectories = discoverExtraSkillDirectories();
     const customTools = await this.buildCustomTools(channelId);
     const disabledSkills = prefs.disabledSkills?.length ? prefs.disabledSkills : undefined;
 
@@ -1598,6 +1675,8 @@ export class SessionManager {
       log.debug(`Hooks resolved for session create: ${Object.keys(hooks).join(', ')}`);
     }
 
+    const customAgents = buildCustomAgents(workingDirectory);
+
     const createWithModel = async (model: string) => {
       return withWorkspaceEnv(workingDirectory, () =>
         this.bridge.createSession({
@@ -1607,11 +1686,13 @@ export class SessionManager {
           configDir: defaultConfigDir,
           reasoningEffort: reasoningEffort ?? undefined,
           agent: prefs.agent ?? undefined,
+          enableConfigDiscovery: true,
           mcpServers: resolvedMcpServers,
           skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
           disabledSkills,
           onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
           onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
+          customAgents: customAgents.length > 0 ? customAgents : undefined,
           tools: customTools.length > 0 ? customTools : undefined,
           hooks,
           infiniteSessions: getConfig().infiniteSessions,
@@ -1624,6 +1705,7 @@ export class SessionManager {
     let session: any;
     let usedModel: string;
     let didFallback: boolean;
+    let agentFallback = false;
 
     try {
       const result = await tryWithFallback(
@@ -1637,22 +1719,61 @@ export class SessionManager {
       usedModel = result.usedModel;
       didFallback = result.didFallback;
     } catch (err: any) {
-      // Enhance error message with BYOK context (only when provider actually resolved)
-      if (providerName && sdkProvider) {
-        const msg = String(err?.message ?? err);
+      const msg = String(err?.message ?? err).toLowerCase();
+
+      // Agent not found — clear the pref and retry without the agent
+      if (prefs.agent && msg.includes('not found') && msg.includes('agent')) {
+        log.warn(`Agent "${prefs.agent}" not found for channel ${channelId}, falling back to default`);
+        prefs.agent = null;
+        try { await setChannelPrefs(channelId, { agent: null }); }
+        catch (e) { log.warn('Failed to clear agent pref:', e); }
+
+        // Rebuild createWithModel without the agent
+        const createWithModelNoAgent = async (model: string) => {
+          return withWorkspaceEnv(workingDirectory, () =>
+            this.bridge.createSession({
+              model,
+              provider: sdkProvider || undefined,
+              workingDirectory,
+              configDir: defaultConfigDir,
+              reasoningEffort: reasoningEffort ?? undefined,
+              enableConfigDiscovery: true,
+              mcpServers: resolvedMcpServers,
+              skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
+              disabledSkills,
+              onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
+              onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
+              customAgents: customAgents.length > 0 ? customAgents : undefined,
+              tools: customTools.length > 0 ? customTools : undefined,
+              hooks,
+              infiniteSessions: getConfig().infiniteSessions,
+              systemMessage: this.buildSystemMessage(),
+            })
+          );
+        };
+        const result = await tryWithFallback(
+          prefs.model, availableModels, configFallbacks, createWithModelNoAgent, byokPrefixes,
+        );
+        session = result.result;
+        usedModel = result.usedModel;
+        didFallback = result.didFallback;
+        agentFallback = true;
+      } else if (providerName && sdkProvider) {
+        // Enhance error message with BYOK context (only when provider actually resolved)
         const provConfig = getConfig().providers?.[providerName];
-        if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('fetch failed')) {
+        if (msg.includes('econnrefused') || msg.includes('enotfound') || msg.includes('fetch failed')) {
           throw new Error(`Provider "${providerName}" is unreachable at ${provConfig?.baseUrl ?? 'unknown URL'}. Check that the service is running.`);
         }
-        if (msg.includes('401') || msg.includes('403') || msg.includes('Unauthorized') || msg.includes('Forbidden')) {
+        if (msg.includes('401') || msg.includes('403') || msg.includes('unauthorized') || msg.includes('forbidden')) {
           throw new Error(`Provider "${providerName}" rejected authentication. Check your API key configuration.`);
         }
         if (msg.includes('404') || msg.includes('model not found') || msg.includes('does not exist')) {
           throw new Error(`Model "${prefs.model}" not found on provider "${providerName}". Check the model ID in your config.`);
         }
         throw new Error(`Provider "${providerName}" error: ${msg}`);
+      } else {
+        throw err;
       }
-      throw err;
     }
 
     this.sessionMcpServers.set(channelId, new Set(Object.keys(resolvedMcpServers)));
@@ -1668,6 +1789,15 @@ export class SessionManager {
         type: 'assistant.message',
         data: {
           content: `⚠️ Model \`${prefs.model}\` is unavailable. Switched to \`${usedModel}\`.`,
+        },
+      });
+    }
+
+    if (agentFallback) {
+      this.eventHandler?.(session.sessionId, channelId, {
+        type: 'assistant.message',
+        data: {
+          content: `⚠️ Agent not found. Reverted to default. Use \`/agent\` to select a new agent.`,
         },
       });
     }
@@ -1688,7 +1818,7 @@ export class SessionManager {
     const workingDirectory = await this.resolveWorkingDirectory(channelId);
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
     const reasoningEffort = prefs.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | undefined;
-    const skillDirectories = discoverSkillDirectories(workingDirectory);
+    const skillDirectories = discoverExtraSkillDirectories();
     const customTools = await this.buildCustomTools(channelId);
     const disabledSkills = prefs.disabledSkills?.length ? prefs.disabledSkills : undefined;
 
@@ -1698,6 +1828,8 @@ export class SessionManager {
     if (hooks) {
       log.debug(`Hooks resolved for session resume: ${Object.keys(hooks).join(', ')}`);
     }
+
+    const customAgents = buildCustomAgents(workingDirectory);
 
     // Resolve BYOK provider for resume
     const providerName = prefs.provider ?? null;
@@ -1717,9 +1849,11 @@ export class SessionManager {
         provider: sdkProvider || undefined,
         reasoningEffort: reasoningEffort ?? undefined,
         agent: prefs.agent ?? undefined,
+        enableConfigDiscovery: true,
         mcpServers,
         skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
         disabledSkills,
+        customAgents: customAgents.length > 0 ? customAgents : undefined,
         tools: customTools.length > 0 ? customTools : undefined,
         hooks,
         infiniteSessions: getConfig().infiniteSessions,
@@ -1798,7 +1932,7 @@ export class SessionManager {
     }
 
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
-    const skillDirectories = discoverSkillDirectories(targetWorkspace);
+    const skillDirectories = discoverExtraSkillDirectories();
     const hooks = await this.resolveHooks(targetWorkspace);
 
     // Build ephemeral permission handler
@@ -1814,6 +1948,7 @@ export class SessionManager {
         this.bridge.createSession({
           workingDirectory: targetWorkspace,
           configDir: defaultConfigDir,
+          enableConfigDiscovery: true,
           mcpServers: this.resolveMcpServers(targetWorkspace),
           skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
           onPermissionRequest: ephemeralPermissionHandler,
