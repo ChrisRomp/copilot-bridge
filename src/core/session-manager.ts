@@ -417,10 +417,23 @@ function buildCustomAgents(workingDirectory: string): { name: string; prompt: st
   if (definitions.size === 0) return [];
   const agents: { name: string; prompt: string; description?: string }[] = [];
   for (const [name, def] of definitions) {
-    agents.push({ name, prompt: def.content });
+    const description = extractFrontmatterField(def.content, 'description');
+    agents.push({ name, prompt: def.content, ...(description ? { description } : {}) });
   }
   log.debug(`Built ${agents.length} custom agent(s) for SDK: ${agents.map(a => a.name).join(', ')}`);
   return agents;
+}
+
+/** Extract a field value from YAML frontmatter. */
+function extractFrontmatterField(content: string, field: string): string | undefined {
+  const lines = content.split('\n');
+  if (lines[0]?.trim() !== '---') return undefined;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') break;
+    const match = lines[i].match(new RegExp(`^${field}:\\s*(.+)`, 'i'));
+    if (match) return match[1].trim().replace(/^["']|["']$/g, '');
+  }
+  return undefined;
 }
 
 /** Extract a succinct summary from plan content (first heading + first body line, ~150 chars max). */
@@ -1150,8 +1163,8 @@ export class SessionManager {
         }
       });
     } catch (err: any) {
-      const msg = String(err?.message ?? err);
-      if (agent && msg.includes('not found') && msg.toLowerCase().includes('agent')) {
+      const msg = String(err?.message ?? err).toLowerCase();
+      if (agent && msg.includes('not found') && msg.includes('agent')) {
         // Agent not in current session — save pref and create a new session with config discovery
         log.info(`Agent "${agent}" not in current session, creating new session with config discovery`);
         try { await setChannelPrefs(channelId, { agent }); }
@@ -1706,10 +1719,10 @@ export class SessionManager {
       usedModel = result.usedModel;
       didFallback = result.didFallback;
     } catch (err: any) {
-      const msg = String(err?.message ?? err);
+      const msg = String(err?.message ?? err).toLowerCase();
 
       // Agent not found — clear the pref and retry without the agent
-      if (prefs.agent && msg.includes('not found') && msg.toLowerCase().includes('agent')) {
+      if (prefs.agent && msg.includes('not found') && msg.includes('agent')) {
         log.warn(`Agent "${prefs.agent}" not found for channel ${channelId}, falling back to default`);
         prefs.agent = null;
         try { await setChannelPrefs(channelId, { agent: null }); }
@@ -1748,10 +1761,10 @@ export class SessionManager {
       } else if (providerName && sdkProvider) {
         // Enhance error message with BYOK context (only when provider actually resolved)
         const provConfig = getConfig().providers?.[providerName];
-        if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('fetch failed')) {
+        if (msg.includes('econnrefused') || msg.includes('enotfound') || msg.includes('fetch failed')) {
           throw new Error(`Provider "${providerName}" is unreachable at ${provConfig?.baseUrl ?? 'unknown URL'}. Check that the service is running.`);
         }
-        if (msg.includes('401') || msg.includes('403') || msg.includes('Unauthorized') || msg.includes('Forbidden')) {
+        if (msg.includes('401') || msg.includes('403') || msg.includes('unauthorized') || msg.includes('forbidden')) {
           throw new Error(`Provider "${providerName}" rejected authentication. Check your API key configuration.`);
         }
         if (msg.includes('404') || msg.includes('model not found') || msg.includes('does not exist')) {
