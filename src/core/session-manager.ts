@@ -468,6 +468,26 @@ export function extractPlanSummary(content: string): string {
   return '(empty plan)';
 }
 
+/** Load AGENTS.local.md from a workspace directory, wrapped in XML tags.
+ *  Returns the wrapped content string, or undefined if the file doesn't exist or is empty. */
+export function loadLocalInstructions(workingDirectory?: string): string | undefined {
+  if (!workingDirectory) return undefined;
+  const localAgentsPath = path.join(workingDirectory, 'AGENTS.local.md');
+  try {
+    if (fs.existsSync(localAgentsPath)) {
+      const localContent = fs.readFileSync(localAgentsPath, 'utf-8').trim();
+      if (localContent) {
+        log.debug(`Loaded AGENTS.local.md from ${workingDirectory}`);
+        return `<local_instructions>\n${localContent}\n</local_instructions>`;
+      }
+    }
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') return undefined;
+    log.warn(`Failed to read AGENTS.local.md from ${localAgentsPath}:`, err);
+  }
+  return undefined;
+}
+
 export class SessionManager {
   private bridge: CopilotBridge;
   private channelSessions = new Map<string, string>(); // channelId → sessionId
@@ -1600,25 +1620,6 @@ export class SessionManager {
     return await getWorkspacePath(botName);
   }
 
-  /** Load AGENTS.local.md from a workspace directory, wrapped in XML tags.
-   *  Returns the wrapped content string, or undefined if the file doesn't exist or is empty. */
-  private loadLocalInstructions(workingDirectory?: string): string | undefined {
-    if (!workingDirectory) return undefined;
-    const localAgentsPath = path.join(workingDirectory, 'AGENTS.local.md');
-    try {
-      if (fs.existsSync(localAgentsPath)) {
-        const localContent = fs.readFileSync(localAgentsPath, 'utf-8').trim();
-        if (localContent) {
-          log.debug(`Loaded AGENTS.local.md from ${workingDirectory}`);
-          return `<local_instructions>\n${localContent}\n</local_instructions>`;
-        }
-      }
-    } catch (err) {
-      log.warn(`Failed to read AGENTS.local.md: ${err}`);
-    }
-    return undefined;
-  }
-
   /** Build the system message config for session create/resume.
    *  Appends bridge-specific instructions to the SDK's custom_instructions section
    *  so agents get channel communication context without polluting AGENTS.md.
@@ -1650,7 +1651,7 @@ export class SessionManager {
     ].join('\n'));
 
     // Load AGENTS.local.md if present (gitignored, per-operator conventions)
-    const localInstructions = this.loadLocalInstructions(workingDirectory);
+    const localInstructions = loadLocalInstructions(workingDirectory);
     if (localInstructions) {
       parts.push(localInstructions);
     }
@@ -1954,7 +1955,7 @@ export class SessionManager {
       systemParts.push(`\n--- Agent Definition: ${agentDef.name} ---\n${agentDef.content}`);
     }
     // Load AGENTS.local.md from target bot's workspace if present
-    const localInstructions = this.loadLocalInstructions(targetWorkspace);
+    const localInstructions = loadLocalInstructions(targetWorkspace);
     if (localInstructions) {
       systemParts.push(localInstructions);
     }
