@@ -348,12 +348,19 @@ Each bot has a dedicated workspace directory (default: \`~/.copilot-bridge/works
 \`\`\`
 <workspace>/
 ├── AGENTS.md            # Agent instructions (read by Copilot CLI)
+├── AGENTS.local.md      # Local operator conventions (gitignored, optional)
 ├── .env                 # Environment variables (secrets, API tokens)
 ├── mcp-config.json      # Workspace-specific MCP servers (optional)
 ├── agents/              # Named agent personas (*.agent.md)
 ├── .github/skills/      # Project-level skills
 └── .agents/skills/      # Legacy skill location
 \`\`\`
+
+## AGENTS.local.md
+
+Optional, gitignored file for per-operator conventions. Loaded by the bridge and injected into \`custom_instructions\` alongside bridge instructions. Use for preferences like push policies, branching rules, or workflow constraints that are personal to the operator rather than the project.
+
+Not loaded by the SDK/CLI directly — the bridge handles it in \`buildSystemMessage()\`.
 
 ## .env Files
 

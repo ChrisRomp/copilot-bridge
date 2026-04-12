@@ -24,7 +24,7 @@ More screenshots [here](docs/screenshots.md).
 ## Features
 
 - **Multi-bot support** — Run multiple bot identities on the same platform (e.g., `@copilot` for admin, `@alice` for tasks)
-- **Workspaces** — Each bot gets an isolated workspace with its own `AGENTS.md`, `.env` secrets, and `MEMORY.md`
+- **Workspaces** — Each bot gets an isolated workspace with its own `AGENTS.md`, `.env` secrets, `MEMORY.md`, and optional `AGENTS.local.md` for per-operator conventions
 - **DM auto-discovery** — Just message a bot; no channel config needed for direct messages
 - **Streaming responses** — Edit-in-place message updates with throttling
 - **MCP & skills** — Auto-loads MCP servers and skill directories from Copilot config
@@ -68,7 +68,7 @@ See the [Setup Guide — Running as a Service](docs/setup.md#running-as-a-servic
 | **Session** | | |
 | `/new` | | Start a fresh session |
 | `/stop` | `/cancel` | Stop the current task |
-| `/reload` | | Reload session (re-reads AGENTS.md, workspace config) |
+| `/reload` | | Reload session (re-reads AGENTS.md, AGENTS.local.md, workspace config) |
 | `/reload config` | | Hot-reload config.json (safe changes apply without restart) |
 | `/resume [id]` | | List past sessions, or resume one by ID |
 | `/model [name]` | `/models` | List models or switch model (fuzzy match) |

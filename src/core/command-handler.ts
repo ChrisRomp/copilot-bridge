@@ -916,7 +916,7 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
           '**Session**',
           '`/new` — Start a new session',
           '`/stop` — Stop the current task (alias: `/cancel`)',
-          '`/reload` — Reload session (re-reads AGENTS.md, workspace config)',
+          '`/reload` — Reload session (re-reads AGENTS.md, AGENTS.local.md, workspace config)',
           '`/reload config` — Hot-reload config.json',
           '`/reload mcp` — Reload MCP servers (no session restart)',
           '`/reload skills` — Reload skills (no session restart)',

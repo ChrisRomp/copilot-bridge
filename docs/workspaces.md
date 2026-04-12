@@ -9,6 +9,7 @@ Workspaces are auto-created when the bridge starts and detects a bot without one
 ```
 ~/.copilot-bridge/workspaces/agent-name/
 ├── AGENTS.md        # Agent instructions (auto-generated from template, customizable)
+├── AGENTS.local.md  # Local operator conventions (gitignored, optional)
 ├── MEMORY.md        # Persistent memory across sessions (managed by the agent)
 ├── mcp-config.json  # Workspace-specific MCP servers (optional, overrides global)
 └── .env             # Environment variables loaded at session start
@@ -17,6 +18,14 @@ Workspaces are auto-created when the bridge starts and detects a bot without one
 ### Custom working directories
 
 For group channels or project-specific DMs, override the workspace via `workingDirectory` in [config.json](configuration.md#channels). The same bot can serve multiple channels, each pointed at a different directory.
+
+## AGENTS.local.md
+
+An optional, gitignored file for per-operator conventions (push policies, branching rules, workflow preferences). The bridge loads it from the working directory at session creation and injects its content into `custom_instructions` alongside bridge instructions.
+
+This file is **not** discovered by the Copilot SDK/CLI — the bridge handles it in `buildSystemMessage()`. It's intended for conventions that are personal to the operator rather than the project (which belong in `AGENTS.md`).
+
+To use it, create `AGENTS.local.md` in the working directory and add it to `.gitignore`.
 
 ## Agent templates
 
