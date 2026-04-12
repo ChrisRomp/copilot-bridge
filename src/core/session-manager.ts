@@ -1600,6 +1600,25 @@ export class SessionManager {
     return await getWorkspacePath(botName);
   }
 
+  /** Load AGENTS.local.md from a workspace directory, wrapped in XML tags.
+   *  Returns the wrapped content string, or undefined if the file doesn't exist or is empty. */
+  private loadLocalInstructions(workingDirectory?: string): string | undefined {
+    if (!workingDirectory) return undefined;
+    const localAgentsPath = path.join(workingDirectory, 'AGENTS.local.md');
+    try {
+      if (fs.existsSync(localAgentsPath)) {
+        const localContent = fs.readFileSync(localAgentsPath, 'utf-8').trim();
+        if (localContent) {
+          log.debug(`Loaded AGENTS.local.md from ${workingDirectory}`);
+          return `<local_instructions>\n${localContent}\n</local_instructions>`;
+        }
+      }
+    } catch (err) {
+      log.warn(`Failed to read AGENTS.local.md: ${err}`);
+    }
+    return undefined;
+  }
+
   /** Build the system message config for session create/resume.
    *  Appends bridge-specific instructions to the SDK's custom_instructions section
    *  so agents get channel communication context without polluting AGENTS.md.
@@ -1631,19 +1650,9 @@ export class SessionManager {
     ].join('\n'));
 
     // Load AGENTS.local.md if present (gitignored, per-operator conventions)
-    if (workingDirectory) {
-      const localAgentsPath = path.join(workingDirectory, 'AGENTS.local.md');
-      try {
-        if (fs.existsSync(localAgentsPath)) {
-          const localContent = fs.readFileSync(localAgentsPath, 'utf-8').trim();
-          if (localContent) {
-            parts.push(`<local_instructions>\n${localContent}\n</local_instructions>`);
-            log.debug(`Loaded AGENTS.local.md from ${workingDirectory}`);
-          }
-        }
-      } catch (err) {
-        log.warn(`Failed to read AGENTS.local.md: ${err}`);
-      }
+    const localInstructions = this.loadLocalInstructions(workingDirectory);
+    if (localInstructions) {
+      parts.push(localInstructions);
     }
 
     return {
@@ -1943,6 +1952,11 @@ export class SessionManager {
     const systemParts = [callerPrompt, workspacePrompt];
     if (agentDef) {
       systemParts.push(`\n--- Agent Definition: ${agentDef.name} ---\n${agentDef.content}`);
+    }
+    // Load AGENTS.local.md from target bot's workspace if present
+    const localInstructions = this.loadLocalInstructions(targetWorkspace);
+    if (localInstructions) {
+      systemParts.push(localInstructions);
     }
     // If the target has an ask_agent tool available, inject the chain context
     if (nextContext.depth < (iaConfig.maxDepth ?? 3)) {
