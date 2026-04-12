@@ -62,6 +62,10 @@ All bots default to **it/its** pronouns. Bots are software, not people. When wri
 
 ## Key Conventions
 
+### Local Instructions
+
+The bridge loads `AGENTS.local.md` from each bot's working directory if present. This file is gitignored and injected into sessions via `custom_instructions`. Use it for per-operator conventions (e.g., push policies, workflow preferences) that don't belong in the repo.
+
 ### Channel Adapter Pattern
 
 New platforms implement `ChannelAdapter` (in `src/types.ts`). The Mattermost adapter (`src/channels/mattermost/adapter.ts`) is the reference implementation.

@@ -8,3 +8,4 @@ config.json
 .playwright-cli
 .nano-banana-config.json
 generated_imgs/
+AGENTS.local.md

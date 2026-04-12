@@ -1602,9 +1602,13 @@ export class SessionManager {
 
   /** Build the system message config for session create/resume.
    *  Appends bridge-specific instructions to the SDK's custom_instructions section
-   *  so agents get channel communication context without polluting AGENTS.md. */
-  private buildSystemMessage(): SystemMessageCustomizeConfig {
-    const content = [
+   *  so agents get channel communication context without polluting AGENTS.md.
+   *  Also loads AGENTS.local.md from the working directory if present. */
+  private buildSystemMessage(workingDirectory?: string): SystemMessageCustomizeConfig {
+    const parts: string[] = [];
+
+    // Bridge-specific instructions
+    parts.push([
       '<bridge_instructions>',
       'You are communicating through copilot-bridge, a messaging bridge to a chat platform (e.g., Mattermost, Slack).',
       '',
@@ -1624,12 +1628,28 @@ export class SessionManager {
       '- When you have nothing meaningful to add to a conversation, call the `no_reply` tool instead of sending text',
       '- This is preferred over typing "NO_REPLY" or similar text responses',
       '</bridge_instructions>',
-    ].join('\n');
+    ].join('\n'));
+
+    // Load AGENTS.local.md if present (gitignored, per-operator conventions)
+    if (workingDirectory) {
+      const localAgentsPath = path.join(workingDirectory, 'AGENTS.local.md');
+      try {
+        if (fs.existsSync(localAgentsPath)) {
+          const localContent = fs.readFileSync(localAgentsPath, 'utf-8').trim();
+          if (localContent) {
+            parts.push(`<local_instructions>\n${localContent}\n</local_instructions>`);
+            log.debug(`Loaded AGENTS.local.md from ${workingDirectory}`);
+          }
+        }
+      } catch (err) {
+        log.warn(`Failed to read AGENTS.local.md: ${err}`);
+      }
+    }
 
     return {
       mode: 'customize' as const,
       sections: {
-        custom_instructions: { action: 'append' as const, content },
+        custom_instructions: { action: 'append' as const, content: parts.join('\n\n') },
       },
     };
   }
@@ -1696,7 +1716,7 @@ export class SessionManager {
           tools: customTools.length > 0 ? customTools : undefined,
           hooks,
           infiniteSessions: getConfig().infiniteSessions,
-          systemMessage: this.buildSystemMessage(),
+          systemMessage: this.buildSystemMessage(workingDirectory),
         })
       );
     };
@@ -1747,7 +1767,7 @@ export class SessionManager {
               tools: customTools.length > 0 ? customTools : undefined,
               hooks,
               infiniteSessions: getConfig().infiniteSessions,
-              systemMessage: this.buildSystemMessage(),
+              systemMessage: this.buildSystemMessage(workingDirectory),
             })
           );
         };
@@ -1857,7 +1877,7 @@ export class SessionManager {
         tools: customTools.length > 0 ? customTools : undefined,
         hooks,
         infiniteSessions: getConfig().infiniteSessions,
-        systemMessage: this.buildSystemMessage(),
+        systemMessage: this.buildSystemMessage(workingDirectory),
       })
     );
 
