@@ -982,7 +982,7 @@ export class SessionManager {
     if (queue && queue.length > 0) {
       log.info(`Auto-denying ${queue.length} pending permission(s) for channel ${channelId}`);
       for (const entry of queue) {
-        entry.resolve({ kind: 'reject' });
+        entry.resolve({ kind: 'user-not-available' });
       }
       this.pendingPermissions.delete(channelId);
     }
@@ -2989,10 +2989,10 @@ export class SessionManager {
   }
 
   async shutdown(): Promise<void> {
-    // Resolve all pending permissions (deny them on shutdown)
+    // Resolve all pending permissions (user unavailable during shutdown — not a user-driven rejection)
     for (const [, queue] of this.pendingPermissions) {
       for (const pending of queue) {
-        pending.resolve({ kind: 'reject' });
+        pending.resolve({ kind: 'user-not-available' });
       }
     }
     this.pendingPermissions.clear();
