@@ -238,16 +238,16 @@ export class CopilotBridge {
   }
 
   // Session RPC proxies (accessed via private API)
-  async getSessionMode(id: string): Promise<{ mode: string }> {
+  async getSessionMode(id: string): Promise<'interactive' | 'plan' | 'autopilot'> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Session ${id} not active`);
     return session.rpc.mode.get();
   }
 
-  async setSessionMode(id: string, mode: 'interactive' | 'plan' | 'autopilot'): Promise<{ mode: string }> {
+  async setSessionMode(id: string, mode: 'interactive' | 'plan' | 'autopilot'): Promise<void> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Session ${id} not active`);
-    return session.rpc.mode.set({ mode });
+    await session.rpc.mode.set({ mode });
   }
 
   async readPlan(id: string): Promise<{ exists: boolean; content: string | null; path: string | null }> {
