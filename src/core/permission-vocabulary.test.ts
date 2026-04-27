@@ -8,14 +8,7 @@ vi.mock('./workspace-manager.js', () => ({
   ensureWorkspacesDir: vi.fn(),
 }));
 
-// Mock mcp-servers module (loadMcpServers reads filesystem)
-vi.mock('./mcp-servers.js', async () => {
-  const actual = await vi.importActual('./mcp-servers.js') as Record<string, unknown>;
-  return { ...actual };
-});
-
-// Stub loadMcpServers via session-manager internal usage (it's a module-level function)
-// We'll handle this by mocking the fs reads it depends on
+// Block filesystem scanning in loadMcpServers (internal to session-manager.ts)
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual('node:fs') as Record<string, unknown>;
   return {
@@ -128,7 +121,7 @@ describe('permission vocabulary (hook → SDK resolution)', () => {
     expect((manager as any).pendingPermissions.get(channelId)).toBeUndefined();
   });
 
-  it('null hook result passes through without queuing', async () => {
+  it('undefined hook result passes through without queuing', async () => {
     const channelId = 'test-chan-null';
     const hooks = {
       onPreToolUse: vi.fn().mockResolvedValue(undefined),
@@ -164,8 +157,8 @@ describe('permission vocabulary (hook → SDK resolution)', () => {
 
 describe('PendingPermission resolve type contract', () => {
   it('resolve callback accepts SDK 0.3.0 vocabulary', () => {
-    // Verify the PendingPermission type accepts the new vocabulary at compile time.
-    // This test is a compile-time guard — if the type regresses, tsc will fail.
+    // Documents the expected vocabulary as a runtime assertion.
+    // Note: tsconfig excludes test files, so this isn't a tsc-level guard.
     const results: Parameters<PendingPermission['resolve']>[0][] = [
       { kind: 'approve-once' },
       { kind: 'reject' },
