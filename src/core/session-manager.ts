@@ -573,7 +573,7 @@ export class SessionManager {
           toolInput: input.toolArgs,
           commands: [],
           resolve: (decision: any) => {
-            if (decision.kind === 'approved') {
+            if (decision.kind === 'approve-once') {
               resolve({ ...result, permissionDecision: 'allow' });
             } else {
               resolve({ ...result, permissionDecision: 'deny', permissionDecisionReason: reason });
