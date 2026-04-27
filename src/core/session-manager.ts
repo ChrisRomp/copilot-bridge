@@ -982,7 +982,7 @@ export class SessionManager {
     if (queue && queue.length > 0) {
       log.info(`Auto-denying ${queue.length} pending permission(s) for channel ${channelId}`);
       for (const entry of queue) {
-        entry.resolve({ kind: 'denied-interactively-by-user' });
+        entry.resolve({ kind: 'reject' });
       }
       this.pendingPermissions.delete(channelId);
     }
@@ -1250,8 +1250,8 @@ export class SessionManager {
     const sessionId = this.channelSessions.get(channelId);
     if (sessionId) {
       try {
-        const result = await this.withSessionRetry(channelId, (sid) => this.bridge.getSessionMode(sid), false);
-        return result.mode;
+        const mode = await this.withSessionRetry(channelId, (sid) => this.bridge.getSessionMode(sid), false);
+        return mode;
       } catch (err) { log.debug(`getSessionMode(${channelId.slice(0, 8)}) failed, falling through to prefs:`, err); }
     }
     const prefs = await getChannelPrefs(channelId);
@@ -1260,10 +1260,10 @@ export class SessionManager {
 
   /** Set the session mode (interactive, plan, autopilot). Persists to channel prefs. Does not change yolo/permission state. */
   async setSessionMode(channelId: string, mode: 'interactive' | 'plan' | 'autopilot'): Promise<string> {
-    const result = await this.withSessionRetry(channelId, (sid) => this.bridge.setSessionMode(sid, mode));
-    try { await setChannelPrefs(channelId, { sessionMode: result.mode }); }
+    await this.withSessionRetry(channelId, (sid) => this.bridge.setSessionMode(sid, mode));
+    try { await setChannelPrefs(channelId, { sessionMode: mode }); }
     catch (e) { log.warn('Session mode set but failed to persist preference:', e); }
-    return result.mode;
+    return mode;
   }
 
   /** Read the plan.md file from the session workspace. */
@@ -1344,7 +1344,7 @@ export class SessionManager {
     try {
       session = await this.bridge.createSession({
         ...(model ? { model } : {}),
-        onPermissionRequest: async () => ({ kind: 'denied-interactively-by-user' as const }),
+        onPermissionRequest: async () => ({ kind: 'reject' as const }),
         systemMessage: { content: 'You are a concise summarizer. Respond with only the summary, no preamble.' },
       });
 
@@ -1398,8 +1398,8 @@ export class SessionManager {
 
     // Resolve the permission first — don't let persistence failures block the SDK callback
     pending.resolve(allow
-      ? { kind: 'approved' }
-      : { kind: 'denied-interactively-by-user' });
+      ? { kind: 'approve-once' }
+      : { kind: 'reject' });
 
     if (remember && !pending.fromHook) {
       const action = allow ? 'allow' : 'deny';
@@ -2106,14 +2106,14 @@ export class SessionManager {
 
       // 1. Hardcoded safety denies — always enforced
       if (isHardDeny(reqKind, reqCommand)) {
-        return { kind: 'denied-by-rules' };
+        return { kind: 'reject' };
       }
 
       // 2. Caller's explicit denies — checked before auto-approve
       if (opts.denyTools && opts.denyTools.length > 0) {
         const toolName = (request as any).toolName ?? (request as any).tool_name ?? (request as any).name ?? reqKind;
         if (opts.denyTools.includes(toolName)) {
-          return { kind: 'denied-by-rules' };
+          return { kind: 'reject' };
         }
       }
 
@@ -2121,7 +2121,7 @@ export class SessionManager {
       if (reqKind === 'custom-tool') {
         const reqToolName = (request as any).toolName;
         if (BRIDGE_CUSTOM_TOOLS.includes(reqToolName)) {
-          return { kind: 'approved' };
+          return { kind: 'approve-once' };
         }
       }
 
@@ -2132,7 +2132,7 @@ export class SessionManager {
           // Verify caller has this permission
           const callerResult = await checkPermission(opts.callerChannelId, toolName, '*');
           if (callerResult === 'allow') {
-            return { kind: 'approved' };
+            return { kind: 'approve-once' };
           }
         }
       }
@@ -2142,21 +2142,21 @@ export class SessionManager {
       const targetScope = `bot:${opts.targetBot}`;
       const toolName = (request as any).toolName ?? (request as any).tool_name ?? (request as any).name ?? reqKind;
       const storedResult = await checkPermission(targetScope, toolName, '*');
-      if (storedResult === 'allow') return { kind: 'approved' };
-      if (storedResult === 'deny') return { kind: 'denied-by-rules' };
+      if (storedResult === 'allow') return { kind: 'approve-once' };
+      if (storedResult === 'deny') return { kind: 'reject' };
 
       // 6. Caller channel's stored rules (merged — supplement target)
       const callerResult = await checkPermission(opts.callerChannelId, toolName, '*');
-      if (callerResult === 'allow') return { kind: 'approved' };
+      if (callerResult === 'allow') return { kind: 'approve-once' };
 
       // 7. Autopilot: approve remaining if enabled
       if (opts.autopilot) {
-        return { kind: 'approved' };
+        return { kind: 'approve-once' };
       }
 
       // 8. No rule matched — deny with detail (no human to ask in ephemeral sessions)
       log.warn(`Ephemeral permission denied (no rule): ${toolName} for ${opts.targetBot}`);
-      return { kind: 'denied-no-approval-rule-and-could-not-request-from-user' };
+      return { kind: 'user-not-available' };
     };
   }
 
@@ -2843,20 +2843,20 @@ export class SessionManager {
     const reqCommand = typeof (request as any).fullCommandText === 'string' ? (request as any).fullCommandText
       : typeof (request as any).command === 'string' ? (request as any).command : undefined;
     if (isHardDeny(reqKind, reqCommand)) {
-      return Promise.resolve({ kind: 'denied-by-rules' });
+      return Promise.resolve({ kind: 'reject' });
     }
 
     // Auto-approve bridge custom tools (they enforce their own workspace boundaries)
     if (reqKind === 'custom-tool') {
       const reqToolName = (request as any).toolName;
       if (BRIDGE_CUSTOM_TOOLS.includes(reqToolName)) {
-        return Promise.resolve({ kind: 'approved' });
+        return Promise.resolve({ kind: 'approve-once' });
       }
     }
 
     // Autopilot mode: allow everything (after safety checks)
     if (prefs.permissionMode === 'autopilot') {
-      return Promise.resolve({ kind: 'approved' });
+      return Promise.resolve({ kind: 'approve-once' });
     }
 
     // Check config-level permission rules first (CLI-compatible syntax)
@@ -2866,10 +2866,10 @@ export class SessionManager {
     const workspaceAllowPaths = await getWorkspaceAllowPaths(botName, config.platform);
     const configResult = evaluateConfigPermissions(request as any, resolvedDir, workspaceAllowPaths, isBotAdmin(config.platform, botName));
     if (configResult === 'allow') {
-      return Promise.resolve({ kind: 'approved' });
+      return Promise.resolve({ kind: 'approve-once' });
     }
     if (configResult === 'deny') {
-      return Promise.resolve({ kind: 'denied-by-rules' });
+      return Promise.resolve({ kind: 'reject' });
     }
 
     // Check stored permission rules (SQLite, from /remember)
@@ -2888,11 +2888,11 @@ export class SessionManager {
       const serverResult = await checkPermission(channelId, `mcp:${serverName}`, '*');
       if (serverResult === 'allow') {
         log.debug(`MCP "${serverName}" auto-approved by stored rule`);
-        return Promise.resolve({ kind: 'approved' });
+        return Promise.resolve({ kind: 'approve-once' });
       }
       if (serverResult === 'deny') {
         log.debug(`MCP "${serverName}" denied by stored rule`);
-        return Promise.resolve({ kind: 'denied-by-rules' });
+        return Promise.resolve({ kind: 'reject' });
       }
     }
 
@@ -2901,16 +2901,16 @@ export class SessionManager {
       if (results.every(r => r === 'allow')) {
         const hasWrapper = commands.some(cmd => SHELL_WRAPPERS.has(cmd));
         if (!hasWrapper) {
-          return Promise.resolve({ kind: 'approved' });
+          return Promise.resolve({ kind: 'approve-once' });
         }
       }
       if (results.some(r => r === 'deny')) {
-        return Promise.resolve({ kind: 'denied-by-rules' });
+        return Promise.resolve({ kind: 'reject' });
       }
     } else {
       const result = await checkPermission(channelId, toolName, '*');
-      if (result === 'allow') return Promise.resolve({ kind: 'approved' });
-      if (result === 'deny') return Promise.resolve({ kind: 'denied-by-rules' });
+      if (result === 'allow') return Promise.resolve({ kind: 'approve-once' });
+      if (result === 'deny') return Promise.resolve({ kind: 'reject' });
     }
     } catch (err) {
       log.warn('Permission check failed, falling through to interactive:', err);
@@ -2992,7 +2992,7 @@ export class SessionManager {
     // Resolve all pending permissions (deny them on shutdown)
     for (const [, queue] of this.pendingPermissions) {
       for (const pending of queue) {
-        pending.resolve({ kind: 'denied-interactively-by-user' });
+        pending.resolve({ kind: 'reject' });
       }
     }
     this.pendingPermissions.clear();

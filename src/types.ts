@@ -255,7 +255,11 @@ export interface PendingPermission {
   hookReason?: string; // reason from hook for display in permission prompt
   toolInput: unknown;
   commands: string[]; // extracted individual commands
-  resolve: (result: { kind: 'approved' | 'denied-by-rules' | 'denied-interactively-by-user' | 'denied-no-approval-rule-and-could-not-request-from-user' }) => void;
+  resolve: (result:
+    | { kind: 'approve-once' }
+    | { kind: 'reject'; feedback?: string }
+    | { kind: 'user-not-available' }
+  ) => void;
   createdAt: number;
 }
 
