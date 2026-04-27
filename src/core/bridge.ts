@@ -15,25 +15,19 @@ import {
   type SessionLifecycleHandler,
   type Tool,
   type TelemetryConfig,
+  type ProviderConfig,
 } from '@github/copilot-sdk';
 import type { SessionHooks } from './hooks-loader.js';
 import type { BridgeProviderConfig } from '../types.js';
+
+// Re-export SDK ProviderConfig under the old name for backward compat
+export type SDKProviderConfig = ProviderConfig;
 
 // SDK types not re-exported from package root
 type UserInputHandler = (
   request: { question: string; choices?: string[]; allowFreeform?: boolean },
   invocation: { sessionId: string },
 ) => Promise<{ answer: string; wasFreeform: boolean }> | { answer: string; wasFreeform: boolean };
-
-// SDK ProviderConfig — matches @github/copilot-sdk types.d.ts
-export interface SDKProviderConfig {
-  type?: 'openai' | 'azure' | 'anthropic';
-  wireApi?: 'completions' | 'responses';
-  baseUrl: string;
-  apiKey?: string;
-  bearerToken?: string;
-  azure?: { apiVersion?: string };
-}
 
 export class CopilotBridge {
   private client: CopilotClient;
