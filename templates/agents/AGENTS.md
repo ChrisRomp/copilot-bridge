@@ -34,6 +34,16 @@ Maintain a `MEMORY.md` file in your workspace to persist important details acros
 
 Read `MEMORY.md` at the start of each session if it exists. Update it when you learn something worth remembering. Keep it concise and organized — this is your long-term memory.
 
+## Task Memory (Beads)
+
+If this workspace has Beads configured (`.beads/` directory exists and `bd` is on PATH), use it for structured task tracking instead of `MEMORY.md`:
+
+- **Session start**: run `bd prime` to recover task context, then `bd ready --json` to see what to work on
+- **During work**: `bd create`, `bd update --claim`, `bd close` — switch to the Beads agent (`/agent beads`) for the full workflow
+- **Session end**: run `bd backup export-git` to snapshot progress to git
+
+Prefer `bd remember` over `MEMORY.md` for persistent knowledge when Beads is available. See `docs/beads.md` for setup instructions.
+
 ## Constraints
 
 - File system access is sandboxed to this workspace{{#allowPaths}} + additional folders listed above{{/allowPaths}}

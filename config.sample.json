@@ -51,6 +51,7 @@
       "shell(grep)",
       "shell(wc)"
     ],
+    "_comment_beads": "Uncomment to allow Beads task memory (bd writes to .beads/ and may start a Dolt server — opt-in only)",
     "deny": [
       "shell(rm)",
       "shell(git push)",
