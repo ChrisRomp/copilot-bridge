@@ -131,3 +131,42 @@ Use the repo's YAML issue templates (`.github/ISSUE_TEMPLATE/`) when creating is
 
 Always set `Reported By: Agent (automated)` when filing programmatically. Reference related issues with `#N`. Keep issue bodies factual — describe observed behavior, not speculative fixes.
 
+## Review-Implement Loop (REQUIRED)
+
+Every code change MUST go through the review-implement loop before being considered done. This is non-negotiable.
+
+### The Loop
+
+```
+Write -> Test -> Review -> Fix (if needed) -> Re-review -> Open PR
+```
+
+1. **Write**: Implement the change, run tests, commit and push
+2. **Review**: Launch a `Review` agent against the diff (e.g., `git diff HEAD~1 HEAD` or the PR diff)
+3. **Triage**: Read findings. If 0 Critical/High/Medium issues, skip to step 6
+4. **Fix**: Address the findings, commit, push, verify tests pass
+5. **Re-review**: Launch Review agent again scoped to fix commits
+6. **Repeat** steps 3-5 until review is clean (max 3 cycles, then escalate to user)
+7. **Open PR**: Only after review is clean, tests pass, and spot-check succeeds. PRs are the deliverable.
+
+### Merge Gate
+
+A change may only be considered complete when:
+- Latest code review finds no Critical or High issues
+- All tests pass
+- Any Medium issues are either fixed or explicitly accepted by the user
+
+### Test Quality Gate (Anti-False-Positive)
+
+When reviewing tests, the Review agent MUST check for false positives by asking:
+
+> "Would this test still pass if the feature under test were completely removed or disabled?"
+
+If yes, the test is a false positive. Tests must create **state divergence** where the feature's absence produces a different observable outcome. See the parent AGENTS.md for patterns (cache divergence, side-effect assertions, config-flag tests).
+
+### When to Run
+
+- After **every** commit that changes source code (not docs-only changes)
+- Even for "simple" or "obvious" changes; the review catches what you miss
+- The loop runs automatically; never ask the user whether to review
+
