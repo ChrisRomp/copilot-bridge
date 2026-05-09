@@ -442,6 +442,24 @@ describe('registerCardRoutes', () => {
     });
   });
 
+  it('rejects assigning an agent outside the API key scope', async () => {
+    const { store, cards, updateCard } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: null, status: 'idea' }));
+    registerCardRoutes(app, { store, adapter: createAdapter() });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/v1/cards/card-1',
+      headers: bobOnlyHeader,
+      payload: { agent: 'lal' },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'Forbidden' });
+    expect(updateCard).not.toHaveBeenCalled();
+  });
+
   it('unassigns an agent and cancels active runs', async () => {
     const { store, cards, runs, updateCard, updateRun } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: 'bob', status: 'in_progress' }));
@@ -466,6 +484,26 @@ describe('registerCardRoutes', () => {
     expect(updateCard).toHaveBeenCalledWith('card-1', { agent_bot: null });
   });
 
+  it('rejects unassigning an agent outside the API key scope', async () => {
+    const { store, cards, runs, updateCard, updateRun } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: 'lal', status: 'in_progress' }));
+    runs.set('run-1', createRunRecord({ id: 'run-1', card_id: 'card-1', status: 'in-progress' }));
+    registerCardRoutes(app, { store, adapter: createAdapter() });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/v1/cards/card-1',
+      headers: bobOnlyHeader,
+      payload: { agent: null },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'Forbidden' });
+    expect(updateRun).not.toHaveBeenCalled();
+    expect(updateCard).not.toHaveBeenCalled();
+  });
+
   it('archives cards by cancelling active runs', async () => {
     const { store, cards, runs, updateCard, updateRun } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1', status: 'in_progress' }));
@@ -485,6 +523,41 @@ describe('registerCardRoutes', () => {
     expect(updateRun).toHaveBeenCalledTimes(1);
     expect(updateRun).toHaveBeenCalledWith('run-1', { status: 'cancelled' });
     expect(updateCard).toHaveBeenCalledWith('card-1', { status: 'archived' });
+  });
+
+  it('rejects archiving without update permission', async () => {
+    const { store, cards, updateCard, updateRun } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1', status: 'in_progress' }));
+    registerCardRoutes(app, { store, adapter: createAdapter() });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-1/archive',
+      headers: readOnlyHeader,
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'Forbidden' });
+    expect(updateRun).not.toHaveBeenCalled();
+    expect(updateCard).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when archiving a missing card', async () => {
+    const { store, updateCard, updateRun } = createStore();
+    registerCardRoutes(app, { store, adapter: createAdapter() });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/missing/archive',
+      headers: authHeader,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'Card not found' });
+    expect(updateRun).not.toHaveBeenCalled();
+    expect(updateCard).not.toHaveBeenCalled();
   });
 
   it('deletes cards after cancelling active runs and enforces delete permission', async () => {

@@ -151,6 +151,9 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
 
     if (body.agent !== undefined && body.agent !== card.agent_bot) {
       if (body.agent === null) {
+        if (card.agent_bot && !canAccessAgent(apiKey, card.agent_bot)) {
+          return reply.status(403).send({ error: 'Forbidden' });
+        }
         await cancelActiveRuns(deps.store, card.id);
         patch.agent_bot = null;
       } else {
