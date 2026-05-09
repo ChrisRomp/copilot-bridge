@@ -713,6 +713,24 @@ describe('registerCardRoutes', () => {
     expect(getLabels).not.toHaveBeenCalled();
   });
 
+  it('rejects adding labels without a labels payload', async () => {
+    const { store, cards, addLabels, getLabels } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1' }));
+    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-1/labels',
+      headers: authHeader,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: 'labels is required' });
+    expect(addLabels).not.toHaveBeenCalled();
+    expect(getLabels).not.toHaveBeenCalled();
+  });
+
   it('removes labels from a card', async () => {
     const { store, cards, removeLabel } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1' }));
@@ -745,6 +763,23 @@ describe('registerCardRoutes', () => {
 
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual({ error: 'Card not found' });
+    expect(removeLabel).not.toHaveBeenCalled();
+  });
+
+  it('rejects removing a label without update permission', async () => {
+    const { store, cards, removeLabel } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1' }));
+    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/v1/cards/card-1/labels/backend',
+      headers: readOnlyHeader,
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'Forbidden' });
     expect(removeLabel).not.toHaveBeenCalled();
   });
 

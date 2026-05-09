@@ -265,30 +265,35 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
   });
 
   app.post<{ Params: CardParams; Body: AddLabelsBody }>('/v1/cards/:id/labels', async (request, reply) => {
-    const card = await getCardOrReply(deps.store, request.params.id, reply);
-    if (!card) {
-      return;
-    }
-
     const apiKey = request.apiKey!;
     if (!canPerformOp(apiKey, 'card:update')) {
       return reply.status(403).send({ error: 'Forbidden' });
     }
 
-    await deps.store.addLabels(card.id, request.body.labels);
-    const labels = await deps.store.getLabels(card.id);
-    return { labels };
+    const card = await getCardOrReply(deps.store, request.params.id, reply);
+    if (!card) {
+      return;
+    }
+
+    const { labels } = (request.body ?? {}) as { labels?: string[] };
+    if (!labels?.length) {
+      return reply.status(400).send({ error: 'labels is required' });
+    }
+
+    await deps.store.addLabels(card.id, labels);
+    const cardLabels = await deps.store.getLabels(card.id);
+    return { labels: cardLabels };
   });
 
   app.delete<{ Params: CardLabelParams }>('/v1/cards/:id/labels/:label', async (request, reply) => {
-    const card = await getCardOrReply(deps.store, request.params.id, reply);
-    if (!card) {
-      return;
-    }
-
     const apiKey = request.apiKey!;
     if (!canPerformOp(apiKey, 'card:update')) {
       return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    const card = await getCardOrReply(deps.store, request.params.id, reply);
+    if (!card) {
+      return;
     }
 
     await deps.store.removeLabel(card.id, request.params.label);
