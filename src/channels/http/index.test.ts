@@ -141,6 +141,23 @@ describe('HttpChannelAdapter', () => {
     expect(second).toHaveBeenCalledOnce();
   });
 
+  it('dispatchInboundReaction catches handler errors without throwing', () => {
+    const { server } = createMockServer();
+    const { store } = createMockStore();
+    const adapter = new HttpChannelAdapter(server, store, createMockHarness());
+    const first = vi.fn(() => {
+      throw new Error('boom');
+    });
+    const second = vi.fn();
+
+    adapter.onReaction(first);
+    adapter.onReaction(second);
+
+    expect(() => adapter.dispatchInboundReaction(inboundReaction)).not.toThrow();
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledOnce();
+  });
+
   it('sendMessage persists an agent comment and returns its id', async () => {
     const { server } = createMockServer();
     const { store, addComment } = createMockStore();
@@ -202,7 +219,7 @@ describe('HttpChannelAdapter', () => {
       'downloadFile not implemented for HTTP adapter',
     );
     await expect(adapter.sendFile('card-1', 'artifact.txt')).rejects.toThrow(
-      'sendFile not yet implemented for HTTP adapter',
+      'sendFile not implemented for HTTP adapter',
     );
   });
 });

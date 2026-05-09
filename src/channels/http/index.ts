@@ -22,6 +22,7 @@ export class HttpChannelAdapter implements ChannelAdapter {
     private readonly store: ICardStore,
     private readonly harness: AgentHarnessAdapter,
   ) {
+    // harness reserved for route event wiring in t8+
     void this.harness;
   }
 
@@ -61,7 +62,7 @@ export class HttpChannelAdapter implements ChannelAdapter {
   }
 
   async setTyping(_channelId: string): Promise<void> {
-    // No typing indicators in HTTP v1.
+    log.debug('setTyping is a no-op for HTTP adapter');
   }
 
   async replyInThread(channelId: string, _rootId: string, content: string): Promise<string> {
@@ -77,7 +78,7 @@ export class HttpChannelAdapter implements ChannelAdapter {
   }
 
   async sendFile(_channelId: string, _filePath: string, _message?: string, _opts?: SendOpts): Promise<string> {
-    throw new Error('sendFile not yet implemented for HTTP adapter');
+    throw new Error('sendFile not implemented for HTTP adapter');
   }
 
   dispatchInboundMessage(msg: InboundMessage): void {
