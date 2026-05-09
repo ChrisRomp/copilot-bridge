@@ -475,9 +475,8 @@ export function extractPlanSummary(content: string): string {
  * Reads MEMORY.md section headlines and constructs a small pointer.
  * Returns null if MEMORY.md doesn't exist (first run).
  */
-export function buildMemoryPointer(workingDirectory: string, memoryConfig?: MemoryConfig): string | null {
+export function buildMemoryPointer(workingDirectory: string, memoryConfig?: MemoryConfig): string {
   const memoryPath = path.join(workingDirectory, 'MEMORY.md');
-  const tier = memoryConfig?.tier ?? 0;
   const cloudMemory = memoryConfig?.cloudMemory ?? false;
 
   const lines: string[] = ['<memory>'];

@@ -998,6 +998,11 @@ d2('memory config validation', () => {
     expect2(() => loadConfig(configFile)).toThrow('memory.consolidation must be an object');
   });
 
+  it2('rejects null consolidation', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ memory: { consolidation: null } })));
+    expect2(() => loadConfig(configFile)).toThrow('memory.consolidation must be an object');
+  });
+
   it2('rejects non-string consolidation.model', () => {
     fs.writeFileSync(configFile, JSON.stringify(makeConfig({ memory: { consolidation: { model: 42 } } })));
     expect2(() => loadConfig(configFile)).toThrow('memory.consolidation.model must be a string');

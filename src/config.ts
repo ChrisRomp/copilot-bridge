@@ -252,6 +252,9 @@ function validateAndNormalize(raw: any): AppConfig {
       if (typeof m.consolidation !== 'object' || Array.isArray(m.consolidation)) {
         throw new Error('memory.consolidation must be an object');
       }
+      if (m.consolidation === null) {
+        throw new Error('memory.consolidation must be an object');
+      }
       if (m.consolidation.model !== undefined && typeof m.consolidation.model !== 'string') {
         throw new Error('memory.consolidation.model must be a string');
       }

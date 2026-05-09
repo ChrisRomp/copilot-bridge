@@ -40,7 +40,7 @@ export async function mergeCompactionSummary(
     return false;
   }
 
-  // Block until lock is available — compaction data is irreplaceable
+  // Block until lock is available -- compaction data is irreplaceable, never skip
   const release = await acquireWorkspaceLock(workspacePath);
 
   try {
