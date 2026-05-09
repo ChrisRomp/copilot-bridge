@@ -552,6 +552,7 @@ async function main(): Promise<void> {
       { registerAuthHook },
       { registerAcpRoutes },
       { registerCardRoutes },
+      { registerChatRoutes },
       { SseManager },
       { buildHttpAuthConfig, buildHttpRouteBots },
     ] = await Promise.all([
@@ -562,6 +563,7 @@ async function main(): Promise<void> {
       import('./channels/http/auth.js'),
       import('./channels/http/routes/acp.js'),
       import('./channels/http/routes/cards.js'),
+      import('./channels/http/routes/chat.js'),
       import('./channels/http/sse.js'),
       import('./channels/http/startup.js'),
     ]);
@@ -600,6 +602,10 @@ async function main(): Promise<void> {
         adapter: createdHttpAdapter,
         sseManager: createdHttpSseManager,
         sessionManager,
+      });
+      registerChatRoutes(server, {
+        store: httpStore,
+        adapter: createdHttpAdapter,
       });
     });
 
