@@ -28,6 +28,7 @@ import { getBridgeDocs } from './bridge-docs.js';
 import type { SystemMessageCustomizeConfig } from '@github/copilot-sdk';
 import type {
   ChannelAdapter, InboundMessage, PendingPermission, PendingUserInput, PendingPlanExit,
+  MemoryConfig,
 } from '../types.js';
 
 const log = createLogger('session');
@@ -466,6 +467,55 @@ export function extractPlanSummary(content: string): string {
   if (heading) return heading.length > 150 ? heading.slice(0, 147) + '...' : heading;
   if (body) return body.length > 150 ? body.slice(0, 147) + '...' : body;
   return '(empty plan)';
+}
+
+/**
+ * Build the <memory> system message block for a workspace.
+ * Reads MEMORY.md section headlines and constructs a small pointer.
+ * Returns null if MEMORY.md doesn't exist (first run).
+ */
+export function buildMemoryPointer(workingDirectory: string, memoryConfig?: MemoryConfig): string | null {
+  const memoryPath = path.join(workingDirectory, 'MEMORY.md');
+  const tier = memoryConfig?.tier ?? 0;
+  const cloudMemory = memoryConfig?.cloudMemory ?? false;
+
+  const lines: string[] = ['<memory>'];
+  lines.push('You have persistent memory in MEMORY.md in your workspace root.');
+
+  // Read section headlines if file exists
+  let exists = false;
+  try {
+    if (fs.existsSync(memoryPath)) {
+      exists = true;
+      const content = fs.readFileSync(memoryPath, 'utf-8');
+      const headings = content.split('\n')
+        .filter(line => /^##\s/.test(line))
+        .map(line => line.replace(/^##\s+/, '').trim());
+      if (headings.length > 0) {
+        lines.push(`Sections: ${headings.join(', ')}`);
+      }
+    }
+  } catch (err: any) {
+    if (err?.code !== 'ENOENT') {
+      log.warn(`Failed to read MEMORY.md from ${memoryPath}:`, err);
+    }
+  }
+
+  if (!exists) {
+    lines.push('MEMORY.md does not exist yet. Create it when you learn something worth remembering across sessions.');
+  } else {
+    lines.push('Read MEMORY.md at session start or when you need past context.');
+    lines.push('Update MEMORY.md when you learn something worth remembering across sessions.');
+  }
+
+  if (cloudMemory) {
+    lines.push('Cloud memory (store_memory/vote_memory) is also enabled for this workspace.');
+    lines.push('Use store_memory for facts that benefit from cross-session cloud persistence.');
+    lines.push('Use MEMORY.md for detailed workspace context and human-readable notes.');
+  }
+
+  lines.push('</memory>');
+  return lines.join('\n');
 }
 
 /** Load AGENTS.local.md from a workspace directory, wrapped in XML tags.
@@ -1650,6 +1700,14 @@ export class SessionManager {
       '</bridge_instructions>',
     ].join('\n'));
 
+    // Memory pointer
+    if (workingDirectory) {
+      const memoryBlock = buildMemoryPointer(workingDirectory, getConfig().memory);
+      if (memoryBlock) {
+        parts.push(memoryBlock);
+      }
+    }
+
     // Load AGENTS.local.md if present (gitignored, per-operator conventions)
     const localInstructions = loadLocalInstructions(workingDirectory);
     if (localInstructions) {
@@ -1662,6 +1720,16 @@ export class SessionManager {
         custom_instructions: { action: 'append' as const, content: parts.join('\n\n') },
       },
     };
+  }
+
+  /** Compute excludedTools based on memory config (e.g., cloud memory gating). */
+  private getExcludedTools(): string[] | undefined {
+    const memCfg = getConfig().memory;
+    const cloudMemory = memCfg?.cloudMemory ?? false;
+    if (!cloudMemory) {
+      return ['store_memory', 'vote_memory'];
+    }
+    return undefined;
   }
 
   private async createNewSession(channelId: string): Promise<string> {
@@ -1707,6 +1775,8 @@ export class SessionManager {
 
     const customAgents = buildCustomAgents(workingDirectory);
 
+    const excludedTools = this.getExcludedTools();
+
     const createWithModel = async (model: string) => {
       return withWorkspaceEnv(workingDirectory, () =>
         this.bridge.createSession({
@@ -1720,6 +1790,7 @@ export class SessionManager {
           mcpServers: resolvedMcpServers,
           skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
           disabledSkills,
+          excludedTools,
           onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
           onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
           customAgents: customAgents.length > 0 ? customAgents : undefined,
@@ -1870,6 +1941,8 @@ export class SessionManager {
       log.warn(`Provider "${providerName}" set for channel ${channelId} but not found in config — using Copilot`);
     }
 
+    const excludedTools = this.getExcludedTools();
+
     const session = await withWorkspaceEnv(workingDirectory, () =>
       this.bridge.resumeSession(sessionId, {
         onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
@@ -1883,6 +1956,7 @@ export class SessionManager {
         mcpServers,
         skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
         disabledSkills,
+        excludedTools,
         customAgents: customAgents.length > 0 ? customAgents : undefined,
         tools: customTools.length > 0 ? customTools : undefined,
         hooks,
@@ -1986,6 +2060,7 @@ export class SessionManager {
           enableConfigDiscovery: true,
           mcpServers: this.resolveMcpServers(targetWorkspace),
           skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
+          excludedTools: this.getExcludedTools(),
           onPermissionRequest: ephemeralPermissionHandler,
           systemMessage: { content: systemParts.filter(Boolean).join('\n\n') },
           tools: ephemeralTools.length > 0 ? ephemeralTools : undefined,
