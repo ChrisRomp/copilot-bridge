@@ -20,6 +20,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig, DatabaseConfig, HttpPlatformConfig } from './types.js';
+import { routeHttpSessionEvent, type HttpEventRouteDeps } from './channels/http/event-routing.js';
 
 const log = createLogger('bridge');
 
@@ -524,6 +525,7 @@ async function main(): Promise<void> {
   }
 
   let httpSseManager: { stop(): void } | null = null;
+  let httpEventRouteDeps: HttpEventRouteDeps | null = null;
   const httpPlatform = config.platforms.http as HttpPlatformConfig | undefined;
   if (httpPlatform?.enabled) {
     const [
@@ -557,6 +559,11 @@ async function main(): Promise<void> {
     const createdHttpSseManager = new SseManager(httpPlatform.eventBuffer?.maxEventsPerCard);
     createdHttpSseManager.start();
     httpSseManager = createdHttpSseManager;
+    httpEventRouteDeps = {
+      store: httpStore,
+      harness: httpHarness,
+      sseManager: createdHttpSseManager,
+    };
 
     const httpBots = buildHttpRouteBots(httpPlatform);
     const authConfig = buildHttpAuthConfig(httpPlatform, getHttpApiKeySecret);
@@ -600,7 +607,7 @@ async function main(): Promise<void> {
   sessionManager.onSessionEvent((sessionId, channelId, event) => {
     const prev = eventLocks.get(channelId) ?? Promise.resolve();
     const next = prev.then(() =>
-      handleSessionEvent(sessionId, channelId, event, sessionManager)
+      handleSessionEvent(sessionId, channelId, event, sessionManager, httpEventRouteDeps)
         .catch(err => log.error(`Unhandled error in event handler:`, err))
     );
     eventLocks.set(channelId, next);
@@ -2090,6 +2097,7 @@ async function handleSessionEvent(
   channelId: string,
   event: any,
   sessionManager: SessionManager,
+  httpEventRouteDeps: HttpEventRouteDeps | null,
 ): Promise<void> {
   // Reset loop detector when the session changes (e.g., model fallback creates new session)
   const prevSession = lastSessionIds.get(channelId);
@@ -2151,11 +2159,18 @@ async function handleSessionEvent(
     log.debug(`SDK event: ${event.type}`);
   }
 
+  const channelConfig = await getChannelConfig(channelId);
+  if (channelConfig.platform === 'http') {
+    if (httpEventRouteDeps) {
+      await routeHttpSessionEvent(channelId, event, httpEventRouteDeps);
+    }
+    return;
+  }
+
   const resolved = await getAdapterForChannel(channelId);
   if (!resolved) return;
   const { adapter, streaming } = resolved;
 
-  const channelConfig = await getChannelConfig(channelId);
   let prefs: Awaited<ReturnType<typeof getChannelPrefs>> = null;
   try {
     prefs = await getChannelPrefs(channelId);
