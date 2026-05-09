@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgentConfig, AccessConfig, BridgeProviderConfig, LogRotationConfig, DatabaseConfig } from './types.js';
+import type { AppConfig, ChannelConfig, BotConfig, InterAgentConfig, AccessConfig, BridgeProviderConfig, HttpPlatformConfig } from './types.js';
 import type { SDKProviderConfig } from './core/bridge.js';
 import { getDynamicChannel } from './state/store.js';
 import { createLogger } from './logger.js';
@@ -9,6 +9,12 @@ import { createLogger } from './logger.js';
 const log = createLogger('config');
 
 const VALID_ACCESS_MODES = ['allowlist', 'blocklist', 'open'];
+const DEFAULT_HTTP_BIND = '127.0.0.1';
+const DEFAULT_HTTP_PORT = 7878;
+const DEFAULT_HTTP_MAX_EVENTS_PER_CARD = 1000;
+
+// Runtime-only store for resolved HTTP API key secrets (never written back to config.json)
+const _resolvedHttpApiKeys = new Map<string, string>();
 
 /** Validate an access config block. Throws on invalid input. Normalizes entries in-place. */
 function validateAccessConfig(platformName: string, label: string, access: any): void {
@@ -37,6 +43,43 @@ let _configPath: string | null = null;
 // Kept separate from _config so they survive reloads.
 const _dynamicChannels = new Map<string, ChannelConfig>();
 
+function validatePlatformBots(platformName: string, bots: any, opts?: { requireAppToken?: boolean }): void {
+  if (bots === null || typeof bots !== 'object' || Array.isArray(bots)) {
+    throw new Error(`Platform "${platformName}" "bots" must be an object`);
+  }
+  for (const [botName, bot] of Object.entries(bots)) {
+    if (!(bot as any).token) throw new Error(`Platform "${platformName}" bot "${botName}" missing "token"`);
+    if (opts?.requireAppToken && !(bot as any).appToken) {
+      throw new Error(`Platform "${platformName}" bot "${botName}" missing "appToken" (required for Socket Mode)`);
+    }
+    validateAccessConfig(platformName, botName, (bot as any).access);
+  }
+}
+
+function validateStringArray(value: unknown, label: string): asserts value is string[] {
+  if (!Array.isArray(value) || value.length === 0) throw new Error(`${label} must be a non-empty array`);
+  for (const entry of value) {
+    if (typeof entry !== 'string' || entry.trim().length === 0) {
+      throw new Error(`${label} entries must be non-empty strings`);
+    }
+  }
+}
+
+function resolveEnvSecret(secretRef: string, label: string): string {
+  if (!secretRef.startsWith('env:')) {
+    throw new Error(`${label} must start with "env:"`);
+  }
+  const envName = secretRef.slice(4).trim();
+  if (!envName) {
+    throw new Error(`${label} must reference an environment variable name after "env:"`);
+  }
+  const resolved = process.env[envName];
+  if (!resolved) {
+    throw new Error(`${label} references env var "${envName}" but it is not set`);
+  }
+  return resolved;
+}
+
 /** Validate raw config JSON and normalize into an AppConfig. Throws on invalid input. */
 function validateAndNormalize(raw: any): AppConfig {
   // Validate platforms
@@ -45,24 +88,66 @@ function validateAndNormalize(raw: any): AppConfig {
   }
   for (const [name, platform] of Object.entries(raw.platforms)) {
     const p = platform as any;
-    if (name === 'slack') {
-      // Slack uses Socket Mode — no URL needed
+    if (name === 'http') {
+      if (typeof p.enabled !== 'boolean') {
+        throw new Error('Platform "http" requires "enabled" to be a boolean');
+      }
+      validateAccessConfig(name, '(platform)', p.access);
+      if (p.bots !== undefined) {
+        validatePlatformBots(name, p.bots);
+      }
+      if (p.enabled) {
+        if (!p.apiKeys || typeof p.apiKeys !== 'object' || Array.isArray(p.apiKeys) || Object.keys(p.apiKeys).length === 0) {
+          throw new Error('Platform "http" requires a non-empty "apiKeys" object when enabled');
+        }
+        if (p.bind !== undefined && typeof p.bind !== 'string') {
+          throw new Error('Platform "http" bind must be a string');
+        }
+        if (p.port !== undefined && (typeof p.port !== 'number' || !Number.isInteger(p.port) || p.port <= 0)) {
+          throw new Error('Platform "http" port must be a positive integer');
+        }
+        p.bind = p.bind ?? DEFAULT_HTTP_BIND;
+        p.port = p.port ?? DEFAULT_HTTP_PORT;
+
+        if (p.eventBuffer !== undefined) {
+          if (p.eventBuffer === null || typeof p.eventBuffer !== 'object' || Array.isArray(p.eventBuffer)) {
+            throw new Error('Platform "http" eventBuffer must be an object');
+          }
+          if (p.eventBuffer.maxEventsPerCard !== undefined
+            && (typeof p.eventBuffer.maxEventsPerCard !== 'number'
+              || !Number.isInteger(p.eventBuffer.maxEventsPerCard)
+              || p.eventBuffer.maxEventsPerCard <= 0)) {
+            throw new Error('Platform "http" eventBuffer.maxEventsPerCard must be a positive integer');
+          }
+        }
+        p.eventBuffer = {
+          ...(p.eventBuffer ?? {}),
+          maxEventsPerCard: p.eventBuffer?.maxEventsPerCard ?? DEFAULT_HTTP_MAX_EVENTS_PER_CARD,
+        };
+
+        for (const [apiKeyName, apiKey] of Object.entries(p.apiKeys)) {
+          const keyConfig = apiKey as any;
+          if (!keyConfig || typeof keyConfig !== 'object' || Array.isArray(keyConfig)) {
+            throw new Error(`Platform "http" apiKey "${apiKeyName}" must be an object`);
+          }
+          if (typeof keyConfig.secret !== 'string' || !keyConfig.secret.startsWith('env:')) {
+            throw new Error(`Platform "http" apiKey "${apiKeyName}".secret must be a string starting with "env:" (e.g. "env:MY_API_KEY")`);
+          }
+          validateStringArray(keyConfig.allowedAgents, `Platform "http" apiKey "${apiKeyName}" allowedAgents`);
+          validateStringArray(keyConfig.allowedOps, `Platform "http" apiKey "${apiKeyName}" allowedOps`);
+        }
+      }
+    } else if (name === 'slack') {
+      // Slack uses Socket Mode -- no URL needed
       if (!p.bots) throw new Error('Platform "slack" requires "bots" with bot tokens');
       validateAccessConfig(name, '(platform)', p.access);
-      for (const [botName, bot] of Object.entries(p.bots)) {
-        if (!(bot as any).token) throw new Error(`Platform "slack" bot "${botName}" missing "token"`);
-        if (!(bot as any).appToken) throw new Error(`Platform "slack" bot "${botName}" missing "appToken" (required for Socket Mode)`);
-        validateAccessConfig(name, botName, (bot as any).access);
-      }
+      validatePlatformBots(name, p.bots, { requireAppToken: true });
     } else {
       if (!p.url) throw new Error(`Platform "${name}" missing "url"`);
       if (!p.botToken && !p.bots) throw new Error(`Platform "${name}" needs either "botToken" or "bots"`);
       validateAccessConfig(name, '(platform)', p.access);
       if (p.bots) {
-        for (const [botName, bot] of Object.entries(p.bots)) {
-          if (!(bot as any).token) throw new Error(`Platform "${name}" bot "${botName}" missing "token"`);
-          validateAccessConfig(name, botName, (bot as any).access);
-        }
+        validatePlatformBots(name, p.bots);
       }
     }
   }
@@ -328,12 +413,43 @@ export function loadConfig(configPath?: string): AppConfig {
   const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
   _config = validateAndNormalize(raw);
   _configPath = filePath;
+
+  // Resolve env: secrets for HTTP platform API keys (runtime-only, never serialized)
+  _resolveHttpApiKeys(_config);
+
   return _config;
 }
 
 /** The resolved config file path (available after loadConfig). */
 export function getConfigPath(): string | null {
   return _configPath;
+}
+
+/**
+ * Resolve env: secrets for all HTTP platform API keys.
+ * Stores resolved values in _resolvedHttpApiKeys (runtime-only, never serialized).
+ */
+function _resolveHttpApiKeys(config: AppConfig): void {
+  _resolvedHttpApiKeys.clear();
+  const httpPlatform = config.platforms['http'] as HttpPlatformConfig | undefined;
+  if (!httpPlatform?.enabled || !httpPlatform.apiKeys) return;
+  for (const [keyName, keyConf] of Object.entries(httpPlatform.apiKeys)) {
+    const resolved = resolveEnvSecret(keyConf.secret, `Platform "http" apiKey "${keyName}" secret`);
+    _resolvedHttpApiKeys.set(keyName, resolved);
+  }
+}
+
+/**
+ * Get the resolved secret value for an HTTP platform API key.
+ * Returns undefined if the key is unknown or was not resolved.
+ */
+export function getHttpApiKeySecret(keyName: string): string | undefined {
+  return _resolvedHttpApiKeys.get(keyName);
+}
+
+/** Get all HTTP API key names that were successfully resolved at startup. */
+export function getHttpApiKeyNames(): string[] {
+  return [..._resolvedHttpApiKeys.keys()];
 }
 
 /** Result of a config reload attempt. */
@@ -520,6 +636,13 @@ export function reloadConfig(): ReloadResult {
   }
 
   _config = newConfig;
+
+  // Re-resolve HTTP API key secrets on reload
+  try {
+    _resolveHttpApiKeys(_config);
+  } catch (err: any) {
+    return { success: false, error: `HTTP API key resolution failed: ${err.message}`, changes, restartNeeded };
+  }
 
   return { success: true, changes, restartNeeded };
 }
@@ -1114,5 +1237,6 @@ export class ConfigWatcher {
 export function _resetConfigForTest(): void {
   _config = null;
   _configPath = null;
+  _resolvedHttpApiKeys.clear();
   _dynamicChannels.clear();
 }

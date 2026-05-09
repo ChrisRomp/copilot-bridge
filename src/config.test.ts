@@ -185,7 +185,7 @@ describe('isHardDeny', () => {
 
 // --- reloadConfig tests ---
 
-import { loadConfig, reloadConfig, getConfig, getConfigPath, registerDynamicChannel, markChannelAsDM, _resetConfigForTest } from './config.js';
+import { loadConfig, reloadConfig, getConfig, getConfigPath, getHttpApiKeySecret, registerDynamicChannel, markChannelAsDM, _resetConfigForTest } from './config.js';
 import { describe as d2, it as it2, expect as expect2, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -216,6 +216,22 @@ function makeConfig(overrides: Record<string, any> = {}): Record<string, any> {
   };
 }
 
+function makeConfigWithHttpPlatform(httpOverrides: Record<string, any> = {}): Record<string, any> {
+  const cfg = makeConfig();
+  cfg.platforms.http = {
+    enabled: true,
+    apiKeys: {
+      test: {
+        secret: 'env:HTTP_API_KEY_TEST',
+        allowedAgents: ['*'],
+        allowedOps: ['card:create'],
+      },
+    },
+    ...httpOverrides,
+  };
+  return cfg;
+}
+
 describe('reloadConfig', () => {
   let tmpDir: string;
   let configFile: string;
@@ -228,6 +244,7 @@ describe('reloadConfig', () => {
 
   afterEach(() => {
     _resetConfigForTest();
+    delete process.env.HTTP_API_KEY_TEST;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -517,6 +534,36 @@ describe('reloadConfig', () => {
     expect(result.success).toBe(true);
     expect(result.changes.some(c => c.includes('copilot') && c.includes('config updated'))).toBe(true);
     expect(result.restartNeeded).toEqual([]);
+  });
+
+  it('loads enabled http platform config with defaults and resolved api key secrets', () => {
+    process.env.HTTP_API_KEY_TEST = 'resolved-http-secret';
+    fs.writeFileSync(configFile, JSON.stringify(makeConfigWithHttpPlatform()));
+
+    const loaded = loadConfig(configFile);
+    const http = loaded.platforms.http as any;
+
+    expect(http.enabled).toBe(true);
+    expect(http.bind).toBe('127.0.0.1');
+    expect(http.port).toBe(7878);
+    expect(http.eventBuffer.maxEventsPerCard).toBe(1000);
+    expect(http.apiKeys.test.secret).toBe('env:HTTP_API_KEY_TEST');
+    expect(getHttpApiKeySecret('test')).toBe('resolved-http-secret');
+  });
+
+  it('rejects enabled http platform config without apiKeys', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfigWithHttpPlatform({ apiKeys: undefined })));
+
+    expect(() => loadConfig(configFile)).toThrow(/apiKeys/);
+  });
+
+  it('skips validation for disabled http platform (no env var needed)', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfigWithHttpPlatform({ enabled: false })));
+
+    const loaded = loadConfig(configFile);
+    const http = loaded.platforms.http as any;
+    expect(http.enabled).toBe(false);
+    expect(getHttpApiKeySecret('test')).toBeUndefined();
   });
 });
 
