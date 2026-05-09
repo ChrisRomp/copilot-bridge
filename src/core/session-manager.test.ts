@@ -74,12 +74,65 @@ describe('SessionManager custom tool registration', () => {
     expect(handler).toHaveBeenCalledWith('http-channel', { status: 'blocked' });
   });
 
-  it('omits update_card_status for non-HTTP sessions', async () => {
+  it('registers and invokes create_card for HTTP sessions', async () => {
+    const { SessionManager } = await import('./session-manager.js');
+    const manager = new SessionManager({} as any);
+    const handler = vi.fn(async (_channelId: string, args: Record<string, unknown>) => ({
+      card_id: 'card-1',
+      status: 'open',
+      title: args.title,
+    }));
+
+    manager.registerCustomToolHandler('create_card', handler);
+
+    await expect(manager.listBridgeToolNames('http-channel')).resolves.toContain('create_card');
+
+    const tools = await (manager as any).buildCustomTools('http-channel');
+    const tool = tools.find((entry: { name: string; parameters: unknown }) => entry.name === 'create_card');
+    expect(tool).toBeDefined();
+    expect(tool.parameters).toMatchObject({
+      required: ['title'],
+      properties: {
+        title: { type: 'string' },
+        description: { type: 'string' },
+        agent: { type: 'string' },
+        labels: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        metadata: {
+          type: 'object',
+          additionalProperties: true,
+        },
+      },
+    });
+
+    await expect(tool.handler({
+      title: 'Investigate API',
+      description: 'Trace the failing request path',
+      agent: 'bob',
+      labels: ['bug', 'http'],
+      metadata: { priority: 'high' },
+    })).resolves.toEqual({
+      content: JSON.stringify({ card_id: 'card-1', status: 'open', title: 'Investigate API' }),
+    });
+    expect(handler).toHaveBeenCalledWith('http-channel', {
+      title: 'Investigate API',
+      description: 'Trace the failing request path',
+      agent: 'bob',
+      labels: ['bug', 'http'],
+      metadata: { priority: 'high' },
+    });
+  });
+
+  it('omits HTTP-only card tools for non-HTTP sessions', async () => {
     const { SessionManager } = await import('./session-manager.js');
     const manager = new SessionManager({} as any);
 
     manager.registerCustomToolHandler('update_card_status', vi.fn(async () => ({ success: true })));
+    manager.registerCustomToolHandler('create_card', vi.fn(async () => ({ card_id: 'card-1', status: 'open' })));
 
     await expect(manager.listBridgeToolNames('mattermost-channel')).resolves.not.toContain('update_card_status');
+    await expect(manager.listBridgeToolNames('mattermost-channel')).resolves.not.toContain('create_card');
   });
 });

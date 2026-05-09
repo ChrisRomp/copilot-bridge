@@ -28,7 +28,7 @@ const log = createLogger('bridge');
 
 export function registerHttpSessionToolHandlers(
   sessionManager: Pick<SessionManager, 'registerCustomToolHandler'>,
-  cardStore: Pick<ICardStore, 'updateCard'>,
+  cardStore: Pick<ICardStore, 'createCard' | 'addLabels' | 'updateCard'>,
   sseManager: Pick<SseManager, 'emit'>,
 ): void {
   sessionManager.registerCustomToolHandler('update_card_status', async (channelId, args) => {
@@ -37,6 +37,33 @@ export function registerHttpSessionToolHandlers(
     await cardStore.updateCard(cardId, { status });
     sseManager.emit(cardId, '', { event: 'card.status', data: { card_id: cardId, status } });
     return { success: true, status };
+  });
+
+  sessionManager.registerCustomToolHandler('create_card', async (_channelId, args) => {
+    const { title, description, agent, labels, metadata } = args as {
+      title?: string;
+      description?: string;
+      agent?: string;
+      labels?: string[];
+      metadata?: Record<string, unknown>;
+    };
+
+    if (!title?.trim()) {
+      throw new Error('title is required');
+    }
+
+    const card = await cardStore.createCard({
+      title,
+      description,
+      agent_bot: agent,
+      status: 'open',
+      created_by: 'agent',
+      metadata,
+    });
+    if (labels?.length) {
+      await cardStore.addLabels(card.id, labels);
+    }
+    return { card_id: card.id, status: card.status };
   });
 }
 
