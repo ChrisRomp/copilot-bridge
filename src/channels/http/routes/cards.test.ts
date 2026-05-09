@@ -77,6 +77,8 @@ function createStore() {
   const runs = new Map<string, Run>();
   const comments = new Map<string, CardComment[]>();
   let nextCard = 1;
+  let nextRun = 1;
+  let nextComment = 1;
 
   const createCard = vi.fn(async (card: NewCard): Promise<Card> => {
     const created = createCardRecord({
@@ -135,6 +137,30 @@ function createStore() {
     return updated;
   });
 
+  const createRun = vi.fn(async (run: NewRun): Promise<Run> => {
+    const created = createRunRecord({
+      id: `run-${nextRun++}`,
+      card_id: run.card_id,
+      session_id: run.session_id,
+      agent_name: run.agent_name,
+      input: run.input,
+    });
+    runs.set(created.id, created);
+    return created;
+  });
+
+  const addComment = vi.fn(async (comment: NewCardComment): Promise<CardComment> => {
+    const created = createCommentRecord({
+      id: `comment-${nextComment++}`,
+      card_id: comment.card_id,
+      author_kind: comment.author_kind,
+      author_id: comment.author_id,
+      content: comment.content,
+    });
+    comments.set(comment.card_id, [...(comments.get(comment.card_id) ?? []), created]);
+    return created;
+  });
+
   const store: ICardStore = {
     initialize: async () => {},
     createCard,
@@ -142,24 +168,14 @@ function createStore() {
     listCards,
     updateCard,
     deleteCard,
-    createRun: async (run: NewRun): Promise<Run> => createRunRecord({
-      card_id: run.card_id,
-      session_id: run.session_id,
-      agent_name: run.agent_name,
-      input: run.input,
-    }),
+    createRun,
     getRun: async (id: string) => runs.get(id) ?? null,
     updateRun,
     listRunsForCard: async (cardId: string) => [...runs.values()].filter((run) => run.card_id === cardId),
     addLabels,
     removeLabel: async (_cardId: string, _label: string) => {},
     getLabels: async (_cardId: string) => [],
-    addComment: async (comment: NewCardComment): Promise<CardComment> => createCommentRecord({
-      card_id: comment.card_id,
-      author_kind: comment.author_kind,
-      author_id: comment.author_id,
-      content: comment.content,
-    }),
+    addComment,
     listComments: async (cardId: string) => comments.get(cardId) ?? [],
     appendTurn: async (turn: NewSessionTurn): Promise<SessionTurn> => ({
       id: 'turn-1',
@@ -185,11 +201,26 @@ function createStore() {
     deleteCheckpoint: async (_id: string) => {},
   };
 
-  return { store, cards, runs, comments, createCard, listCards, updateCard, deleteCard, addLabels, updateRun };
+  return {
+    store,
+    cards,
+    runs,
+    comments,
+    createCard,
+    listCards,
+    updateCard,
+    deleteCard,
+    addLabels,
+    createRun,
+    updateRun,
+    addComment,
+  };
 }
 
-function createAdapter(): HttpChannelAdapter {
-  return {} as HttpChannelAdapter;
+function createAdapter() {
+  return {
+    dispatchInboundMessage: vi.fn(),
+  } as unknown as HttpChannelAdapter;
 }
 
 describe('registerCardRoutes', () => {
@@ -617,5 +648,161 @@ describe('registerCardRoutes', () => {
     });
     expect(updateForbidden.statusCode).toBe(403);
     expect(updateForbidden.json()).toEqual({ error: 'Forbidden' });
+  });
+
+  it('posts card comments, creates a run, and dispatches the inbound message', async () => {
+    const { store, cards, addComment, createRun } = createStore();
+    cards.set('card-1', createCardRecord({
+      id: 'card-1',
+      agent_bot: 'bob',
+      channel_id: 'channel-123',
+      status: 'in_progress',
+    }));
+    const adapter = createAdapter();
+    registerCardRoutes(app, { store, adapter });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-1/comments',
+      headers: authHeader,
+      payload: { content: 'Please take another pass' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({
+      comment: expect.objectContaining({
+        id: 'comment-1',
+        card_id: 'card-1',
+        author_kind: 'human',
+        author_id: 'ui-desktop-rk',
+        content: JSON.stringify({
+          role: 'user',
+          parts: [{ type: 'text', text: 'Please take another pass' }],
+        }),
+      }),
+      run_id: 'run-1',
+    });
+    expect(addComment).toHaveBeenCalledWith({
+      card_id: 'card-1',
+      author_kind: 'human',
+      author_id: 'ui-desktop-rk',
+      content: JSON.stringify({
+        role: 'user',
+        parts: [{ type: 'text', text: 'Please take another pass' }],
+      }),
+    });
+    expect(createRun).toHaveBeenCalledWith({
+      card_id: 'card-1',
+      session_id: 'card-1',
+      agent_name: 'bob',
+      input: [{
+        role: 'user',
+        parts: [{ type: 'text', text: 'Please take another pass' }],
+      }],
+    });
+    expect(adapter.dispatchInboundMessage).toHaveBeenCalledWith({
+      platform: 'http',
+      channelId: 'channel-123',
+      userId: 'ui-desktop-rk',
+      username: 'ui-desktop-rk',
+      text: 'Please take another pass',
+      postId: 'comment-1',
+      mentionsBot: true,
+      isDM: false,
+    });
+  });
+
+  it('returns 404 when posting a comment to a missing card', async () => {
+    const { store, addComment, createRun } = createStore();
+    const adapter = createAdapter();
+    registerCardRoutes(app, { store, adapter });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/missing/comments',
+      headers: authHeader,
+      payload: { content: 'hello' },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'Card not found' });
+    expect(addComment).not.toHaveBeenCalled();
+    expect(createRun).not.toHaveBeenCalled();
+    expect(adapter.dispatchInboundMessage).not.toHaveBeenCalled();
+  });
+
+  it('rejects comments on cards without assigned agents', async () => {
+    const { store, cards, addComment, createRun } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: null }));
+    const adapter = createAdapter();
+    registerCardRoutes(app, { store, adapter });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-1/comments',
+      headers: authHeader,
+      payload: { content: 'hello' },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: 'Card has no assigned agent' });
+    expect(addComment).not.toHaveBeenCalled();
+    expect(createRun).not.toHaveBeenCalled();
+    expect(adapter.dispatchInboundMessage).not.toHaveBeenCalled();
+  });
+
+  it('enforces comment permissions and agent access for card comments', async () => {
+    const { store, cards, addComment, createRun } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: 'bob' }));
+    cards.set('card-2', createCardRecord({ id: 'card-2', agent_bot: 'lal' }));
+    const adapter = createAdapter();
+    registerCardRoutes(app, { store, adapter });
+    await app.ready();
+
+    const forbiddenOp = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-1/comments',
+      headers: createOnlyHeader,
+      payload: { content: 'hello' },
+    });
+    expect(forbiddenOp.statusCode).toBe(403);
+    expect(forbiddenOp.json()).toEqual({ error: 'Forbidden' });
+
+    const forbiddenAgent = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-2/comments',
+      headers: bobOnlyHeader,
+      payload: { content: 'hello' },
+    });
+    expect(forbiddenAgent.statusCode).toBe(403);
+    expect(forbiddenAgent.json()).toEqual({ error: 'Forbidden' });
+
+    expect(addComment).not.toHaveBeenCalled();
+    expect(createRun).not.toHaveBeenCalled();
+    expect(adapter.dispatchInboundMessage).not.toHaveBeenCalled();
+  });
+
+  it('validates comment content before creating a run', async () => {
+    const { store, cards, addComment, createRun } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: 'bob' }));
+    const adapter = createAdapter();
+    registerCardRoutes(app, { store, adapter });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-1/comments',
+      headers: authHeader,
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: 'content is required' });
+    expect(addComment).not.toHaveBeenCalled();
+    expect(createRun).not.toHaveBeenCalled();
+    expect(adapter.dispatchInboundMessage).not.toHaveBeenCalled();
   });
 });

@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
+import type { AcpMessage } from '../acp.js';
 import { canAccessAgent, canPerformOp } from '../auth.js';
 import type { HttpChannelAdapter } from '../index.js';
 import type { Card, CardFilter, ICardStore, NewCard } from '../store.js';
+import type { InboundMessage } from '../../../types.js';
 
 export interface CardRouteDeps {
   store: ICardStore;
@@ -32,6 +34,10 @@ type PatchCardBody = {
   title?: string;
   description?: string;
   metadata?: Record<string, unknown>;
+};
+
+type CreateCommentBody = {
+  content?: string;
 };
 
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
@@ -170,6 +176,55 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
     return { card: updated };
   });
 
+  app.post<{ Params: CardParams; Body: CreateCommentBody }>('/v1/cards/:id/comments', async (request, reply) => {
+    const { id } = request.params;
+    const { content } = request.body ?? {};
+    const apiKey = request.apiKey!;
+
+    const card = await deps.store.getCard(id);
+    if (!card) {
+      return reply.status(404).send({ error: 'Card not found' });
+    }
+    if (!card.agent_bot) {
+      return reply.status(400).send({ error: 'Card has no assigned agent' });
+    }
+
+    if (!canPerformOp(apiKey, 'card:comment')) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+    if (!canAccessAgent(apiKey, card.agent_bot)) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+    if (!content) {
+      return reply.status(400).send({ error: 'content is required' });
+    }
+
+    const input = createUserMessage(content);
+    const comment = await deps.store.addComment({
+      card_id: id,
+      author_kind: 'human',
+      author_id: apiKey.keyId,
+      content: JSON.stringify(input[0]),
+    });
+
+    const run = await deps.store.createRun({
+      card_id: id,
+      session_id: id,
+      agent_name: card.agent_bot,
+      input,
+    });
+
+    dispatchCardComment(deps.adapter, {
+      channelId: card.channel_id ?? id,
+      userId: apiKey.keyId,
+      username: apiKey.keyId,
+      text: content,
+      postId: comment.id,
+    });
+
+    return reply.status(201).send({ comment, run_id: run.id });
+  });
+
   app.post<{ Params: CardParams }>('/v1/cards/:id/archive', async (request, reply) => {
     const apiKey = request.apiKey!;
     if (!canPerformOp(apiKey, 'card:update')) {
@@ -213,4 +268,24 @@ async function cancelActiveRuns(store: ICardStore, cardId: string): Promise<void
       .filter((run) => !TERMINAL_RUN_STATUSES.has(run.status))
       .map((run) => store.updateRun(run.id, { status: 'cancelled' })),
   );
+}
+
+function createUserMessage(content: string): AcpMessage[] {
+  return [{ role: 'user', parts: [{ type: 'text', text: content }] }];
+}
+
+function dispatchCardComment(
+  adapter: HttpChannelAdapter,
+  message: Pick<InboundMessage, 'channelId' | 'userId' | 'username' | 'text' | 'postId'>,
+): void {
+  adapter.dispatchInboundMessage({
+    platform: 'http',
+    channelId: message.channelId,
+    userId: message.userId,
+    username: message.username,
+    text: message.text,
+    postId: message.postId,
+    mentionsBot: true,
+    isDM: false,
+  });
 }
