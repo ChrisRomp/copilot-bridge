@@ -630,47 +630,45 @@ async function main(): Promise<void> {
     const platformName = key.slice(0, colonIdx);
     const botName = key.slice(colonIdx + 1);
 
-    adapter.onMessage((msg) => {
-      // If the channel is mid-turn, try steering (immediate mode) instead of serializing
-      if (isBusy(msg.channelId)) {
-        handleMidTurnMessage(msg, sessionManager, platformName, botName)
-          .catch(err => {
-            // Expected fallbacks — debug level
-            const expected = err?.message === 'slash-command-while-busy' || err?.message === 'attachments-while-busy';
-            if (expected) {
-              log.debug(`Mid-turn fallback (${err.message}), routing to normal handler`);
-            } else {
-              log.warn(`Mid-turn send failed, falling back to queued handler:`, err);
-            }
-            // Fall back to normal serialized path
-            const prev = channelLocks.get(msg.channelId) ?? Promise.resolve();
-            const next = prev.then(() =>
-              handleInboundMessage(msg, sessionManager, platformName, botName)
-                .catch(e => log.error(`Unhandled error in message handler:`, e))
-            );
-            channelLocks.set(msg.channelId, next);
-          });
-        return;
+    if (!connectedAdapters.has(adapter)) {
+      adapter.onMessage((msg) => {
+        // If the channel is mid-turn, try steering (immediate mode) instead of serializing
+        if (isBusy(msg.channelId)) {
+          handleMidTurnMessage(msg, sessionManager, platformName, botName)
+            .catch(err => {
+              // Expected fallbacks — debug level
+              const expected = err?.message === 'slash-command-while-busy' || err?.message === 'attachments-while-busy';
+              if (expected) {
+                log.debug(`Mid-turn fallback (${err.message}), routing to normal handler`);
+              } else {
+                log.warn(`Mid-turn send failed, falling back to queued handler:`, err);
+              }
+              // Fall back to normal serialized path
+              const prev = channelLocks.get(msg.channelId) ?? Promise.resolve();
+              const next = prev.then(() =>
+                handleInboundMessage(msg, sessionManager, platformName, botName)
+                  .catch(e => log.error(`Unhandled error in message handler:`, e))
+              );
+              channelLocks.set(msg.channelId, next);
+            });
+          return;
+        }
+        const prev = channelLocks.get(msg.channelId) ?? Promise.resolve();
+        const next = prev.then(() =>
+          handleInboundMessage(msg, sessionManager, platformName, botName)
+            .catch(err => log.error(`Unhandled error in message handler:`, err))
+        );
+        channelLocks.set(msg.channelId, next);
+      });
+      adapter.onReaction((reaction) => handleReaction(reaction, sessionManager, platformName, botName));
+
+      await adapter.connect();
+      connectedAdapters.add(adapter);
+      if (platformName === 'http') {
+        log.info('HTTP channel started');
+      } else {
+        log.info(`${key} connected`);
       }
-      const prev = channelLocks.get(msg.channelId) ?? Promise.resolve();
-      const next = prev.then(() =>
-        handleInboundMessage(msg, sessionManager, platformName, botName)
-          .catch(err => log.error(`Unhandled error in message handler:`, err))
-      );
-      channelLocks.set(msg.channelId, next);
-    });
-    adapter.onReaction((reaction) => handleReaction(reaction, sessionManager, platformName, botName));
-
-    if (connectedAdapters.has(adapter)) {
-      continue;
-    }
-
-    await adapter.connect();
-    connectedAdapters.add(adapter);
-    if (platformName === 'http') {
-      log.info('HTTP channel started');
-    } else {
-      log.info(`${key} connected`);
     }
 
     // Discover existing DM channels and auto-register any that aren't configured
