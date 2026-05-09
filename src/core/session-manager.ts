@@ -33,9 +33,10 @@ import type {
 const log = createLogger('session');
 
 /** Custom tools auto-approved without interactive prompt (read-only or enforce workspace boundaries internally). */
-export const BRIDGE_CUSTOM_TOOLS = ['send_file', 'show_file_in_chat', 'ask_agent', 'schedule', 'fetch_copilot_bridge_documentation', 'no_reply'];
+export const BRIDGE_CUSTOM_TOOLS = ['send_file', 'show_file_in_chat', 'ask_agent', 'schedule', 'fetch_copilot_bridge_documentation', 'no_reply', 'update_card_status'];
 
 type SessionEventHandler = (sessionId: string, channelId: string, event: any) => void;
+type CustomToolHandler = (channelId: string, args: Record<string, unknown>) => Promise<unknown>;
 
 /** Simple mutex for serializing env-sensitive session creation. */
 let envLock: Promise<void> = Promise.resolve();
@@ -520,6 +521,7 @@ export class SessionManager {
   // Handler for send_file tool (set by index.ts, calls adapter.sendFile)
   private sendFileHandler: ((channelId: string, filePath: string, message?: string) => Promise<string>) | null = null;
   private getAdapterForChannel: ((channelId: string) => ChannelAdapter | null | Promise<ChannelAdapter | null>) | null = null;
+  private customToolHandlers = new Map<string, CustomToolHandler>();
 
   constructor(bridge: CopilotBridge) {
     this.bridge = bridge;
@@ -621,6 +623,17 @@ export class SessionManager {
   /** Register adapter resolver for onboarding tools. */
   onGetAdapter(resolver: (channelId: string) => ChannelAdapter | null | Promise<ChannelAdapter | null>): void {
     this.getAdapterForChannel = resolver;
+  }
+
+  /** Register a custom tool handler supplied by platform-specific startup code. */
+  registerCustomToolHandler(toolName: string, handler: CustomToolHandler): void {
+    this.customToolHandlers.set(toolName, handler);
+  }
+
+  /** List bridge-managed custom tools available for a specific channel. */
+  async listBridgeToolNames(channelId: string): Promise<string[]> {
+    const tools = await this.buildCustomTools(channelId);
+    return tools.map(tool => tool.name);
   }
 
   /**
@@ -2274,13 +2287,13 @@ export class SessionManager {
   /** Build custom tool definitions to pass to SDK session creation. */
   private async buildCustomTools(channelId: string): Promise<any[]> {
     const tools: any[] = [];
+    const channelConfig = await getChannelConfig(channelId);
+    const botName = await getChannelBotName(channelId);
 
     if (this.sendFileHandler) {
       const handler = this.sendFileHandler;
-      const config = await getChannelConfig(channelId);
-      const botName = await getChannelBotName(channelId);
       const workDir = await this.resolveWorkingDirectory(channelId);
-      const allowPaths = await getWorkspaceAllowPaths(botName, config.platform);
+      const allowPaths = await getWorkspaceAllowPaths(botName, channelConfig.platform);
 
       tools.push({
         name: 'send_file',
@@ -2326,9 +2339,7 @@ export class SessionManager {
     if (this.getAdapterForChannel) {
       const adapterResolver = this.getAdapterForChannel;
       const showWorkDir = await this.resolveWorkingDirectory(channelId);
-      const showBotName = await getChannelBotName(channelId);
-      const showConfig = await getChannelConfig(channelId);
-      const showAllowPaths = await getWorkspaceAllowPaths(showBotName, showConfig.platform);
+      const showAllowPaths = await getWorkspaceAllowPaths(botName, channelConfig.platform);
 
       tools.push({
         name: 'show_file_in_chat',
@@ -2416,9 +2427,7 @@ export class SessionManager {
     }
 
     // Admin-only onboarding tools
-    const config = await getChannelConfig(channelId);
-    const botName = await getChannelBotName(channelId);
-    const isAdmin = isBotAdmin(config.platform, botName);
+    const isAdmin = isBotAdmin(channelConfig.platform, botName);
 
     if (isAdmin && this.getAdapterForChannel) {
       const adapterResolver = this.getAdapterForChannel;
@@ -2435,7 +2444,7 @@ export class SessionManager {
 
             const teams = await adapter.getTeams();
             const appConfig = getConfig();
-            const platformConfig = appConfig.platforms[config.platform];
+            const platformConfig = appConfig.platforms[channelConfig.platform];
             const botNames = platformConfig.bots ? Object.keys(platformConfig.bots) : ['default'];
 
             return {
@@ -2492,7 +2501,7 @@ export class SessionManager {
             const result = await onboardProject(adapter, {
               projectName: args.project_name,
               botName: args.bot_name,
-              platform: config.platform,
+              platform: channelConfig.platform,
               teamId: args.team_id,
               private: args.private,
               workspacePath: args.workspace_path,
@@ -2634,6 +2643,30 @@ export class SessionManager {
     const iaConfig = getInterAgentConfig();
     if (iaConfig.enabled) {
       tools.push(await this.buildAskAgentToolDef(channelId));
+    }
+
+    const updateCardStatusHandler = this.customToolHandlers.get('update_card_status');
+    if (channelConfig.platform === 'http' && updateCardStatusHandler) {
+      tools.push({
+        name: 'update_card_status',
+        description: 'Update your card status for the current HTTP session and emit a card.status event.',
+        parameters: {
+          type: 'object',
+          properties: {
+            status: { type: 'string', description: 'New status for the current card.' },
+          },
+          required: ['status'],
+        },
+        handler: async (args: { status: string }) => {
+          try {
+            const result = await updateCardStatusHandler(channelId, args);
+            return { content: JSON.stringify(result) };
+          } catch (err: any) {
+            log.error(`update_card_status failed for channel ${channelId.slice(0, 8)}...:`, err);
+            return { content: JSON.stringify({ success: false, error: 'tool_error', detail: err?.message ?? 'unknown error' }) };
+          }
+        },
+      });
     }
 
     // Scheduler tool: create/list/cancel/pause/resume scheduled tasks

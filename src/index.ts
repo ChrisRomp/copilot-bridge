@@ -1,6 +1,6 @@
 import { loadConfig, getConfig, getHttpApiKeySecret, isConfiguredChannel, registerDynamicChannel, markChannelAsDM, getChannelConfig, getPlatformBots, getPlatformAccess, getChannelBotName, isBotAdmin, getHardcodedRules, getConfigRules, reloadConfig, ConfigWatcher } from './config.js';
 import { CopilotBridge } from './core/bridge.js';
-import { SessionManager, BRIDGE_CUSTOM_TOOLS, parseEnvFile } from './core/session-manager.js';
+import { SessionManager, parseEnvFile } from './core/session-manager.js';
 import { handleCommand, parseCommand } from './core/command-handler.js';
 import { formatEvent, formatPermissionRequest, formatUserInputRequest } from './core/stream-formatter.js';
 import { WorkspaceWatcher, initWorkspace, getWorkspacePath } from './core/workspace-manager.js';
@@ -21,8 +21,24 @@ import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig, DatabaseConfig, HttpPlatformConfig } from './types.js';
 import { routeHttpSessionEvent, type HttpEventRouteDeps } from './channels/http/event-routing.js';
+import type { ICardStore } from './channels/http/store.js';
+import type { SseManager } from './channels/http/sse.js';
 
 const log = createLogger('bridge');
+
+export function registerHttpSessionToolHandlers(
+  sessionManager: Pick<SessionManager, 'registerCustomToolHandler'>,
+  cardStore: Pick<ICardStore, 'updateCard'>,
+  sseManager: Pick<SseManager, 'emit'>,
+): void {
+  sessionManager.registerCustomToolHandler('update_card_status', async (channelId, args) => {
+    const cardId = channelId;
+    const { status } = args as { status: string };
+    await cardStore.updateCard(cardId, { status });
+    sseManager.emit(cardId, '', { event: 'card.status', data: { card_id: cardId, status } });
+    return { success: true, status };
+  });
+}
 
 // Active streaming responses, keyed by channelId
 const activeStreams = new Map<string, string>(); // channelId → streamKey
@@ -564,6 +580,7 @@ async function main(): Promise<void> {
       harness: httpHarness,
       sseManager: createdHttpSseManager,
     };
+    registerHttpSessionToolHandlers(sessionManager, httpStore, createdHttpSseManager);
 
     const httpBots = buildHttpRouteBots(httpPlatform);
     const authConfig = buildHttpAuthConfig(httpPlatform, getHttpApiKeySecret);
@@ -1617,7 +1634,7 @@ async function handleInboundMessage(
         }
 
         lines.push('**Copilot Bridge Tools**');
-        for (const t of BRIDGE_CUSTOM_TOOLS) lines.push(`• \`${t}\``);
+        for (const t of await sessionManager.listBridgeToolNames(msg.channelId)) lines.push(`• \`${t}\``);
 
         if (skills.length === 0 && mcpInfo.length === 0) {
           lines.push('', '_No skills or MCP servers configured. Add skills to `~/.copilot/skills/` or MCP servers to `~/.copilot/mcp-config.json`._');
@@ -2658,9 +2675,14 @@ async function postRestartNotices(): Promise<void> {
   }
 }
 
-// Start the bridge
-main().catch(async (err) => {
-  log.error('Fatal error:', err);
-  try { await closeDb(); } catch (err) { log.warn('Failed to close database during fatal error handler:', err); }
-  process.exit(1);
-});
+const isEntrypoint = process.argv[1]
+  ? pathToFileURL(process.argv[1]).href === import.meta.url
+  : false;
+
+if (isEntrypoint) {
+  main().catch(async (err) => {
+    log.error('Fatal error:', err);
+    try { await closeDb(); } catch (closeErr) { log.warn('Failed to close database during fatal error handler:', closeErr); }
+    process.exit(1);
+  });
+}
