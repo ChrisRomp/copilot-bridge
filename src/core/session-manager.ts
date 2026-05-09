@@ -22,6 +22,7 @@ import {
 } from './inter-agent.js';
 import { createLogger } from '../logger.js';
 import { tryWithFallback, isModelError, buildFallbackChain } from './model-fallback.js';
+import { mergeCompactionSummary, scheduleIdleConsolidation, cancelIdleConsolidation, runConsolidation, buildConsolidationPrompt } from './memory-consolidation.js';
 import type { McpServerInfo } from './command-handler.js';
 import { loadHooks, getHooksInfo, type SessionHooks, type HookInfo } from './hooks-loader.js';
 import { getBridgeDocs } from './bridge-docs.js';
@@ -923,6 +924,11 @@ export class SessionManager {
   async sendMessage(channelId: string, text: string, attachments?: Array<{ type: 'file'; path: string; displayName?: string }>, userId?: string): Promise<string> {
     if (userId) this.lastMessageUserIds.set(channelId, userId);
 
+    // Cancel any pending idle memory consolidation (activity resumed)
+    this.cancelMemoryConsolidation(channelId).catch((err) => {
+      log.debug(`cancelMemoryConsolidation failed:`, err);
+    });
+
     // Auto-deny any pending permissions so the session unblocks
     this.clearPendingPermissions(channelId);
 
@@ -1730,6 +1736,83 @@ export class SessionManager {
       return ['store_memory', 'vote_memory'];
     }
     return undefined;
+  }
+
+  /**
+   * Handle compaction save — merge summaryContent into MEMORY.md.
+   * Called from index.ts on session.compaction_complete.
+   */
+  async handleCompactionSave(channelId: string, summaryContent: string): Promise<void> {
+    const workspacePath = await this.resolveWorkingDirectory(channelId);
+    await mergeCompactionSummary(workspacePath, summaryContent);
+  }
+
+  /**
+   * Schedule idle memory consolidation for a channel's workspace.
+   * Called from index.ts on session.idle.
+   */
+  async scheduleMemoryConsolidation(channelId: string): Promise<void> {
+    const workspacePath = await this.resolveWorkingDirectory(channelId);
+    const memoryPath = path.join(workspacePath, 'MEMORY.md');
+
+    // Only schedule if MEMORY.md exists
+    try {
+      fs.accessSync(memoryPath);
+    } catch {
+      return;
+    }
+
+    const memCfg = getConfig().memory;
+    scheduleIdleConsolidation(workspacePath, memCfg, async (wsPath) => {
+      await this.runMemoryConsolidation(wsPath);
+    });
+  }
+
+  /**
+   * Cancel pending memory consolidation for a channel's workspace.
+   * Called when new activity arrives (sendMessage).
+   */
+  async cancelMemoryConsolidation(channelId: string): Promise<void> {
+    const workspacePath = await this.resolveWorkingDirectory(channelId);
+    cancelIdleConsolidation(workspacePath);
+  }
+
+  /**
+   * Run memory consolidation via a background ephemeral session.
+   */
+  private async runMemoryConsolidation(workspacePath: string): Promise<void> {
+    const memCfg = getConfig().memory;
+    const consolidationModel = memCfg?.consolidation?.model;
+
+    await runConsolidation(workspacePath, async (currentContent) => {
+      const prompt = buildConsolidationPrompt(currentContent);
+      const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
+
+      let session: any;
+      try {
+        session = await this.bridge.createSession({
+          ...(consolidationModel ? { model: consolidationModel } : {}),
+          workingDirectory: workspacePath,
+          configDir: defaultConfigDir,
+          onPermissionRequest: async () => ({ kind: 'reject' as const }),
+          systemMessage: { content: 'You are a memory file organizer. Respond with ONLY the updated file content, no explanations or code fences.' },
+        });
+
+        const response = await this.sendAndWaitForIdle(session, prompt, 60_000);
+
+        // Strip code fences if the model wrapped the response
+        let cleaned = response.trim();
+        if (cleaned.startsWith('```')) {
+          cleaned = cleaned.replace(/^```(?:markdown)?\n?/, '').replace(/\n?```$/, '');
+        }
+
+        return cleaned;
+      } finally {
+        if (session) {
+          await this.safeDestroySession(session.sessionId);
+        }
+      }
+    });
   }
 
   private async createNewSession(channelId: string): Promise<string> {
