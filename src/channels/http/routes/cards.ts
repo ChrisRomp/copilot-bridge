@@ -6,12 +6,14 @@ import type { HttpChannelAdapter } from '../index.js';
 import type { SseManager } from '../sse.js';
 import { openSseStream, serializeSseEvent } from '../sse.js';
 import type { Card, CardFilter, ICardStore, NewCard } from '../store.js';
+import type { SessionManager } from '../../../core/session-manager.js';
 import type { InboundMessage } from '../../../types.js';
 
 export interface CardRouteDeps {
   store: ICardStore;
   adapter: HttpChannelAdapter;
   sseManager: Pick<SseManager, 'subscribeCard'>;
+  sessionManager: Pick<SessionManager, 'abortSession'>;
 }
 
 type CardParams = { id: string };
@@ -298,6 +300,34 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
 
     await deps.store.removeLabel(card.id, request.params.label);
     return reply.status(204).send();
+  });
+
+  app.post<{ Params: CardParams }>('/v1/cards/:id/abort', async (request, reply) => {
+    const apiKey = request.apiKey!;
+    if (!canPerformOp(apiKey, 'card:update')) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    const { id } = request.params;
+    const card = await getCardOrReply(deps.store, id, reply);
+    if (!card) {
+      return;
+    }
+    if (!card.channel_id) {
+      return reply.status(400).send({ error: 'Card has no active session' });
+    }
+
+    const runs = await deps.store.listRunsForCard(id);
+    const activeRun = runs.find((run) => run.status === 'created' || run.status === 'in-progress');
+
+    await deps.sessionManager.abortSession(card.channel_id);
+
+    if (activeRun) {
+      await deps.store.updateRun(activeRun.id, { status: 'cancelled' });
+    }
+
+    const updatedCard = await deps.store.getCard(id);
+    return { card: updatedCard ?? card };
   });
 
   app.post<{ Params: CardParams }>('/v1/cards/:id/archive', async (request, reply) => {

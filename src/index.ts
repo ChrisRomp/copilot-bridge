@@ -599,6 +599,7 @@ async function main(): Promise<void> {
         store: httpStore,
         adapter: createdHttpAdapter,
         sseManager: createdHttpSseManager,
+        sessionManager,
       });
     });
 

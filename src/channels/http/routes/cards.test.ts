@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerAuthHook } from '../auth.js';
 import type { HttpChannelAdapter } from '../index.js';
 import { SseManager } from '../sse.js';
-import { registerCardRoutes } from './cards.js';
+import { registerCardRoutes, type CardRouteDeps } from './cards.js';
 import type {
   Card,
   CardComment,
@@ -252,6 +252,24 @@ function createSseManager() {
   } as Pick<SseManager, 'subscribeCard'>;
 }
 
+function createSessionManager(): CardRouteDeps['sessionManager'] {
+  return {
+    abortSession: vi.fn(async () => {}),
+  };
+}
+
+function createRouteDeps(
+  store: ICardStore,
+  overrides: Partial<Omit<CardRouteDeps, 'store'>> = {},
+): CardRouteDeps {
+  return {
+    store,
+    adapter: overrides.adapter ?? createAdapter(),
+    sseManager: overrides.sseManager ?? createSseManager(),
+    sessionManager: overrides.sessionManager ?? createSessionManager(),
+  };
+}
+
 async function openSseStream(
   url: string,
   headers: Record<string, string>,
@@ -317,7 +335,7 @@ describe('registerCardRoutes', () => {
 
   it('creates an idea card without an agent', async () => {
     const { store, createCard, addLabels } = createStore();
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -353,7 +371,7 @@ describe('registerCardRoutes', () => {
 
   it('creates an in-progress agent card and adds labels', async () => {
     const { store, createCard, addLabels } = createStore();
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -387,7 +405,7 @@ describe('registerCardRoutes', () => {
 
   it('validates title, permissions, and agent access when creating cards', async () => {
     const { store } = createStore();
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const missingTitle = await app.inject({
@@ -431,7 +449,7 @@ describe('registerCardRoutes', () => {
     cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: null, status: 'idea', type: 'work' }));
     cards.set('card-2', createCardRecord({ id: 'card-2', agent_bot: 'bob', status: 'in_progress', type: 'work' }));
     await store.addLabels('card-2', ['backend']);
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const noneResponse = await app.inject({
@@ -463,7 +481,7 @@ describe('registerCardRoutes', () => {
     cards.set('card-1', createCardRecord({ id: 'card-1', title: 'Inspect details' }));
     runs.set('run-1', createRunRecord({ id: 'run-1', card_id: 'card-1', status: 'in-progress' }));
     comments.set('card-1', [createCommentRecord({ id: 'comment-9', card_id: 'card-1' })]);
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const ok = await app.inject({
@@ -490,7 +508,7 @@ describe('registerCardRoutes', () => {
   it('returns 404 for unknown card event streams', async () => {
     const { store } = createStore();
     const sseManager = createSseManager();
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager });
+    registerCardRoutes(app, createRouteDeps(store, { sseManager }));
     await app.ready();
 
     const response = await app.inject({
@@ -510,7 +528,7 @@ describe('registerCardRoutes', () => {
     cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: 'bob' }));
     sseManager.emit('card-1', 'run-1', { event: 'run.in-progress', data: { step: 1 } });
     sseManager.emit('card-1', 'run-2', { event: 'run.completed', data: { step: 2 } });
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager });
+    registerCardRoutes(app, createRouteDeps(store, { sseManager }));
     await app.listen({ host: '127.0.0.1', port: 0 });
 
     const address = app.server.address();
@@ -537,7 +555,7 @@ describe('registerCardRoutes', () => {
   it('patches card fields and assigns an agent with a workspace subdir', async () => {
     const { store, cards, updateCard } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: null, status: 'idea' }));
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -576,7 +594,7 @@ describe('registerCardRoutes', () => {
   it('rejects assigning an agent outside the API key scope', async () => {
     const { store, cards, updateCard } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: null, status: 'idea' }));
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -597,7 +615,7 @@ describe('registerCardRoutes', () => {
     runs.set('run-1', createRunRecord({ id: 'run-1', card_id: 'card-1', status: 'in-progress' }));
     runs.set('run-2', createRunRecord({ id: 'run-2', card_id: 'card-1', status: 'awaiting' }));
     runs.set('run-3', createRunRecord({ id: 'run-3', card_id: 'card-1', status: 'completed' }));
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -619,7 +637,7 @@ describe('registerCardRoutes', () => {
     const { store, cards, runs, updateCard, updateRun } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: 'lal', status: 'in_progress' }));
     runs.set('run-1', createRunRecord({ id: 'run-1', card_id: 'card-1', status: 'in-progress' }));
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -640,7 +658,7 @@ describe('registerCardRoutes', () => {
     cards.set('card-1', createCardRecord({ id: 'card-1', status: 'in_progress' }));
     runs.set('run-1', createRunRecord({ id: 'run-1', card_id: 'card-1', status: 'in-progress' }));
     runs.set('run-2', createRunRecord({ id: 'run-2', card_id: 'card-1', status: 'failed' }));
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -660,7 +678,7 @@ describe('registerCardRoutes', () => {
     const { store, cards, addLabels, getLabels } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1' }));
     await store.addLabels('card-1', ['ops']);
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -678,7 +696,7 @@ describe('registerCardRoutes', () => {
 
   it('returns 404 when adding labels to a missing card', async () => {
     const { store, addLabels, getLabels } = createStore();
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -697,7 +715,7 @@ describe('registerCardRoutes', () => {
   it('rejects adding labels without update permission', async () => {
     const { store, cards, addLabels, getLabels } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1' }));
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -716,7 +734,7 @@ describe('registerCardRoutes', () => {
   it('rejects adding labels without a labels payload', async () => {
     const { store, cards, addLabels, getLabels } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1' }));
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -735,7 +753,7 @@ describe('registerCardRoutes', () => {
     const { store, cards, removeLabel } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1' }));
     await store.addLabels('card-1', ['backend', 'ops']);
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -752,7 +770,7 @@ describe('registerCardRoutes', () => {
 
   it('returns 404 when removing a label from a missing card', async () => {
     const { store, removeLabel } = createStore();
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -769,7 +787,7 @@ describe('registerCardRoutes', () => {
   it('rejects removing a label without update permission', async () => {
     const { store, cards, removeLabel } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1' }));
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -783,10 +801,133 @@ describe('registerCardRoutes', () => {
     expect(removeLabel).not.toHaveBeenCalled();
   });
 
+  it('aborts a card session, cancels the active run, and keeps the card status unchanged', async () => {
+    const { store, cards, runs, updateRun } = createStore();
+    cards.set('card-1', createCardRecord({
+      id: 'card-1',
+      channel_id: 'channel-123',
+      status: 'in_progress',
+      agent_bot: 'bob',
+    }));
+    runs.set('run-1', createRunRecord({ id: 'run-1', card_id: 'card-1', status: 'in-progress' }));
+    runs.set('run-2', createRunRecord({ id: 'run-2', card_id: 'card-1', status: 'completed' }));
+    const sessionManager = createSessionManager();
+    registerCardRoutes(app, createRouteDeps(store, { sessionManager }));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-1/abort',
+      headers: authHeader,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      card: expect.objectContaining({
+        id: 'card-1',
+        channel_id: 'channel-123',
+        status: 'in_progress',
+        agent_bot: 'bob',
+      }),
+    });
+    expect(sessionManager.abortSession).toHaveBeenCalledWith('channel-123');
+    expect(updateRun).toHaveBeenCalledTimes(1);
+    expect(updateRun).toHaveBeenCalledWith('run-1', { status: 'cancelled' });
+    expect(runs.get('run-1')?.status).toBe('cancelled');
+    expect(cards.get('card-1')?.status).toBe('in_progress');
+  });
+
+  it('returns 404 when aborting a missing card', async () => {
+    const { store, updateRun } = createStore();
+    const sessionManager = createSessionManager();
+    registerCardRoutes(app, createRouteDeps(store, { sessionManager }));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/missing/abort',
+      headers: authHeader,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'Card not found' });
+    expect(sessionManager.abortSession).not.toHaveBeenCalled();
+    expect(updateRun).not.toHaveBeenCalled();
+  });
+
+  it('rejects aborting without update permission', async () => {
+    const { store, cards, updateRun } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1', channel_id: 'channel-123' }));
+    const sessionManager = createSessionManager();
+    registerCardRoutes(app, createRouteDeps(store, { sessionManager }));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-1/abort',
+      headers: readOnlyHeader,
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'Forbidden' });
+    expect(sessionManager.abortSession).not.toHaveBeenCalled();
+    expect(updateRun).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when aborting a card without an active session', async () => {
+    const { store, cards, updateRun } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1', channel_id: null }));
+    const sessionManager = createSessionManager();
+    registerCardRoutes(app, createRouteDeps(store, { sessionManager }));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-1/abort',
+      headers: authHeader,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: 'Card has no active session' });
+    expect(sessionManager.abortSession).not.toHaveBeenCalled();
+    expect(updateRun).not.toHaveBeenCalled();
+  });
+
+  it('aborts a card session without changing runs when none are active', async () => {
+    const { store, cards, runs, updateRun } = createStore();
+    cards.set('card-1', createCardRecord({
+      id: 'card-1',
+      channel_id: 'channel-123',
+      status: 'in_progress',
+      agent_bot: 'bob',
+    }));
+    runs.set('run-1', createRunRecord({ id: 'run-1', card_id: 'card-1', status: 'completed' }));
+    const sessionManager = createSessionManager();
+    registerCardRoutes(app, createRouteDeps(store, { sessionManager }));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-1/abort',
+      headers: authHeader,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      card: expect.objectContaining({
+        id: 'card-1',
+        status: 'in_progress',
+      }),
+    });
+    expect(sessionManager.abortSession).toHaveBeenCalledWith('channel-123');
+    expect(updateRun).not.toHaveBeenCalled();
+    expect(runs.get('run-1')?.status).toBe('completed');
+  });
+
   it('rejects archiving without update permission', async () => {
     const { store, cards, updateCard, updateRun } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1', status: 'in_progress' }));
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -803,7 +944,7 @@ describe('registerCardRoutes', () => {
 
   it('returns 404 when archiving a missing card', async () => {
     const { store, updateCard, updateRun } = createStore();
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const response = await app.inject({
@@ -822,7 +963,7 @@ describe('registerCardRoutes', () => {
     const { store, cards, runs, deleteCard, updateRun } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1' }));
     runs.set('run-1', createRunRecord({ id: 'run-1', card_id: 'card-1', status: 'created' }));
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const forbidden = await app.inject({
@@ -856,7 +997,7 @@ describe('registerCardRoutes', () => {
   it('enforces read and update permissions', async () => {
     const { store, cards } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1' }));
-    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store));
     await app.ready();
 
     const readForbidden = await app.inject({
@@ -886,7 +1027,7 @@ describe('registerCardRoutes', () => {
       status: 'in_progress',
     }));
     const adapter = createAdapter();
-    registerCardRoutes(app, { store, adapter, sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store, { adapter }));
     await app.ready();
 
     const response = await app.inject({
@@ -943,7 +1084,7 @@ describe('registerCardRoutes', () => {
   it('returns 404 when posting a comment to a missing card', async () => {
     const { store, addComment, createRun } = createStore();
     const adapter = createAdapter();
-    registerCardRoutes(app, { store, adapter, sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store, { adapter }));
     await app.ready();
 
     const response = await app.inject({
@@ -964,7 +1105,7 @@ describe('registerCardRoutes', () => {
     const { store, cards, addComment, createRun } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: null }));
     const adapter = createAdapter();
-    registerCardRoutes(app, { store, adapter, sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store, { adapter }));
     await app.ready();
 
     const response = await app.inject({
@@ -986,7 +1127,7 @@ describe('registerCardRoutes', () => {
     cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: 'bob' }));
     cards.set('card-2', createCardRecord({ id: 'card-2', agent_bot: 'lal' }));
     const adapter = createAdapter();
-    registerCardRoutes(app, { store, adapter, sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store, { adapter }));
     await app.ready();
 
     const forbiddenOp = await app.inject({
@@ -1016,7 +1157,7 @@ describe('registerCardRoutes', () => {
     const { store, cards, addComment, createRun } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: 'bob' }));
     const adapter = createAdapter();
-    registerCardRoutes(app, { store, adapter, sseManager: createSseManager() });
+    registerCardRoutes(app, createRouteDeps(store, { adapter }));
     await app.ready();
 
     const response = await app.inject({
