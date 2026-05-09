@@ -18,6 +18,7 @@ export interface CardRouteDeps {
 
 type CardParams = { id: string };
 type CardLabelParams = { id: string; label: string };
+type CardCheckpointParams = { id: string; checkpointId: string };
 
 type CreateCardBody = {
   title: string;
@@ -48,6 +49,10 @@ type CreateCommentBody = {
 
 type AddLabelsBody = {
   labels: string[];
+};
+
+type CreateCheckpointBody = {
+  name?: string;
 };
 
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
@@ -216,6 +221,65 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
     const updated = await deps.store.updateCard(card.id, patch);
     return { card: updated };
   });
+
+  app.get<{ Params: CardParams }>('/v1/cards/:id/checkpoints', async (request, reply) => {
+    const apiKey = request.apiKey!;
+    if (!canPerformOp(apiKey, 'card:read')) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    const card = await getCardOrReply(deps.store, request.params.id, reply);
+    if (!card) {
+      return;
+    }
+
+    const checkpoints = await deps.store.listCheckpoints(card.id);
+    return { checkpoints };
+  });
+
+  app.post<{ Params: CardParams; Body: CreateCheckpointBody }>(
+    '/v1/cards/:id/checkpoints',
+    async (request, reply) => {
+      const apiKey = request.apiKey!;
+      if (!canPerformOp(apiKey, 'card:update')) {
+        return reply.status(403).send({ error: 'Forbidden' });
+      }
+
+      const card = await getCardOrReply(deps.store, request.params.id, reply);
+      if (!card) {
+        return;
+      }
+
+      const turns = await deps.store.listTurns(card.id);
+      const turnIndex = turns.length > 0 ? Math.max(...turns.map((turn) => turn.turn_index)) : 0;
+      const checkpoint = await deps.store.createCheckpoint({
+        card_id: card.id,
+        name: request.body?.name,
+        turn_index: turnIndex,
+        created_by: apiKey.keyId,
+      });
+
+      return reply.status(201).send({ checkpoint });
+    },
+  );
+
+  app.delete<{ Params: CardCheckpointParams }>(
+    '/v1/cards/:id/checkpoints/:checkpointId',
+    async (request, reply) => {
+      const apiKey = request.apiKey!;
+      if (!canPerformOp(apiKey, 'card:update')) {
+        return reply.status(403).send({ error: 'Forbidden' });
+      }
+
+      const card = await getCardOrReply(deps.store, request.params.id, reply);
+      if (!card) {
+        return;
+      }
+
+      await deps.store.deleteCheckpoint(request.params.checkpointId);
+      return reply.status(204).send();
+    },
+  );
 
   app.post<{ Params: CardParams; Body: CreateCommentBody }>('/v1/cards/:id/comments', async (request, reply) => {
     const { id } = request.params;

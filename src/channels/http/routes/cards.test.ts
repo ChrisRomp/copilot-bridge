@@ -73,14 +73,44 @@ function createCommentRecord(overrides: Partial<CardComment> = {}): CardComment 
   };
 }
 
+function createTurnRecord(overrides: Partial<SessionTurn> = {}): SessionTurn {
+  return {
+    id: 'turn-1',
+    card_id: 'card-1',
+    run_id: null,
+    turn_index: 0,
+    role: 'user',
+    content: 'Hello',
+    git_ref: null,
+    created_at: timestamp,
+    ...overrides,
+  };
+}
+
+function createCheckpointRecord(overrides: Partial<Checkpoint> = {}): Checkpoint {
+  return {
+    id: 'checkpoint-1',
+    card_id: 'card-1',
+    name: 'Initial checkpoint',
+    turn_index: 0,
+    git_ref: null,
+    created_by: 'ui-desktop-rk',
+    created_at: timestamp,
+    ...overrides,
+  };
+}
+
 function createStore() {
   const cards = new Map<string, Card>();
   const runs = new Map<string, Run>();
   const comments = new Map<string, CardComment[]>();
+  const turns = new Map<string, SessionTurn[]>();
+  const checkpoints = new Map<string, Checkpoint[]>();
   const labels = new Map<string, Set<string>>();
   let nextCard = 1;
   let nextRun = 1;
   let nextComment = 1;
+  let nextCheckpoint = 1;
 
   const createCard = vi.fn(async (card: NewCard): Promise<Card> => {
     const created = createCardRecord({
@@ -182,6 +212,40 @@ function createStore() {
     return created;
   });
 
+  const listTurns = vi.fn(async (cardId: string, upToIndex?: number): Promise<SessionTurn[]> => {
+    const cardTurns = turns.get(cardId) ?? [];
+    if (upToIndex === undefined) {
+      return cardTurns;
+    }
+    return cardTurns.filter((turn) => turn.turn_index <= upToIndex);
+  });
+
+  const createCheckpoint = vi.fn(async (checkpoint: NewCheckpoint): Promise<Checkpoint> => {
+    const created = createCheckpointRecord({
+      id: `checkpoint-${nextCheckpoint++}`,
+      card_id: checkpoint.card_id,
+      name: checkpoint.name ?? null,
+      turn_index: checkpoint.turn_index,
+      git_ref: checkpoint.git_ref ?? null,
+      created_by: checkpoint.created_by,
+    });
+    checkpoints.set(checkpoint.card_id, [...(checkpoints.get(checkpoint.card_id) ?? []), created]);
+    return created;
+  });
+
+  const listCheckpoints = vi.fn(async (cardId: string): Promise<Checkpoint[]> => {
+    return checkpoints.get(cardId) ?? [];
+  });
+
+  const deleteCheckpoint = vi.fn(async (id: string): Promise<void> => {
+    for (const [cardId, cardCheckpoints] of checkpoints.entries()) {
+      const nextCardCheckpoints = cardCheckpoints.filter((checkpoint) => checkpoint.id !== id);
+      if (nextCardCheckpoints.length !== cardCheckpoints.length) {
+        checkpoints.set(cardId, nextCardCheckpoints);
+      }
+    }
+  });
+
   const store: ICardStore = {
     initialize: async () => {},
     createCard,
@@ -208,18 +272,10 @@ function createStore() {
       git_ref: turn.git_ref ?? null,
       created_at: timestamp,
     }),
-    listTurns: async (_cardId: string, _upToIndex?: number) => [],
-    createCheckpoint: async (checkpoint: NewCheckpoint): Promise<Checkpoint> => ({
-      id: 'checkpoint-1',
-      card_id: checkpoint.card_id,
-      name: checkpoint.name ?? null,
-      turn_index: checkpoint.turn_index,
-      git_ref: checkpoint.git_ref ?? null,
-      created_by: checkpoint.created_by,
-      created_at: timestamp,
-    }),
-    listCheckpoints: async (_cardId: string) => [],
-    deleteCheckpoint: async (_id: string) => {},
+    listTurns,
+    createCheckpoint,
+    listCheckpoints,
+    deleteCheckpoint,
   };
 
   return {
@@ -227,6 +283,8 @@ function createStore() {
     cards,
     runs,
     comments,
+    turns,
+    checkpoints,
     createCard,
     listCards,
     updateCard,
@@ -237,6 +295,10 @@ function createStore() {
     createRun,
     updateRun,
     addComment,
+    listTurns,
+    createCheckpoint,
+    listCheckpoints,
+    deleteCheckpoint,
   };
 }
 
@@ -505,6 +567,60 @@ describe('registerCardRoutes', () => {
     expect(missing.json()).toEqual({ error: 'Card not found' });
   });
 
+  it('lists checkpoints for a card', async () => {
+    const { store, cards, checkpoints, listCheckpoints } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1' }));
+    checkpoints.set('card-1', [
+      createCheckpointRecord({ id: 'checkpoint-1', card_id: 'card-1', turn_index: 1, name: 'Before edit' }),
+      createCheckpointRecord({ id: 'checkpoint-2', card_id: 'card-1', turn_index: 3, name: 'After edit' }),
+    ]);
+    registerCardRoutes(app, createRouteDeps(store));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/cards/card-1/checkpoints',
+      headers: authHeader,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ checkpoints: checkpoints.get('card-1') });
+    expect(listCheckpoints).toHaveBeenCalledWith('card-1');
+  });
+
+  it('returns 404 when listing checkpoints for a missing card', async () => {
+    const { store, listCheckpoints } = createStore();
+    registerCardRoutes(app, createRouteDeps(store));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/cards/missing/checkpoints',
+      headers: authHeader,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'Card not found' });
+    expect(listCheckpoints).not.toHaveBeenCalled();
+  });
+
+  it('rejects listing checkpoints without read permission', async () => {
+    const { store, cards, listCheckpoints } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1' }));
+    registerCardRoutes(app, createRouteDeps(store));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/cards/card-1/checkpoints',
+      headers: createOnlyHeader,
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'Forbidden' });
+    expect(listCheckpoints).not.toHaveBeenCalled();
+  });
+
   it('returns 404 for unknown card event streams', async () => {
     const { store } = createStore();
     const sseManager = createSseManager();
@@ -651,6 +767,131 @@ describe('registerCardRoutes', () => {
     expect(response.json()).toEqual({ error: 'Forbidden' });
     expect(updateRun).not.toHaveBeenCalled();
     expect(updateCard).not.toHaveBeenCalled();
+  });
+
+  it('creates a checkpoint using the latest turn index', async () => {
+    const { store, cards, turns, listTurns, createCheckpoint } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1' }));
+    turns.set('card-1', [
+      createTurnRecord({ id: 'turn-1', card_id: 'card-1', turn_index: 0 }),
+      createTurnRecord({ id: 'turn-2', card_id: 'card-1', turn_index: 4 }),
+      createTurnRecord({ id: 'turn-3', card_id: 'card-1', turn_index: 2 }),
+    ]);
+    registerCardRoutes(app, createRouteDeps(store));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-1/checkpoints',
+      headers: authHeader,
+      payload: { name: 'Milestone' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({
+      checkpoint: createCheckpointRecord({
+        id: 'checkpoint-1',
+        card_id: 'card-1',
+        name: 'Milestone',
+        turn_index: 4,
+      }),
+    });
+    expect(listTurns).toHaveBeenCalledWith('card-1');
+    expect(createCheckpoint).toHaveBeenCalledWith({
+      card_id: 'card-1',
+      name: 'Milestone',
+      turn_index: 4,
+      created_by: 'ui-desktop-rk',
+    });
+  });
+
+  it('returns 404 when creating a checkpoint for a missing card', async () => {
+    const { store, listTurns, createCheckpoint } = createStore();
+    registerCardRoutes(app, createRouteDeps(store));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/missing/checkpoints',
+      headers: authHeader,
+      payload: { name: 'Milestone' },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'Card not found' });
+    expect(listTurns).not.toHaveBeenCalled();
+    expect(createCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it('rejects creating a checkpoint without update permission', async () => {
+    const { store, cards, listTurns, createCheckpoint } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1' }));
+    registerCardRoutes(app, createRouteDeps(store));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-1/checkpoints',
+      headers: readOnlyHeader,
+      payload: { name: 'Milestone' },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'Forbidden' });
+    expect(listTurns).not.toHaveBeenCalled();
+    expect(createCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it('deletes a checkpoint', async () => {
+    const { store, cards, checkpoints, deleteCheckpoint } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1' }));
+    checkpoints.set('card-1', [createCheckpointRecord({ id: 'checkpoint-1', card_id: 'card-1' })]);
+    registerCardRoutes(app, createRouteDeps(store));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/v1/cards/card-1/checkpoints/checkpoint-1',
+      headers: authHeader,
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.body).toBe('');
+    expect(deleteCheckpoint).toHaveBeenCalledWith('checkpoint-1');
+    expect(checkpoints.get('card-1')).toEqual([]);
+  });
+
+  it('returns 404 when deleting a checkpoint for a missing card', async () => {
+    const { store, deleteCheckpoint } = createStore();
+    registerCardRoutes(app, createRouteDeps(store));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/v1/cards/missing/checkpoints/checkpoint-1',
+      headers: authHeader,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'Card not found' });
+    expect(deleteCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it('rejects deleting a checkpoint without update permission', async () => {
+    const { store, cards, deleteCheckpoint } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1' }));
+    registerCardRoutes(app, createRouteDeps(store));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/v1/cards/card-1/checkpoints/checkpoint-1',
+      headers: readOnlyHeader,
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'Forbidden' });
+    expect(deleteCheckpoint).not.toHaveBeenCalled();
   });
 
   it('archives cards by cancelling active runs', async () => {
