@@ -5,21 +5,22 @@ import type { SseEvent } from './acp.js';
 const log = createLogger('http-sse');
 
 type SseListener = (event: SseEvent) => void;
+type BufferedSseEvent = SseEvent & { id: string };
 
 /**
  * In-memory ring buffer per card. Stores events for Last-Event-ID replay.
  */
 export class EventBuffer {
   private readonly maxEvents: number;
-  private readonly events: SseEvent[] = [];
+  private readonly events: BufferedSseEvent[] = [];
   private nextId = 1;
 
   constructor(maxEvents = 1000) {
     this.maxEvents = maxEvents;
   }
 
-  push(event: Omit<SseEvent, 'id'>): SseEvent {
-    const full: SseEvent = { ...event, id: String(this.nextId++) };
+  push(event: Omit<SseEvent, 'id'>): BufferedSseEvent {
+    const full: BufferedSseEvent = { ...event, id: String(this.nextId++) };
     this.events.push(full);
     if (this.events.length > this.maxEvents) {
       this.events.shift();
@@ -27,7 +28,7 @@ export class EventBuffer {
     return full;
   }
 
-  since(lastEventId: string): SseEvent[] {
+  since(lastEventId: string): BufferedSseEvent[] {
     const id = Number.parseInt(lastEventId, 10);
     if (Number.isNaN(id)) {
       return [];
@@ -56,7 +57,7 @@ export class SseManager {
     }
 
     this.heartbeatInterval = setInterval(() => {
-      const event: SseEvent = { id: '0', event: 'heartbeat', data: {} };
+      const event: SseEvent = { event: 'heartbeat', data: {} };
       this.broadcast(this.cardListeners, event);
       this.broadcast(this.runListeners, event);
     }, 15_000);
@@ -159,7 +160,8 @@ export class SseManager {
 }
 
 export function serializeSseEvent(event: SseEvent): string {
-  return `id: ${event.id}\nevent: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`;
+  const idLine = event.id ? `id: ${event.id}\n` : '';
+  return `${idLine}event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`;
 }
 
 export function openSseStream(reply: FastifyReply): void {

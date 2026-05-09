@@ -107,7 +107,7 @@ export type CardEventType = 'card.status' | 'heartbeat';
 export type SseEventType = AcpEventType | CardEventType;
 
 export interface SseEvent {
-  id: string;
+  id?: string;
   event: SseEventType;
   data: unknown;
 }

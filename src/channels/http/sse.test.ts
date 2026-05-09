@@ -93,8 +93,8 @@ describe('SseManager', () => {
 
     await vi.advanceTimersByTimeAsync(15_000);
 
-    expect(cardListener).toHaveBeenCalledWith({ id: '0', event: 'heartbeat', data: {} });
-    expect(runListener).toHaveBeenCalledWith({ id: '0', event: 'heartbeat', data: {} });
+    expect(cardListener).toHaveBeenCalledWith({ event: 'heartbeat', data: {} });
+    expect(runListener).toHaveBeenCalledWith({ event: 'heartbeat', data: {} });
 
     unsubscribeCard();
     unsubscribeRun();
