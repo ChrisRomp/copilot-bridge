@@ -27,6 +27,16 @@ function createMessage(text: string): AcpMessage[] {
   return [{ role: 'user', parts: [{ type: 'text', text }] }];
 }
 
+function createNonTextMessage(): AcpMessage[] {
+  return [{
+    role: 'user',
+    parts: [
+      { type: 'trajectory', metadata: { tool_name: 'search', tool_input: { query: 'docs' } } },
+      { type: 'citation', metadata: { title: 'Docs', url: 'https://example.com' } },
+    ],
+  }];
+}
+
 function createRunRecord(overrides: Partial<Run> = {}): Run {
   return {
     id: 'run-1',
@@ -299,6 +309,65 @@ describe('registerAcpRoutes', () => {
     expect(runs.get(body.run.id)?.status).toBe('in-progress');
   });
 
+  it('rejects run creation when input has no text parts', async () => {
+    const { store, createCard, createRun } = createStore();
+    const adapter = createAdapter();
+    registerAcpRoutes(app, {
+      store,
+      adapter,
+      bots: { bob: { token: 'x', agent: 'bob-agent' } },
+    });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/runs',
+      headers: authHeader,
+      payload: {
+        agent_name: 'bob',
+        mode: 'async',
+        input: createNonTextMessage(),
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: 'Input must contain at least one text part' });
+    expect(createCard).not.toHaveBeenCalled();
+    expect(createRun).not.toHaveBeenCalled();
+    expect(adapter.dispatchInboundMessage).not.toHaveBeenCalled();
+  });
+
+  it('forbids creating a run for an inaccessible agent', async () => {
+    const { store, createCard, createRun } = createStore();
+    const adapter = createAdapter();
+    registerAcpRoutes(app, {
+      store,
+      adapter,
+      bots: {
+        bob: { token: 'x', agent: 'bob-agent' },
+        lal: { token: 'y', agent: 'lal-agent' },
+      },
+    });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/runs',
+      headers: limitedAuthHeader,
+      payload: {
+        agent_name: 'lal',
+        mode: 'async',
+        input: createMessage('Plan the migration'),
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'Forbidden' });
+    expect(createCard).not.toHaveBeenCalled();
+    expect(createRun).not.toHaveBeenCalled();
+    expect(adapter.dispatchInboundMessage).not.toHaveBeenCalled();
+  });
+
   it('reuses the same card for subsequent runs in the same session', async () => {
     const { store, createCard } = createStore();
     registerAcpRoutes(app, {
@@ -424,8 +493,8 @@ describe('registerAcpRoutes', () => {
 
     expect(response.statusCode).toBe(202);
     expect(response.json()).toMatchObject({ run: { id: 'run-cancel', status: 'cancelled' } });
-    expect(updateRun).toHaveBeenNthCalledWith(1, 'run-cancel', { status: 'cancelling' });
-    expect(updateRun).toHaveBeenNthCalledWith(2, 'run-cancel', expect.objectContaining({ status: 'cancelled' }));
+    expect(updateRun).toHaveBeenCalledOnce();
+    expect(updateRun).toHaveBeenCalledWith('run-cancel', { status: 'cancelled' });
   });
 
   it('returns session history for runs created in a session', async () => {

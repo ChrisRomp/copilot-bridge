@@ -79,11 +79,16 @@ export function registerAcpRoutes(app: FastifyInstance, deps: AcpRouteDeps): voi
       return reply.status(403).send({ error: 'Forbidden' });
     }
 
+    const inputText = extractText(body.input).trim();
+    if (!inputText) {
+      return reply.status(400).send({ error: 'Input must contain at least one text part' });
+    }
+
     const sessionId = body.session_id ?? randomUUID();
     let cardId = sessionCardIndex.get(sessionId);
 
     if (!cardId) {
-      const title = extractText(body.input).slice(0, 100).trim() || 'ACP Run';
+      const title = inputText.slice(0, 100) || 'ACP Run';
       const card = await deps.store.createCard({
         title,
         type: 'work',
@@ -108,7 +113,7 @@ export function registerAcpRoutes(app: FastifyInstance, deps: AcpRouteDeps): voi
       channelId: run.card_id,
       userId: request.apiKey!.keyId,
       username: request.apiKey!.keyId,
-      text: extractText(body.input),
+      text: inputText,
       postId: run.id,
     });
 
@@ -183,8 +188,7 @@ export function registerAcpRoutes(app: FastifyInstance, deps: AcpRouteDeps): voi
       return reply.status(403).send({ error: 'Forbidden' });
     }
 
-    const cancelling = await deps.store.updateRun(run.id, { status: 'cancelling' });
-    const cancelled = await deps.store.updateRun(cancelling.id, { status: 'cancelled', finished_at: new Date().toISOString() });
+    const cancelled = await deps.store.updateRun(run.id, { status: 'cancelled' });
     sessionCardIndex.set(cancelled.session_id, cancelled.card_id);
 
     return reply.status(202).send({ run: cancelled });
