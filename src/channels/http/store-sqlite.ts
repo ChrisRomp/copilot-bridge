@@ -369,7 +369,7 @@ export class SqliteCardStore implements ICardStore {
     if (patch.workspace_subdir !== undefined) { updates.push('workspace_subdir = ?'); values.push(patch.workspace_subdir); }
     if (patch.metadata !== undefined) { updates.push('metadata = ?'); values.push(JSON.stringify(patch.metadata)); }
     if (patch.archived_at !== undefined) { updates.push('archived_at = ?'); values.push(patch.archived_at); }
-    if (patch.status === 'archived') { updates.push('archived_at = ?'); values.push(timestamp); }
+    if (patch.status === 'archived' && patch.archived_at === undefined) { updates.push('archived_at = ?'); values.push(timestamp); }
 
     updates.push('updated_at = ?');
     values.push(timestamp, id);
@@ -443,7 +443,7 @@ export class SqliteCardStore implements ICardStore {
       values.push(patch.error === null ? null : JSON.stringify(patch.error));
     }
     if (patch.finished_at !== undefined) { updates.push('finished_at = ?'); values.push(patch.finished_at); }
-    if (patch.status !== undefined && TERMINAL_RUN_STATUSES.has(patch.status)) {
+    if (patch.status !== undefined && TERMINAL_RUN_STATUSES.has(patch.status) && patch.finished_at === undefined) {
       updates.push('finished_at = ?');
       values.push(nowIso());
     }

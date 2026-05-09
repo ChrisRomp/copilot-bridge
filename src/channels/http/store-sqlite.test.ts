@@ -65,7 +65,9 @@ describe('SqliteCardStore', () => {
     expect(assigned.status).toBe('in_progress');
     expect(await store.getCard('missing')).toBeNull();
     expect(await store.getLabels(unassigned.id)).toEqual(['bug', 'todo']);
-    expect((await store.listCards({ agent_bot: null })).map((card) => card.id)).toEqual(expect.arrayContaining([unassigned.id, other.id]));
+    const unassignedCards = await store.listCards({ agent_bot: null });
+    expect(unassignedCards.map((card) => card.id)).toEqual(expect.arrayContaining([unassigned.id, other.id]));
+    expect(unassignedCards.map((card) => card.id)).not.toContain(assigned.id);
     expect((await store.listCards({ agent_bot: 'bob' })).map((card) => card.id)).toEqual([assigned.id]);
     expect((await store.listCards({ status: 'in_progress' })).map((card) => card.id)).toEqual(expect.arrayContaining([assigned.id]));
     expect((await store.listCards({ type: 'chat' })).map((card) => card.id)).toEqual([assigned.id]);
