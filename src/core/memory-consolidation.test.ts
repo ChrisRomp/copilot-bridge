@@ -63,6 +63,30 @@ describe('memory-consolidation', () => {
       expect(await mergeCompactionSummary(tmpDir, '')).toBe(false);
       expect(await mergeCompactionSummary(tmpDir, '  ')).toBe(false);
     });
+
+    it('waits for lock instead of dropping data', async () => {
+      const { acquireWorkspaceLock } = await import('./workspace-lock.js');
+      const release = await acquireWorkspaceLock(tmpDir);
+
+      // Start merge — it should block, not return false
+      let mergeResolved = false;
+      const mergePromise = mergeCompactionSummary(tmpDir, 'Important data').then((result) => {
+        mergeResolved = true;
+        return result;
+      });
+
+      // Give it time to hit the lock
+      await new Promise(r => setTimeout(r, 20));
+      expect(mergeResolved).toBe(false); // still waiting
+
+      release(); // unlock
+      const result = await mergePromise;
+      expect(result).toBe(true);
+      expect(mergeResolved).toBe(true);
+
+      const content = fs.readFileSync(path.join(tmpDir, 'MEMORY.md'), 'utf-8');
+      expect(content).toContain('Important data');
+    });
   });
 
   describe('runConsolidation', () => {

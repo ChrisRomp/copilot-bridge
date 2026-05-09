@@ -1794,6 +1794,7 @@ export class SessionManager {
           ...(consolidationModel ? { model: consolidationModel } : {}),
           workingDirectory: workspacePath,
           configDir: defaultConfigDir,
+          excludedTools: this.getExcludedTools(),
           onPermissionRequest: async () => ({ kind: 'reject' as const }),
           systemMessage: { content: 'You are a memory file organizer. Respond with ONLY the updated file content, no explanations or code fences.' },
         });

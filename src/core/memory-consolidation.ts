@@ -11,7 +11,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createLogger } from '../logger.js';
-import { tryAcquireWorkspaceLock } from './workspace-lock.js';
+import { acquireWorkspaceLock, tryAcquireWorkspaceLock } from './workspace-lock.js';
 import type { MemoryConfig } from '../types.js';
 
 const log = createLogger('memory');
@@ -40,11 +40,8 @@ export async function mergeCompactionSummary(
     return false;
   }
 
-  const release = tryAcquireWorkspaceLock(workspacePath);
-  if (!release) {
-    log.info(`Workspace locked, skipping compaction merge for ${workspacePath}`);
-    return false;
-  }
+  // Block until lock is available — compaction data is irreplaceable
+  const release = await acquireWorkspaceLock(workspacePath);
 
   try {
     const memoryPath = path.join(workspacePath, MEMORY_FILENAME);
