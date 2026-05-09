@@ -77,6 +77,7 @@ function createStore() {
   const cards = new Map<string, Card>();
   const runs = new Map<string, Run>();
   const comments = new Map<string, CardComment[]>();
+  const labels = new Map<string, Set<string>>();
   let nextCard = 1;
   let nextRun = 1;
   let nextComment = 1;
@@ -108,6 +109,9 @@ function createStore() {
       if (filter.type !== undefined && card.type !== filter.type) {
         return false;
       }
+      if (filter.label !== undefined && !labels.get(card.id)?.has(filter.label)) {
+        return false;
+      }
       return true;
     });
   });
@@ -126,7 +130,23 @@ function createStore() {
     cards.delete(id);
   });
 
-  const addLabels = vi.fn(async (_cardId: string, _labels: string[]): Promise<void> => {});
+  const addLabels = vi.fn(async (cardId: string, cardLabels: string[]): Promise<void> => {
+    const nextLabels = new Set(labels.get(cardId) ?? []);
+    for (const label of cardLabels) {
+      nextLabels.add(label);
+    }
+    labels.set(cardId, nextLabels);
+  });
+
+  const removeLabel = vi.fn(async (cardId: string, label: string): Promise<void> => {
+    const nextLabels = new Set(labels.get(cardId) ?? []);
+    nextLabels.delete(label);
+    labels.set(cardId, nextLabels);
+  });
+
+  const getLabels = vi.fn(async (cardId: string): Promise<string[]> => {
+    return [...(labels.get(cardId) ?? new Set<string>())].sort();
+  });
 
   const updateRun = vi.fn(async (id: string, patch: Partial<Run>): Promise<Run> => {
     const current = runs.get(id);
@@ -174,8 +194,8 @@ function createStore() {
     updateRun,
     listRunsForCard: async (cardId: string) => [...runs.values()].filter((run) => run.card_id === cardId),
     addLabels,
-    removeLabel: async (_cardId: string, _label: string) => {},
-    getLabels: async (_cardId: string) => [],
+    removeLabel,
+    getLabels,
     addComment,
     listComments: async (cardId: string) => comments.get(cardId) ?? [],
     appendTurn: async (turn: NewSessionTurn): Promise<SessionTurn> => ({
@@ -212,6 +232,8 @@ function createStore() {
     updateCard,
     deleteCard,
     addLabels,
+    removeLabel,
+    getLabels,
     createRun,
     updateRun,
     addComment,
@@ -408,6 +430,7 @@ describe('registerCardRoutes', () => {
     const { store, cards, listCards } = createStore();
     cards.set('card-1', createCardRecord({ id: 'card-1', agent_bot: null, status: 'idea', type: 'work' }));
     cards.set('card-2', createCardRecord({ id: 'card-2', agent_bot: 'bob', status: 'in_progress', type: 'work' }));
+    await store.addLabels('card-2', ['backend']);
     registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
     await app.ready();
 
@@ -631,6 +654,98 @@ describe('registerCardRoutes', () => {
     expect(updateRun).toHaveBeenCalledTimes(1);
     expect(updateRun).toHaveBeenCalledWith('run-1', { status: 'cancelled' });
     expect(updateCard).toHaveBeenCalledWith('card-1', { status: 'archived' });
+  });
+
+  it('adds labels to a card and returns the full sorted label list', async () => {
+    const { store, cards, addLabels, getLabels } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1' }));
+    await store.addLabels('card-1', ['ops']);
+    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-1/labels',
+      headers: authHeader,
+      payload: { labels: ['backend', 'api'] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ labels: ['api', 'backend', 'ops'] });
+    expect(addLabels).toHaveBeenCalledWith('card-1', ['backend', 'api']);
+    expect(getLabels).toHaveBeenCalledWith('card-1');
+  });
+
+  it('returns 404 when adding labels to a missing card', async () => {
+    const { store, addLabels, getLabels } = createStore();
+    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/missing/labels',
+      headers: authHeader,
+      payload: { labels: ['backend'] },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'Card not found' });
+    expect(addLabels).not.toHaveBeenCalled();
+    expect(getLabels).not.toHaveBeenCalled();
+  });
+
+  it('rejects adding labels without update permission', async () => {
+    const { store, cards, addLabels, getLabels } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1' }));
+    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/cards/card-1/labels',
+      headers: readOnlyHeader,
+      payload: { labels: ['backend'] },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'Forbidden' });
+    expect(addLabels).not.toHaveBeenCalled();
+    expect(getLabels).not.toHaveBeenCalled();
+  });
+
+  it('removes labels from a card', async () => {
+    const { store, cards, removeLabel } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1' }));
+    await store.addLabels('card-1', ['backend', 'ops']);
+    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/v1/cards/card-1/labels/backend',
+      headers: authHeader,
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.body).toBe('');
+    expect(removeLabel).toHaveBeenCalledWith('card-1', 'backend');
+    await expect(store.getLabels('card-1')).resolves.toEqual(['ops']);
+  });
+
+  it('returns 404 when removing a label from a missing card', async () => {
+    const { store, removeLabel } = createStore();
+    registerCardRoutes(app, { store, adapter: createAdapter(), sseManager: createSseManager() });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/v1/cards/missing/labels/backend',
+      headers: authHeader,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'Card not found' });
+    expect(removeLabel).not.toHaveBeenCalled();
   });
 
   it('rejects archiving without update permission', async () => {

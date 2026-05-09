@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { AcpMessage } from '../acp.js';
 import { canAccessAgent, canPerformOp } from '../auth.js';
 import type { HttpChannelAdapter } from '../index.js';
@@ -15,6 +15,7 @@ export interface CardRouteDeps {
 }
 
 type CardParams = { id: string };
+type CardLabelParams = { id: string; label: string };
 
 type CreateCardBody = {
   title: string;
@@ -41,6 +42,10 @@ type PatchCardBody = {
 
 type CreateCommentBody = {
   content?: string;
+};
+
+type AddLabelsBody = {
+  labels: string[];
 };
 
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
@@ -118,9 +123,9 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
       return reply.status(403).send({ error: 'Forbidden' });
     }
 
-    const card = await deps.store.getCard(request.params.id);
+    const card = await getCardOrReply(deps.store, request.params.id, reply);
     if (!card) {
-      return reply.status(404).send({ error: 'Card not found' });
+      return;
     }
 
     const [runs, comments] = await Promise.all([
@@ -138,9 +143,9 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
     }
 
     const { id } = request.params;
-    const card = await deps.store.getCard(id);
+    const card = await getCardOrReply(deps.store, id, reply);
     if (!card) {
-      return reply.status(404).send({ error: 'Card not found' });
+      return;
     }
     if (card.agent_bot && !canAccessAgent(apiKey, card.agent_bot)) {
       return reply.status(403).send({ error: 'Forbidden' });
@@ -168,9 +173,9 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
       return reply.status(403).send({ error: 'Forbidden' });
     }
 
-    const card = await deps.store.getCard(request.params.id);
+    const card = await getCardOrReply(deps.store, request.params.id, reply);
     if (!card) {
-      return reply.status(404).send({ error: 'Card not found' });
+      return;
     }
 
     const body = request.body ?? {};
@@ -215,9 +220,9 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
     const { content } = request.body ?? {};
     const apiKey = request.apiKey!;
 
-    const card = await deps.store.getCard(id);
+    const card = await getCardOrReply(deps.store, id, reply);
     if (!card) {
-      return reply.status(404).send({ error: 'Card not found' });
+      return;
     }
     if (!card.agent_bot) {
       return reply.status(400).send({ error: 'Card has no assigned agent' });
@@ -259,15 +264,46 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
     return reply.status(201).send({ comment, run_id: run.id });
   });
 
+  app.post<{ Params: CardParams; Body: AddLabelsBody }>('/v1/cards/:id/labels', async (request, reply) => {
+    const card = await getCardOrReply(deps.store, request.params.id, reply);
+    if (!card) {
+      return;
+    }
+
+    const apiKey = request.apiKey!;
+    if (!canPerformOp(apiKey, 'card:update')) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    await deps.store.addLabels(card.id, request.body.labels);
+    const labels = await deps.store.getLabels(card.id);
+    return { labels };
+  });
+
+  app.delete<{ Params: CardLabelParams }>('/v1/cards/:id/labels/:label', async (request, reply) => {
+    const card = await getCardOrReply(deps.store, request.params.id, reply);
+    if (!card) {
+      return;
+    }
+
+    const apiKey = request.apiKey!;
+    if (!canPerformOp(apiKey, 'card:update')) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    await deps.store.removeLabel(card.id, request.params.label);
+    return reply.status(204).send();
+  });
+
   app.post<{ Params: CardParams }>('/v1/cards/:id/archive', async (request, reply) => {
     const apiKey = request.apiKey!;
     if (!canPerformOp(apiKey, 'card:update')) {
       return reply.status(403).send({ error: 'Forbidden' });
     }
 
-    const card = await deps.store.getCard(request.params.id);
+    const card = await getCardOrReply(deps.store, request.params.id, reply);
     if (!card) {
-      return reply.status(404).send({ error: 'Card not found' });
+      return;
     }
 
     await cancelActiveRuns(deps.store, card.id);
@@ -282,9 +318,9 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
       return reply.status(403).send({ error: 'Forbidden' });
     }
 
-    const card = await deps.store.getCard(request.params.id);
+    const card = await getCardOrReply(deps.store, request.params.id, reply);
     if (!card) {
-      return reply.status(404).send({ error: 'Card not found' });
+      return;
     }
 
     await cancelActiveRuns(deps.store, card.id);
@@ -302,6 +338,19 @@ async function cancelActiveRuns(store: ICardStore, cardId: string): Promise<void
       .filter((run) => !TERMINAL_RUN_STATUSES.has(run.status))
       .map((run) => store.updateRun(run.id, { status: 'cancelled' })),
   );
+}
+
+async function getCardOrReply(
+  store: ICardStore,
+  cardId: string,
+  reply: FastifyReply,
+): Promise<Card | null> {
+  const card = await store.getCard(cardId);
+  if (!card) {
+    reply.status(404).send({ error: 'Card not found' });
+    return null;
+  }
+  return card;
 }
 
 function createUserMessage(content: string): AcpMessage[] {
