@@ -44,6 +44,7 @@ More screenshots [here](docs/screenshots.md).
 - **Thread-aware replies** — Reply in threads via 🧵 trigger or per-channel config
 - **Config hot-reload** — `/reload config` applies safe changes without restarting the bridge
 - **Admin onboarding** — Templates and tools for creating channels, managing workspaces
+- **HTTP channel adapter** — REST API with [ACP v0.2.0](https://agentcommunicationprotocol.dev) conformance, card-based work tracking, SSE streaming
 
 ## Quick Start
 
@@ -106,6 +107,7 @@ See the [Setup Guide — Running as a Service](docs/setup.md#running-as-a-servic
 - **[Configuration](docs/configuration.md)** — Platforms, channels, permissions, defaults
 - **[Bring Your Own Key (BYOK)](docs/byok.md)** — Connect external model providers (Ollama, Azure, Anthropic)
 - **[Workspaces & Agents](docs/workspaces.md)** — Workspace system, .env secrets, templates, agent onboarding
+- **[HTTP Channel Adapter](docs/http-channel.md)** — REST API, ACP v0.2.0 conformance, cards, SSE streaming
 - **[Architecture](docs/architecture.md)** — Source layout, message flow, adapter pattern, persistence
 
 ## License
