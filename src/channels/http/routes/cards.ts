@@ -251,7 +251,7 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
       }
 
       const turns = await deps.store.listTurns(card.id);
-      const turnIndex = turns.length > 0 ? Math.max(...turns.map((turn) => turn.turn_index)) : 0;
+      const turnIndex = turns.reduce((maxTurnIndex, turn) => Math.max(maxTurnIndex, turn.turn_index), 0);
       const checkpoint = await deps.store.createCheckpoint({
         card_id: card.id,
         name: request.body?.name,
@@ -276,7 +276,14 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
         return;
       }
 
-      await deps.store.deleteCheckpoint(request.params.checkpointId);
+      const checkpoint = (await deps.store.listCheckpoints(card.id)).find(
+        (item) => item.id === request.params.checkpointId,
+      );
+      if (!checkpoint || checkpoint.card_id !== card.id) {
+        return reply.status(404).send({ error: 'Checkpoint not found' });
+      }
+
+      await deps.store.deleteCheckpoint(checkpoint.id);
       return reply.status(204).send();
     },
   );

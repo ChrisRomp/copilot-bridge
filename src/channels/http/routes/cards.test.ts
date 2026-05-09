@@ -861,6 +861,26 @@ describe('registerCardRoutes', () => {
     expect(checkpoints.get('card-1')).toEqual([]);
   });
 
+  it('returns 404 when deleting a checkpoint from another card', async () => {
+    const { store, cards, checkpoints, deleteCheckpoint } = createStore();
+    cards.set('card-1', createCardRecord({ id: 'card-1' }));
+    cards.set('card-2', createCardRecord({ id: 'card-2' }));
+    checkpoints.set('card-2', [createCheckpointRecord({ id: 'checkpoint-2', card_id: 'card-2' })]);
+    registerCardRoutes(app, createRouteDeps(store));
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/v1/cards/card-1/checkpoints/checkpoint-2',
+      headers: authHeader,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'Checkpoint not found' });
+    expect(deleteCheckpoint).not.toHaveBeenCalled();
+    expect(checkpoints.get('card-2')).toEqual([createCheckpointRecord({ id: 'checkpoint-2', card_id: 'card-2' })]);
+  });
+
   it('returns 404 when deleting a checkpoint for a missing card', async () => {
     const { store, deleteCheckpoint } = createStore();
     registerCardRoutes(app, createRouteDeps(store));
