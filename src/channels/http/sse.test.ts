@@ -81,6 +81,19 @@ describe('SseManager', () => {
     unsubscribe();
   });
 
+  it('stops delivering events after unsubscribe', () => {
+    const manager = new SseManager();
+    const listener = vi.fn();
+
+    const unsubscribe = manager.subscribeCard('card-1', listener);
+    manager.emit('card-1', 'run-1', { event: 'run.in-progress', data: { step: 1 } });
+    expect(listener).toHaveBeenCalledOnce();
+
+    unsubscribe();
+    manager.emit('card-1', 'run-1', { event: 'run.completed', data: { step: 2 } });
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
   it('sends heartbeat events to active listeners', async () => {
     vi.useFakeTimers();
     const manager = new SseManager();

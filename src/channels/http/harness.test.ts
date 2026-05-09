@@ -177,6 +177,40 @@ describe('CopilotHarnessAdapter', () => {
     await expect(adapter.handleSdkEvent(cardId, runId, { type: 'session.error' })).resolves.toBeNull();
   });
 
+  it('increments turn_index monotonically across events, skipping deltas', async () => {
+    await adapter.handleSdkEvent(cardId, runId, {
+      type: 'user.message',
+      data: { content: 'Start' },
+    });
+    await adapter.handleSdkEvent(cardId, runId, {
+      type: 'assistant.message_delta',
+      data: { delta: 'thinking...' },
+    });
+    await adapter.handleSdkEvent(cardId, runId, {
+      type: 'assistant.message',
+      data: { content: 'Done thinking' },
+    });
+    await adapter.handleSdkEvent(cardId, runId, {
+      type: 'tool.execution_start',
+      data: { toolCallId: 'tc-1', toolName: 'bash', arguments: { cmd: 'ls' } },
+    });
+    await adapter.handleSdkEvent(cardId, runId, {
+      type: 'tool.execution_complete',
+      data: { toolCallId: 'tc-1', result: { stdout: 'file.txt' } },
+    });
+    await adapter.handleSdkEvent(cardId, runId, {
+      type: 'user.message',
+      data: { content: 'Continue' },
+    });
+
+    expect(appendTurn).toHaveBeenCalledTimes(5);
+    const turnIndices = appendTurn.mock.calls.map(([turn]) => turn.turn_index);
+    expect(turnIndices).toEqual([0, 1, 2, 3, 4]);
+
+    const roles = appendTurn.mock.calls.map(([turn]) => turn.role);
+    expect(roles).toEqual(['user', 'assistant', 'tool_call', 'tool_result', 'user']);
+  });
+
   it('cleans up pending tool calls on finalize', async () => {
     await adapter.handleSdkEvent(cardId, runId, {
       type: 'tool.execution_start',
