@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerAuthHook } from '../auth.js';
 import { registerAcpRoutes } from './acp.js';
 import type { HttpChannelAdapter } from '../index.js';
+import { SseManager } from '../sse.js';
 import type {
   Card,
   CardComment,
@@ -179,6 +180,35 @@ function createAdapter() {
   } as unknown as HttpChannelAdapter;
 }
 
+function createSseManager() {
+  return {
+    subscribeRun: vi.fn(() => () => {}),
+  } as Pick<SseManager, 'subscribeRun'>;
+}
+
+async function openSseStream(
+  url: string,
+  headers: Record<string, string>,
+): Promise<{ response: Response; readChunk: () => Promise<string>; close: () => Promise<void> }> {
+  const response = await fetch(url, { headers });
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error('Expected SSE response body');
+  }
+
+  return {
+    response,
+    readChunk: async () => {
+      const { done, value } = await reader.read();
+      expect(done).toBe(false);
+      return new TextDecoder().decode(value);
+    },
+    close: async () => {
+      await reader.cancel();
+    },
+  };
+}
+
 describe('registerAcpRoutes', () => {
   let app: FastifyInstance;
 
@@ -206,9 +236,11 @@ describe('registerAcpRoutes', () => {
 
   it('lists only agents the api key can access', async () => {
     const { store } = createStore();
+    const sseManager = createSseManager();
     registerAcpRoutes(app, {
       store,
       adapter: createAdapter(),
+      sseManager,
       bots: {
         bob: { token: 'x', agent: 'bob-agent' },
         lal: { token: 'y', agent: 'lal-agent' },
@@ -235,9 +267,11 @@ describe('registerAcpRoutes', () => {
 
   it('gets a single agent manifest and enforces access', async () => {
     const { store } = createStore();
+    const sseManager = createSseManager();
     registerAcpRoutes(app, {
       store,
       adapter: createAdapter(),
+      sseManager,
       bots: {
         bob: { token: 'x', agent: 'bob-agent' },
         lal: { token: 'y', agent: 'lal-agent' },
@@ -273,9 +307,11 @@ describe('registerAcpRoutes', () => {
   it('creates a run, creates a card, and dispatches an inbound message', async () => {
     const { store, createCard, createRun, runs } = createStore();
     const adapter = createAdapter();
+    const sseManager = createSseManager();
     registerAcpRoutes(app, {
       store,
       adapter,
+      sseManager,
       bots: { bob: { token: 'x', agent: 'bob-agent' } },
     });
     await app.ready();
@@ -312,9 +348,11 @@ describe('registerAcpRoutes', () => {
   it('rejects run creation when input has no text parts', async () => {
     const { store, createCard, createRun } = createStore();
     const adapter = createAdapter();
+    const sseManager = createSseManager();
     registerAcpRoutes(app, {
       store,
       adapter,
+      sseManager,
       bots: { bob: { token: 'x', agent: 'bob-agent' } },
     });
     await app.ready();
@@ -340,9 +378,11 @@ describe('registerAcpRoutes', () => {
   it('forbids creating a run for an inaccessible agent', async () => {
     const { store, createCard, createRun } = createStore();
     const adapter = createAdapter();
+    const sseManager = createSseManager();
     registerAcpRoutes(app, {
       store,
       adapter,
+      sseManager,
       bots: {
         bob: { token: 'x', agent: 'bob-agent' },
         lal: { token: 'y', agent: 'lal-agent' },
@@ -370,9 +410,11 @@ describe('registerAcpRoutes', () => {
 
   it('reuses the same card for subsequent runs in the same session', async () => {
     const { store, createCard } = createStore();
+    const sseManager = createSseManager();
     registerAcpRoutes(app, {
       store,
       adapter: createAdapter(),
+      sseManager,
       bots: { bob: { token: 'x' } },
     });
     await app.ready();
@@ -409,9 +451,11 @@ describe('registerAcpRoutes', () => {
   it('returns runs by id and 404s for unknown ids', async () => {
     const { store, runs } = createStore();
     runs.set('run-99', createRunRecord({ id: 'run-99', status: 'completed' }));
+    const sseManager = createSseManager();
     registerAcpRoutes(app, {
       store,
       adapter: createAdapter(),
+      sseManager,
       bots: { bob: { token: 'x' } },
     });
     await app.ready();
@@ -436,11 +480,13 @@ describe('registerAcpRoutes', () => {
   it('resumes awaiting runs and rejects non-awaiting runs', async () => {
     const { store, runs } = createStore();
     const adapter = createAdapter();
+    const sseManager = createSseManager();
     runs.set('run-awaiting', createRunRecord({ id: 'run-awaiting', status: 'awaiting' }));
     runs.set('run-complete', createRunRecord({ id: 'run-complete', status: 'completed' }));
     registerAcpRoutes(app, {
       store,
       adapter,
+      sseManager,
       bots: { bob: { token: 'x' } },
     });
     await app.ready();
@@ -478,9 +524,11 @@ describe('registerAcpRoutes', () => {
   it('cancels a run and returns 202', async () => {
     const { store, runs, updateRun } = createStore();
     runs.set('run-cancel', createRunRecord({ id: 'run-cancel', status: 'in-progress' }));
+    const sseManager = createSseManager();
     registerAcpRoutes(app, {
       store,
       adapter: createAdapter(),
+      sseManager,
       bots: { bob: { token: 'x' } },
     });
     await app.ready();
@@ -499,9 +547,11 @@ describe('registerAcpRoutes', () => {
 
   it('returns session history for runs created in a session', async () => {
     const { store } = createStore();
+    const sseManager = createSseManager();
     registerAcpRoutes(app, {
       store,
       adapter: createAdapter(),
+      sseManager,
       bots: { bob: { token: 'x' } },
     });
     await app.ready();
@@ -534,11 +584,66 @@ describe('registerAcpRoutes', () => {
     });
   });
 
-  it('rejects unsupported run modes', async () => {
+  it('returns 404 for unknown run event streams', async () => {
     const { store } = createStore();
+    const sseManager = createSseManager();
     registerAcpRoutes(app, {
       store,
       adapter: createAdapter(),
+      sseManager,
+      bots: { bob: { token: 'x' } },
+    });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/runs/missing/events',
+      headers: authHeader,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'Run not found' });
+    expect(sseManager.subscribeRun).not.toHaveBeenCalled();
+  });
+
+  it('streams run events over SSE', async () => {
+    const { store, runs } = createStore();
+    const sseManager = new SseManager();
+    runs.set('run-stream', createRunRecord({ id: 'run-stream', agent_name: 'bob' }));
+    registerAcpRoutes(app, {
+      store,
+      adapter: createAdapter(),
+      sseManager,
+      bots: { bob: { token: 'x' } },
+    });
+    await app.listen({ host: '127.0.0.1', port: 0 });
+
+    const address = app.server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Expected TCP server address');
+    }
+
+    const stream = await openSseStream(`http://127.0.0.1:${address.port}/v1/runs/run-stream/events`, authHeader);
+    sseManager.emit('card-1', 'run-stream', { event: 'run.in-progress', data: { status: 'in-progress' } });
+
+    expect(stream.response.status).toBe(200);
+    expect(stream.response.headers.get('content-type')).toContain('text/event-stream');
+    expect(stream.response.headers.get('cache-control')).toBe('no-cache');
+    expect(stream.response.headers.get('connection')).toBe('keep-alive');
+    await expect(stream.readChunk()).resolves.toBe(
+      'id: 1\nevent: run.in-progress\ndata: {"status":"in-progress"}\n\n',
+    );
+
+    await stream.close();
+  });
+
+  it('rejects unsupported run modes', async () => {
+    const { store } = createStore();
+    const sseManager = createSseManager();
+    registerAcpRoutes(app, {
+      store,
+      adapter: createAdapter(),
+      sseManager,
       bots: { bob: { token: 'x' } },
     });
     await app.ready();

@@ -3,12 +3,15 @@ import type { FastifyInstance } from 'fastify';
 import type { AcpMessage } from '../acp.js';
 import { canAccessAgent, canPerformOp } from '../auth.js';
 import type { HttpChannelAdapter } from '../index.js';
+import type { SseManager } from '../sse.js';
+import { openSseStream, serializeSseEvent } from '../sse.js';
 import type { Card, CardFilter, ICardStore, NewCard } from '../store.js';
 import type { InboundMessage } from '../../../types.js';
 
 export interface CardRouteDeps {
   store: ICardStore;
   adapter: HttpChannelAdapter;
+  sseManager: Pick<SseManager, 'subscribeCard'>;
 }
 
 type CardParams = { id: string };
@@ -126,6 +129,37 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
     ]);
 
     return { card, runs, comments };
+  });
+
+  app.get<{ Params: CardParams }>('/v1/cards/:id/events', async (request, reply) => {
+    const apiKey = request.apiKey!;
+    if (!canPerformOp(apiKey, 'card:read')) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    const { id } = request.params;
+    const card = await deps.store.getCard(id);
+    if (!card) {
+      return reply.status(404).send({ error: 'Card not found' });
+    }
+    if (card.agent_bot && !canAccessAgent(apiKey, card.agent_bot)) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    const lastEventId = request.headers['last-event-id'];
+    openSseStream(reply);
+
+    const unsubscribe = deps.sseManager.subscribeCard(
+      id,
+      (event) => {
+        reply.raw.write(serializeSseEvent(event));
+      },
+      typeof lastEventId === 'string' ? lastEventId : undefined,
+    );
+
+    request.raw.once('close', () => {
+      unsubscribe();
+    });
   });
 
   app.patch<{ Params: CardParams; Body: PatchCardBody }>('/v1/cards/:id', async (request, reply) => {

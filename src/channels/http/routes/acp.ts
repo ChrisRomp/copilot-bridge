@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import type { AgentManifest, CreateRunRequest, ResumeRunRequest, AcpMessage, AcpSession } from '../acp.js';
 import { canAccessAgent, canPerformOp, type ResolvedApiKey } from '../auth.js';
 import type { HttpChannelAdapter } from '../index.js';
+import type { SseManager } from '../sse.js';
+import { openSseStream, serializeSseEvent } from '../sse.js';
 import type { ICardStore, Run } from '../store.js';
 import type { BotConfig, InboundMessage } from '../../../types.js';
 
@@ -14,6 +16,7 @@ export interface AcpRouteDeps {
   store: ICardStore;
   adapter: HttpChannelAdapter;
   bots: Record<string, AcpBotConfig>;
+  sseManager: Pick<SseManager, 'subscribeRun'>;
 }
 
 type TextLikePart = Extract<AcpMessage['parts'][number], { type: 'text' }>;
@@ -135,6 +138,30 @@ export function registerAcpRoutes(app: FastifyInstance, deps: AcpRouteDeps): voi
 
     sessionCardIndex.set(run.session_id, run.card_id);
     return { run };
+  });
+
+  app.get<{ Params: RunParams }>('/v1/runs/:id/events', async (request, reply) => {
+    if (!hasOpAccess(request.apiKey, ['run:read', 'card:read'])) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    const { id } = request.params;
+    const run = await deps.store.getRun(id);
+    if (!run) {
+      return reply.status(404).send({ error: 'Run not found' });
+    }
+    if (!canAccessAgent(request.apiKey!, run.agent_name)) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    openSseStream(reply);
+    const unsubscribe = deps.sseManager.subscribeRun(id, (event) => {
+      reply.raw.write(serializeSseEvent(event));
+    });
+
+    request.raw.once('close', () => {
+      unsubscribe();
+    });
   });
 
   app.post<{ Params: RunParams; Body: ResumeRunRequest }>('/v1/runs/:id', async (request, reply) => {
