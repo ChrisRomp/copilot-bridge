@@ -945,3 +945,83 @@ describe('logging config validation', () => {
     expect2(result.restartNeeded.some((r: string) => r.includes('logging'))).toBe(true);
   });
 });
+
+d2('memory config validation', () => {
+  let tmpDir: string;
+  let configFile: string;
+
+  beforeEach(() => {
+    _resetConfigForTest();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'config-memory-test-'));
+    configFile = path.join(tmpDir, 'config.json');
+  });
+
+  afterEach(() => {
+    _resetConfigForTest();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it2('accepts valid memory config', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({
+      memory: { tier: 0, cloudMemory: false, consolidation: { model: 'claude-sonnet-4.6', idleMinutes: 5 } },
+    })));
+    const config = loadConfig(configFile);
+    expect2(config.memory).toEqual({
+      tier: 0, cloudMemory: false, consolidation: { model: 'claude-sonnet-4.6', idleMinutes: 5 },
+    });
+  });
+
+  it2('accepts empty memory config', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ memory: {} })));
+    const config = loadConfig(configFile);
+    expect2(config.memory).toEqual({});
+  });
+
+  it2('defaults memory to undefined when not present', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig()));
+    const config = loadConfig(configFile);
+    expect2(config.memory).toBeUndefined();
+  });
+
+  it2('rejects invalid tier value', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ memory: { tier: 5 } })));
+    expect2(() => loadConfig(configFile)).toThrow('memory.tier must be 0, 1, or 2');
+  });
+
+  it2('rejects non-boolean cloudMemory', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ memory: { cloudMemory: 'yes' } })));
+    expect2(() => loadConfig(configFile)).toThrow('memory.cloudMemory must be a boolean');
+  });
+
+  it2('rejects non-object consolidation', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ memory: { consolidation: 'fast' } })));
+    expect2(() => loadConfig(configFile)).toThrow('memory.consolidation must be an object');
+  });
+
+  it2('rejects null consolidation', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ memory: { consolidation: null } })));
+    expect2(() => loadConfig(configFile)).toThrow('memory.consolidation must be an object');
+  });
+
+  it2('rejects non-string consolidation.model', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ memory: { consolidation: { model: 42 } } })));
+    expect2(() => loadConfig(configFile)).toThrow('memory.consolidation.model must be a string');
+  });
+
+  it2('rejects negative idleMinutes', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ memory: { consolidation: { idleMinutes: -1 } } })));
+    expect2(() => loadConfig(configFile)).toThrow('memory.consolidation.idleMinutes must be a non-negative number');
+  });
+
+  it2('detects memory config changes on reload', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig()));
+    loadConfig(configFile);
+
+    const updated = makeConfig({ memory: { tier: 1, cloudMemory: true } });
+    fs.writeFileSync(configFile, JSON.stringify(updated));
+
+    const result = reloadConfig();
+    expect2(result.success).toBe(true);
+    expect2(result.changes.some((c: string) => c.includes('memory'))).toBe(true);
+  });
+});

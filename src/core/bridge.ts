@@ -76,6 +76,7 @@ export class CopilotBridge {
     mcpServers?: Record<string, MCPServerConfig>;
     skillDirectories?: string[];
     disabledSkills?: string[];
+    excludedTools?: string[];
     onPermissionRequest: PermissionHandler;
     onUserInputRequest?: UserInputHandler;
     systemMessage?: SystemMessageConfig;
@@ -97,6 +98,7 @@ export class CopilotBridge {
       mcpServers: opts.mcpServers,
       skillDirectories: opts.skillDirectories,
       disabledSkills: opts.disabledSkills,
+      excludedTools: opts.excludedTools,
       onPermissionRequest: opts.onPermissionRequest,
       onUserInputRequest: opts.onUserInputRequest,
       streaming: true,
@@ -127,6 +129,7 @@ export class CopilotBridge {
       mcpServers?: Record<string, MCPServerConfig>;
       skillDirectories?: string[];
       disabledSkills?: string[];
+      excludedTools?: string[];
       tools?: Tool[];
       hooks?: SessionHooks;
       infiniteSessions?: boolean;
@@ -152,6 +155,7 @@ export class CopilotBridge {
       mcpServers: opts?.mcpServers,
       skillDirectories: opts?.skillDirectories,
       disabledSkills: opts?.disabledSkills,
+      excludedTools: opts?.excludedTools,
       tools: opts?.tools,
       hooks: opts?.hooks,
       ...(opts?.infiniteSessions ? { infiniteSessions: { enabled: true } } : { infiniteSessions: { enabled: false } }),

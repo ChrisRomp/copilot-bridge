@@ -2029,7 +2029,13 @@ async function handleSessionEvent(
     const d = event.data ?? {};
     log.info(`[${channelId}] Context compaction complete: success=${d.success}, tokens removed=${d.tokensRemoved ?? '?'}, messages removed=${d.messagesRemoved ?? '?'}, checkpoint=#${d.checkpointNumber ?? '?'}`);
     if (d.preCompactionTokens != null || d.postCompactionTokens != null) {
-      log.debug(`[${channelId}] Compaction detail: ${d.preCompactionTokens} → ${d.postCompactionTokens} tokens`);
+      log.debug(`[${channelId}] Compaction detail: ${d.preCompactionTokens} -> ${d.postCompactionTokens} tokens`);
+    }
+    // Merge compaction summary into MEMORY.md (best-effort, non-blocking)
+    if (d.summaryContent) {
+      sessionManager.handleCompactionSave(channelId, d.summaryContent).catch((err: any) => {
+        log.warn(`[${channelId}] Compaction memory save failed:`, err);
+      });
     }
   }
 
@@ -2487,6 +2493,11 @@ async function handleSessionEvent(
         }
         // Clean up temp files from downloaded attachments
         void cleanupTempFiles(channelId).catch((err) => { log.debug('cleanupTempFiles failed:', err); });
+
+        // Schedule idle memory consolidation
+        sessionManager.scheduleMemoryConsolidation(channelId).catch((err) => {
+          log.debug(`scheduleMemoryConsolidation failed for ${channelId.slice(0, 8)}...:`, err);
+        });
       }
       break;
   }

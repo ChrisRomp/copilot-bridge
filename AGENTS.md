@@ -126,6 +126,17 @@ Use `createLogger(tag)` from `src/logger.ts`. Tags identify the subsystem (e.g.,
 
 Pluggable state store via the `StateStore` interface (`src/state/types.ts`). The built-in default is `SqliteStateStore` (`src/state/sqlite-store.ts`), which uses SQLite at `~/.copilot-bridge/state.db` in WAL mode. `src/state/store.ts` is a thin facade that delegates to the active backend — all callers import from `store.ts` unchanged. Custom backends (Postgres, etc.) can be loaded via the `database.module` config option.
 
+### Memory System
+
+Persistent agent memory via `MEMORY.md` in workspace roots. Configured under `memory` in config.json.
+
+- **System message injection:** `buildMemoryPointer()` in `session-manager.ts` injects a `<memory>` block with MEMORY.md section headlines and read/write instructions.
+- **Cloud memory gating:** `store_memory`/`vote_memory` are excluded via `excludedTools` by default. Set `memory.cloudMemory: true` to enable.
+- **Compaction save:** On `session.compaction_complete`, `mergeCompactionSummary()` appends summaryContent to MEMORY.md with a backup (`.memory/MEMORY.md.bak`).
+- **Idle consolidation:** After `memory.consolidation.idleMinutes` (default 5) of idle, an ephemeral session prunes/organizes MEMORY.md. Timer resets on new activity.
+- **Write lock:** Per-workspace async mutex (`src/core/workspace-lock.ts`) prevents concurrent MEMORY.md corruption. Background ops use `tryAcquire` and yield on contention.
+- **Key files:** `src/core/memory-consolidation.ts` (compaction save, idle consolidation), `src/core/workspace-lock.ts` (mutex).
+
 ### Filing Issues
 
 Use the repo's YAML issue templates (`.github/ISSUE_TEMPLATE/`) when creating issues via `gh issue create`. Two templates exist:
