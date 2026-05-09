@@ -31,4 +31,21 @@ describe('createHttpServer', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ status: 'ok' });
   });
+
+  it('runs setup before the server starts listening', async () => {
+    app = await createHttpServer(
+      { bind: '127.0.0.1', port: 0 },
+      async (server) => {
+        server.get('/ready', async () => ({ ok: true }));
+      },
+    );
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/ready',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true });
+  });
 });

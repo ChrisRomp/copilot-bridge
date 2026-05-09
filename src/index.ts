@@ -1,4 +1,4 @@
-import { loadConfig, getConfig, isConfiguredChannel, registerDynamicChannel, markChannelAsDM, getChannelConfig, getPlatformBots, getPlatformAccess, getChannelBotName, isBotAdmin, getHardcodedRules, getConfigRules, reloadConfig, ConfigWatcher } from './config.js';
+import { loadConfig, getConfig, getHttpApiKeySecret, isConfiguredChannel, registerDynamicChannel, markChannelAsDM, getChannelConfig, getPlatformBots, getPlatformAccess, getChannelBotName, isBotAdmin, getHardcodedRules, getConfigRules, reloadConfig, ConfigWatcher } from './config.js';
 import { CopilotBridge } from './core/bridge.js';
 import { SessionManager, BRIDGE_CUSTOM_TOOLS, parseEnvFile } from './core/session-manager.js';
 import { handleCommand, parseCommand } from './core/command-handler.js';
@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import os from 'node:os';
-import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig, DatabaseConfig } from './types.js';
+import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig, DatabaseConfig, HttpPlatformConfig } from './types.js';
 
 const log = createLogger('bridge');
 
@@ -485,6 +485,7 @@ async function main(): Promise<void> {
 
   // Initialize channel adapters — one per bot identity
   for (const [platformName, platformConfig] of Object.entries(config.platforms)) {
+    if (platformName === 'http') continue;
     const bots = getPlatformBots(platformName);
     for (const [botName, botInfo] of bots) {
       const key = `${platformName}:${botName}`;
@@ -522,6 +523,76 @@ async function main(): Promise<void> {
     }
   }
 
+  let httpSseManager: { stop(): void } | null = null;
+  const httpPlatform = config.platforms.http as HttpPlatformConfig | undefined;
+  if (httpPlatform?.enabled) {
+    const [
+      { HttpChannelAdapter },
+      { createHttpServer },
+      { SqliteCardStore },
+      { CopilotHarnessAdapter },
+      { registerAuthHook },
+      { registerAcpRoutes },
+      { registerCardRoutes },
+      { SseManager },
+      { buildHttpAuthConfig, buildHttpRouteBots },
+    ] = await Promise.all([
+      import('./channels/http/index.js'),
+      import('./channels/http/server.js'),
+      import('./channels/http/store-sqlite.js'),
+      import('./channels/http/harness.js'),
+      import('./channels/http/auth.js'),
+      import('./channels/http/routes/acp.js'),
+      import('./channels/http/routes/cards.js'),
+      import('./channels/http/sse.js'),
+      import('./channels/http/startup.js'),
+    ]);
+
+    const bind = httpPlatform.bind ?? '127.0.0.1';
+    const port = httpPlatform.port ?? 7878;
+    const httpStore = new SqliteCardStore();
+    await httpStore.initialize();
+
+    const httpHarness = new CopilotHarnessAdapter(httpStore);
+    const createdHttpSseManager = new SseManager(httpPlatform.eventBuffer?.maxEventsPerCard);
+    createdHttpSseManager.start();
+    httpSseManager = createdHttpSseManager;
+
+    const httpBots = buildHttpRouteBots(httpPlatform);
+    const authConfig = buildHttpAuthConfig(httpPlatform, getHttpApiKeySecret);
+    let httpAdapter: ChannelAdapter | null = null;
+    await createHttpServer({ bind, port }, async (server) => {
+      const createdHttpAdapter = new HttpChannelAdapter(server, httpStore, httpHarness);
+      httpAdapter = createdHttpAdapter;
+      registerAuthHook(server, authConfig);
+      registerAcpRoutes(server, {
+        store: httpStore,
+        adapter: createdHttpAdapter,
+        bots: httpBots,
+        sseManager: createdHttpSseManager,
+      });
+      registerCardRoutes(server, {
+        store: httpStore,
+        adapter: createdHttpAdapter,
+        sseManager: createdHttpSseManager,
+      });
+    });
+
+    if (!httpAdapter) {
+      throw new Error('Failed to initialize HTTP channel adapter');
+    }
+
+    const httpStreaming = new StreamingHandler(httpAdapter, 0);
+    for (const [botName] of getPlatformBots('http')) {
+      const key = `http:${botName}`;
+      botAdapters.set(key, httpAdapter);
+      botStreamers.set(key, httpStreaming);
+      log.info(`Registered bot "${botName}" for http`);
+    }
+
+    log.info(`HTTP channel configured on ${bind}:${port}`);
+  }
+
   // Resolve non-UID Slack access entries at startup
   await resolveSlackAccessUsers(config);
 
@@ -552,6 +623,7 @@ async function main(): Promise<void> {
   });
 
   // Connect all bot adapters and wire up handlers
+  const connectedAdapters = new Set<ChannelAdapter>();
   for (const [key, adapter] of botAdapters) {
     const streaming = botStreamers.get(key)!;
     const colonIdx = key.indexOf(':');
@@ -589,8 +661,17 @@ async function main(): Promise<void> {
     });
     adapter.onReaction((reaction) => handleReaction(reaction, sessionManager, platformName, botName));
 
+    if (connectedAdapters.has(adapter)) {
+      continue;
+    }
+
     await adapter.connect();
-    log.info(`${key} connected`);
+    connectedAdapters.add(adapter);
+    if (platformName === 'http') {
+      log.info('HTTP channel started');
+    } else {
+      log.info(`${key} connected`);
+    }
 
     // Discover existing DM channels and auto-register any that aren't configured
     if (typeof adapter.discoverDMChannels === 'function') {
@@ -687,13 +768,14 @@ async function main(): Promise<void> {
   const shutdown = async () => {
     log.info('Shutting down...');
     stopScheduler();
+    httpSseManager?.stop();
     configWatcher.stop();
     workspaceWatcher.stop();
     await sessionManager.shutdown();
-    for (const [, adapter] of botAdapters) {
+    for (const adapter of new Set(botAdapters.values())) {
       await adapter.disconnect();
     }
-    for (const [, streaming] of botStreamers) {
+    for (const streaming of new Set(botStreamers.values())) {
       await streaming.cleanup();
     }
     await bridge.stop();
