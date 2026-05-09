@@ -70,7 +70,7 @@ describe('http startup helpers', () => {
   it('builds ACP bot metadata from configured http bots', () => {
     const bots = buildHttpRouteBots(createHttpConfig());
 
-    expect(bots).toEqual({
+    expect(bots).toStrictEqual({
       bob: {
         token: 'token-1',
         agent: 'bob-agent',

@@ -27,31 +27,57 @@ function createMockStore() {
     content: comment.content,
     created_at: '2026-05-09T00:00:00Z',
   }));
+  const createCard = vi.fn(async (_card: NewCard): Promise<Card> => { throw new Error('not implemented'); });
+  const updateCard = vi.fn(async (_id: string, _patch: Partial<Card>): Promise<Card> => { throw new Error('not implemented'); });
+  const deleteCard = vi.fn(async (_id: string) => {});
+  const createRun = vi.fn(async (_run: NewRun): Promise<Run> => { throw new Error('not implemented'); });
+  const updateRun = vi.fn(async (_id: string, _patch: Partial<Run>): Promise<Run> => { throw new Error('not implemented'); });
+  const addLabels = vi.fn(async (_cardId: string, _labels: string[]) => {});
+  const removeLabel = vi.fn(async (_cardId: string, _label: string) => {});
+  const appendTurn = vi.fn(async (_turn: NewSessionTurn): Promise<SessionTurn> => { throw new Error('not implemented'); });
+  const createCheckpoint = vi.fn(async (_checkpoint: NewCheckpoint): Promise<Checkpoint> => { throw new Error('not implemented'); });
+  const deleteCheckpoint = vi.fn(async (_id: string) => {});
 
   const store: ICardStore = {
     initialize: async () => {},
-    createCard: async (_card: NewCard): Promise<Card> => { throw new Error('not implemented'); },
+    createCard,
     getCard: async () => null,
     listCards: async (_filter: CardFilter) => [],
-    updateCard: async (_id: string, _patch: Partial<Card>): Promise<Card> => { throw new Error('not implemented'); },
-    deleteCard: async (_id: string) => {},
-    createRun: async (_run: NewRun): Promise<Run> => { throw new Error('not implemented'); },
+    updateCard,
+    deleteCard,
+    createRun,
     getRun: async () => null,
-    updateRun: async (_id: string, _patch: Partial<Run>): Promise<Run> => { throw new Error('not implemented'); },
+    updateRun,
     listRunsForCard: async (_cardId: string) => [],
-    addLabels: async (_cardId: string, _labels: string[]) => {},
-    removeLabel: async (_cardId: string, _label: string) => {},
+    addLabels,
+    removeLabel,
     getLabels: async (_cardId: string) => [],
     addComment,
     listComments: async (_cardId: string) => [],
-    appendTurn: async (_turn: NewSessionTurn): Promise<SessionTurn> => { throw new Error('not implemented'); },
+    appendTurn,
     listTurns: async (_cardId: string, _upToIndex?: number) => [],
-    createCheckpoint: async (_checkpoint: NewCheckpoint): Promise<Checkpoint> => { throw new Error('not implemented'); },
+    createCheckpoint,
     listCheckpoints: async (_cardId: string) => [],
-    deleteCheckpoint: async (_id: string) => {},
+    deleteCheckpoint,
   };
 
-  return { store, addComment };
+  return {
+    store,
+    addComment,
+    writeMethods: {
+      createCard,
+      updateCard,
+      deleteCard,
+      createRun,
+      updateRun,
+      addLabels,
+      removeLabel,
+      addComment,
+      appendTurn,
+      createCheckpoint,
+      deleteCheckpoint,
+    },
+  };
 }
 
 function createMockHarness(): AgentHarnessAdapter {
@@ -202,12 +228,16 @@ describe('HttpChannelAdapter', () => {
 
   it('treats updateMessage, deleteMessage, and setTyping as no-ops', async () => {
     const { server } = createMockServer();
-    const { store } = createMockStore();
+    const { store, writeMethods } = createMockStore();
     const adapter = new HttpChannelAdapter(server, store, createMockHarness());
 
     await expect(adapter.updateMessage('card-1', 'comment-1', 'updated')).resolves.toBeUndefined();
     await expect(adapter.deleteMessage('card-1', 'comment-1')).resolves.toBeUndefined();
     await expect(adapter.setTyping('card-1')).resolves.toBeUndefined();
+
+    for (const method of Object.values(writeMethods)) {
+      expect(method).not.toHaveBeenCalled();
+    }
   });
 
   it('throws for unimplemented file operations', async () => {

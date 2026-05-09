@@ -28,7 +28,7 @@ describe('http ACP wire types', () => {
     expect(Object.keys(acpModule)).toEqual([]);
   });
 
-  it('exports importable, structurally correct types', () => {
+  it('types compile and are structurally valid', () => {
     const manifest: AgentManifest = {
       name: 'bob',
       description: 'HttpChannelAdapter agent',
@@ -123,12 +123,15 @@ describe('http ACP wire types', () => {
       history: [{ run_id: run.id, status: run.status }],
     };
 
-    expect(Object.keys(manifest)).toContain('name');
-    expect(message.parts).toHaveLength(3);
-    expect(run.error).toMatchObject({ code: error.code });
-    expect(createRunRequest.mode).toBe('stream');
-    expect(resumeRunRequest.await_resume[0]?.parts[0]).toMatchObject({ type: 'text' });
-    expect(event.event).toBe('run.completed');
-    expect(session.history).toEqual([{ run_id: 'run-1', status: 'completed' }]);
+    // This module intentionally exports types only. These values are compile-time
+    // sentinels that fail if the wire contracts drift, so no runtime assertions
+    // are needed here.
+    void manifest;
+    void message;
+    void error;
+    void createRunRequest;
+    void resumeRunRequest;
+    void event;
+    void session;
   });
 });

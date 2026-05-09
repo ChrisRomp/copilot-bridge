@@ -15,7 +15,6 @@ describe('createHttpServer', () => {
   it('returns a Fastify instance', async () => {
     app = await createHttpServer({ bind: '127.0.0.1', port: 0 });
 
-    expect(app).toBeDefined();
     expect(typeof app.inject).toBe('function');
     expect(app.server.listening).toBe(true);
   });
