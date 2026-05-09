@@ -65,4 +65,21 @@ describe('workspace-lock', () => {
   it('isWorkspaceLocked returns false for unknown workspace', () => {
     expect(isWorkspaceLocked('/tmp/unknown')).toBe(false);
   });
+
+  it('double-release is a no-op and does not corrupt other holders', async () => {
+    const releaseA = await acquireWorkspaceLock('/tmp/ws-dbl');
+    releaseA();
+    expect(isWorkspaceLocked('/tmp/ws-dbl')).toBe(false);
+
+    // Acquire a new lock
+    const releaseB = await acquireWorkspaceLock('/tmp/ws-dbl');
+    expect(isWorkspaceLocked('/tmp/ws-dbl')).toBe(true);
+
+    // Double-release A should be a no-op, not delete B's lock
+    releaseA();
+    expect(isWorkspaceLocked('/tmp/ws-dbl')).toBe(true);
+
+    releaseB();
+    expect(isWorkspaceLocked('/tmp/ws-dbl')).toBe(false);
+  });
 });

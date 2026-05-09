@@ -133,6 +133,23 @@ describe('memory-consolidation', () => {
       const backup = fs.readFileSync(path.join(tmpDir, '.memory', 'MEMORY.md.bak'), 'utf-8');
       expect(backup).toBe(original);
     });
+
+    it('skips write when MEMORY.md was modified during consolidation', async () => {
+      const original = '# Memory\n\n## Facts\n- Original data here with enough content to pass the minimum length threshold for consolidation.';
+      const memoryPath = path.join(tmpDir, 'MEMORY.md');
+      fs.writeFileSync(memoryPath, original);
+
+      const result = await runConsolidation(tmpDir, async () => {
+        // Simulate agent modifying MEMORY.md while consolidation is running
+        fs.writeFileSync(memoryPath, original + '\n- Agent added this during consolidation\n');
+        return '# Memory\n\n## Facts\n- Stale consolidated content\n';
+      });
+
+      expect(result).toBe(false);
+      // File should retain the agent's modification, not the stale consolidation
+      const content = fs.readFileSync(memoryPath, 'utf-8');
+      expect(content).toContain('Agent added this during consolidation');
+    });
   });
 
   describe('scheduleIdleConsolidation', () => {

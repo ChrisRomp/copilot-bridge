@@ -29,9 +29,12 @@ export async function acquireWorkspaceLock(workspacePath: string): Promise<() =>
     await locks.get(workspacePath);
   }
 
+  let released = false;
   let release!: () => void;
   const promise = new Promise<void>((resolve) => {
     release = () => {
+      if (released) return;
+      released = true;
       locks.delete(workspacePath);
       log.debug(`Lock released: ${workspacePath}`);
       resolve();
@@ -54,9 +57,12 @@ export function tryAcquireWorkspaceLock(workspacePath: string): (() => void) | n
     return null;
   }
 
+  let released = false;
   let release!: () => void;
   const promise = new Promise<void>((resolve) => {
     release = () => {
+      if (released) return;
+      released = true;
       locks.delete(workspacePath);
       log.debug(`Lock released: ${workspacePath}`);
       resolve();

@@ -165,6 +165,9 @@ export async function runConsolidation(
     // Re-read after acquiring lock (may have changed)
     currentContent = fs.readFileSync(memoryPath, 'utf-8');
 
+    // Snapshot mtime before consolidation to detect concurrent agent writes
+    const mtimeBefore = fs.statSync(memoryPath).mtimeMs;
+
     // Create backup
     await createBackup(workspacePath, currentContent);
 
@@ -173,6 +176,18 @@ export async function runConsolidation(
 
     if (!consolidated?.trim()) {
       log.warn(`Consolidation returned empty content for ${workspacePath}, keeping original`);
+      return false;
+    }
+
+    // Check if file was modified during consolidation (agent wrote while LLM was running)
+    try {
+      const mtimeAfter = fs.statSync(memoryPath).mtimeMs;
+      if (mtimeAfter !== mtimeBefore) {
+        log.info(`MEMORY.md modified during consolidation for ${workspacePath}, skipping write to avoid data loss`);
+        return false;
+      }
+    } catch {
+      // File deleted during consolidation — skip write
       return false;
     }
 
