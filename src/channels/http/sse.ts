@@ -72,6 +72,9 @@ export class SseManager {
 
     clearInterval(this.heartbeatInterval);
     this.heartbeatInterval = null;
+    this.cardBuffers.clear();
+    this.cardListeners.clear();
+    this.runListeners.clear();
     log.debug('Stopped SSE heartbeat interval');
   }
 
@@ -136,6 +139,10 @@ export class SseManager {
     existing.delete(listener);
     if (existing.size === 0) {
       listeners.delete(id);
+      // Prune the event buffer when the last card listener disconnects
+      if (listeners === this.cardListeners) {
+        this.cardBuffers.delete(id);
+      }
     }
   }
 

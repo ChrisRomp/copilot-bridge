@@ -50,7 +50,6 @@ export class CopilotHarnessAdapter implements AgentHarnessAdapter {
   private readonly turnCounters = new Map<string, number>();
   private readonly pendingToolCalls = new Map<string, PendingToolCall>();
   private readonly runMessages = new Map<string, AcpMessage[]>();
-  private readonly eventCounters = new Map<string, number>();
 
   constructor(private readonly store: ICardStore) {}
 
@@ -80,7 +79,6 @@ export class CopilotHarnessAdapter implements AgentHarnessAdapter {
   async finalizeRun(cardId: string, runId: string): Promise<AcpMessage[]> {
     const messages = this.runMessages.get(runId) ?? [];
     this.runMessages.delete(runId);
-    this.eventCounters.delete(runId);
 
     for (const [toolCallId, pending] of this.pendingToolCalls.entries()) {
       if (pending.cardId === cardId && pending.runId === runId) {
@@ -200,16 +198,9 @@ export class CopilotHarnessAdapter implements AgentHarnessAdapter {
 
   private createSseEvent(runId: string, event: SseEvent['event'], data: unknown): SseEvent {
     return {
-      id: this.nextEventId(runId),
       event,
       data,
     };
-  }
-
-  private nextEventId(runId: string): string {
-    const current = this.eventCounters.get(runId) ?? 0;
-    this.eventCounters.set(runId, current + 1);
-    return `${runId}:${current}`;
   }
 
   private nextTurnIndex(cardId: string): number {

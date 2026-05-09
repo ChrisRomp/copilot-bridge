@@ -58,7 +58,6 @@ type CreateCheckpointBody = {
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
 export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): void {
-  void deps.adapter;
 
   app.post<{ Body: CreateCardBody }>('/v1/cards', async (request, reply) => {
     const apiKey = request.apiKey!;
@@ -281,6 +280,10 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
       );
       if (!checkpoint || checkpoint.card_id !== card.id) {
         return reply.status(404).send({ error: 'Checkpoint not found' });
+      }
+
+      if (checkpoint.created_by !== apiKey.keyId) {
+        return reply.status(403).send({ error: 'Only the checkpoint creator can delete it' });
       }
 
       await deps.store.deleteCheckpoint(checkpoint.id);

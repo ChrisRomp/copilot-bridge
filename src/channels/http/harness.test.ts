@@ -80,7 +80,6 @@ describe('CopilotHarnessAdapter', () => {
     ]);
 
     expect(userEvent).toMatchObject({
-      id: 'run-1:0',
       event: 'message.created',
       data: {
         role: 'user',
@@ -89,7 +88,6 @@ describe('CopilotHarnessAdapter', () => {
     });
 
     expect(toolStartEvent).toMatchObject({
-      id: 'run-1:1',
       event: 'message.part',
       data: {
         type: 'trajectory',
@@ -103,7 +101,6 @@ describe('CopilotHarnessAdapter', () => {
     });
 
     expect(toolCompleteEvent).toMatchObject({
-      id: 'run-1:2',
       event: 'message.part',
       data: {
         type: 'trajectory',
@@ -118,7 +115,6 @@ describe('CopilotHarnessAdapter', () => {
     });
 
     expect(assistantEvent).toMatchObject({
-      id: 'run-1:3',
       event: 'message.completed',
       data: {
         role: 'assistant',
@@ -165,7 +161,6 @@ describe('CopilotHarnessAdapter', () => {
     });
 
     expect(deltaEvent).toEqual({
-      id: 'run-1:0',
       event: 'message.part',
       data: { delta: 'partial' },
     });
