@@ -10,6 +10,12 @@ const copilotModels: ModelInfo[] = [
   { id: 'claude-opus-4.6', name: 'Claude Opus 4.6', billing: { multiplier: 2 }, supportedReasoningEfforts: ['low', 'medium', 'high'] },
 ];
 
+const copilotModelsTokenBilling: ModelInfo[] = [
+  { id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6', billing: { token_prices: { batch_size: 1000000, cache_price: 30000000000, input_price: 300000000000, output_price: 1500000000000 } } },
+  { id: 'gpt-5.4', name: 'GPT-5.4', billing: { token_prices: { batch_size: 1000000, cache_price: 17500000000, input_price: 175000000000, output_price: 1400000000000 }, restricted_to: ['pro', 'pro_plus'] } },
+  { id: 'claude-opus-4.6', name: 'Claude Opus 4.6', billing: { token_prices: { batch_size: 1000000, cache_price: 50000000000, input_price: 500000000000, output_price: 2500000000000 } }, supportedReasoningEfforts: ['low', 'medium', 'high'] },
+];
+
 const byokModels: ModelInfo[] = [
   { id: 'ollama-local:qwen3:8b', name: 'Qwen 3 8B' },
   { id: 'ollama-local:qwen3:14b', name: 'Qwen 3 14B' },
@@ -145,7 +151,7 @@ describe('/model command listing', () => {
 
   it('shows current model indicator for Copilot model', async () => {
     const result = await handleCommand(channelId, '/model', sessionInfo, prefs, meta, allModels, undefined, null, providers);
-    expect(result.response).toContain('← current');
+    expect(result.response).toContain('<- current');
   });
 
   it('filters by provider name', async () => {
@@ -157,17 +163,19 @@ describe('/model command listing', () => {
 
   it('hides Billing column for BYOK provider sections', async () => {
     const result = await handleCommand(channelId, '/model', sessionInfo, prefs, meta, allModels, undefined, null, providers);
-    // Copilot section should have Billing in table header
+    // Copilot section should have Billing-related columns
     const sections = result.response!.split('**ollama-local**');
-    expect(sections[0]).toContain('| Model | Billing |');
-    // BYOK section table header should NOT have Billing
+    expect(sections[0]).toMatch(/\| Model \| (Billing|Input) \|/);
+    // BYOK section table header should NOT have Billing/pricing
     const byokTable = sections[1].split('🧠')[0]; // before the legend
     expect(byokTable).not.toContain('Billing');
+    expect(byokTable).not.toContain('Input');
   });
 
   it('hides Billing column when filtering to BYOK provider', async () => {
     const result = await handleCommand(channelId, '/model ollama-local', sessionInfo, prefs, meta, allModels, undefined, null, providers);
     expect(result.response).not.toContain('Billing');
+    expect(result.response).not.toContain('Input');
   });
 
   it('shows no-provider listing without providers', async () => {
@@ -175,6 +183,40 @@ describe('/model command listing', () => {
     expect(result.handled).toBe(true);
     expect(result.response).not.toContain('GitHub Copilot'); // no grouping without providers
     expect(result.response).toContain('claude-sonnet-4.6');
+  });
+
+  it('shows token-based pricing columns when API returns token_prices', async () => {
+    const result = await handleCommand(channelId, '/model', sessionInfo, prefs, meta, copilotModelsTokenBilling);
+    // Should have Input/Cached input/Output column headers
+    expect(result.response).toContain('| Input |');
+    expect(result.response).toContain('| Cached input |');
+    expect(result.response).toContain('| Output |');
+    // Verify actual prices match GitHub docs
+    expect(result.response).toContain('$3.00');    // sonnet input
+    expect(result.response).toContain('$0.30');    // sonnet cached (sub-dollar precision)
+    expect(result.response).toContain('$15.00');   // sonnet output
+    expect(result.response).toContain('$1.75');    // gpt-5.4 input
+    expect(result.response).toContain('$0.175');   // gpt-5.4 cached (3 decimal places)
+    expect(result.response).toContain('$/M tokens');
+    // Anthropic note and docs link (claude models present)
+    expect(result.response).toContain('cache write');
+    expect(result.response).toContain('models-and-pricing');
+  });
+
+  it('shows multiplier billing when API returns multiplier', async () => {
+    const result = await handleCommand(channelId, '/model', sessionInfo, prefs, meta, copilotModels);
+    expect(result.response).toContain('1x');
+    expect(result.response).toContain('2x');
+    expect(result.response).toContain('premium request multiplier');
+  });
+
+  it('hides Anthropic cache write note when no Claude models present', async () => {
+    const openaiOnly: ModelInfo[] = [
+      { id: 'gpt-5.4', name: 'GPT-5.4', billing: { token_prices: { batch_size: 1000000, cache_price: 17500000000, input_price: 175000000000, output_price: 1400000000000 } } },
+    ];
+    const result = await handleCommand(channelId, '/model', sessionInfo, prefs, meta, openaiOnly);
+    expect(result.response).not.toContain('cache write');
+    expect(result.response).toContain('models-and-pricing'); // docs link still present
   });
 });
 
