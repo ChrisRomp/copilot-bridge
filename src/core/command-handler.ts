@@ -192,6 +192,7 @@ async function formatModelListing(models: ModelInfo[], providerNames: string[], 
   const AI_CREDIT_SCALE = 1e5;
 
   const formatPrice = (price: number, batchSize: number): string => {
+    if (!Number.isFinite(price) || !batchSize) return '--';
     const perMillion = price / batchSize / AI_CREDIT_SCALE;
     if (perMillion < 0.01) return `$${perMillion.toPrecision(2)}`;
     if (perMillion < 1) {
