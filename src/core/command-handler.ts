@@ -33,7 +33,11 @@ async function isStreamerMode(): Promise<boolean> {
 export interface ModelInfo {
   id: string;
   name: string;
-  billing?: { multiplier: number };
+  billing?: {
+    multiplier?: number;
+    token_prices?: { batch_size: number; input_price: number; output_price: number; cache_price?: number };
+    restricted_to?: string[];
+  };
   supportedReasoningEfforts?: string[];
   defaultReasoningEffort?: string;
 }
@@ -182,19 +186,55 @@ async function formatModelListing(models: ModelInfo[], providerNames: string[], 
     return m.id === currentModel;
   };
 
-  const formatRow = (m: ModelInfo, showBilling: boolean): string => {
-    const current = isCurrent(m) ? ' ← current' : '';
+  // API prices are in AI credit sub-units per batch_size tokens.
+  // 1 AI credit = $0.01; dividing by 1e5 converts to dollars per 1M tokens.
+  // See https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing
+  const AI_CREDIT_SCALE = 1e5;
+
+  const formatPrice = (price: number, batchSize: number): string => {
+    if (!Number.isFinite(price) || !batchSize) return '--';
+    const perMillion = price / batchSize / AI_CREDIT_SCALE;
+    if (perMillion < 0.01) return `$${perMillion.toPrecision(2)}`;
+    if (perMillion < 1) {
+      // Show enough precision: $0.30, $0.175, $0.025
+      const threeDecimals = perMillion.toFixed(3);
+      return threeDecimals.endsWith('0') ? `$${perMillion.toFixed(2)}` : `$${threeDecimals}`;
+    }
+    return `$${perMillion.toFixed(2)}`;
+  };
+
+  // Detect billing format from all Copilot models
+  const copilotModelsList = models.filter(m => !providerNames.some(p => m.id.startsWith(`${p}:`)));
+  const useTokenPricing = copilotModelsList.some(m => m.billing?.token_prices !== undefined);
+  const useMultiplier = !useTokenPricing && copilotModelsList.some(m => m.billing?.multiplier !== undefined);
+
+  const formatRow = (m: ModelInfo, billingMode: 'none' | 'multiplier' | 'tokens'): string => {
+    const current = isCurrent(m) ? ' <- current' : '';
     const reasoning = m.supportedReasoningEfforts?.length ? ' 🧠' : '';
     const hidden = streamer && isHiddenModel(m);
     const displayName = hidden ? redactedModelLabel(++hiddenIndex) : `\`${m.id}\``;
-    if (showBilling) {
-      const billing = m.billing ? `${m.billing.multiplier}x` : '—';
+    if (billingMode === 'tokens' && m.billing?.token_prices) {
+      const tp = m.billing.token_prices;
+      const input = formatPrice(tp.input_price, tp.batch_size);
+      const cached = tp.cache_price !== undefined ? formatPrice(tp.cache_price, tp.batch_size) : '--';
+      const output = formatPrice(tp.output_price, tp.batch_size);
+      return `| ${displayName} | ${input} | ${cached} | ${output} |${reasoning}${current} |`;
+    }
+    if (billingMode === 'tokens') {
+      // token pricing mode but this model has no token_prices
+      return `| ${displayName} | -- | -- | -- |${reasoning}${current} |`;
+    }
+    if (billingMode === 'multiplier') {
+      const billing = m.billing?.multiplier !== undefined ? `${m.billing.multiplier}x` : '--';
       return `| ${displayName} | ${billing} |${reasoning}${current} |`;
     }
     return `| ${displayName} |${reasoning}${current} |`;
   };
 
-  const copilotHeader = '| Model | Billing | |\n|:------|--------:|:--|';
+  const billingMode = useTokenPricing ? 'tokens' as const : useMultiplier ? 'multiplier' as const : 'none' as const;
+  const copilotHeader = useTokenPricing
+    ? '| Model | Input | Cached input | Output | |\n|:------|------:|-------------:|-------:|:--|'
+    : '| Model | Billing | |\n|:------|--------:|:--|';
   const byokHeader = '| Model | |\n|:------|:--|';
 
   const title = filterProvider ? `**Models: ${filterProvider}**` : '**Available Models**';
@@ -202,37 +242,51 @@ async function formatModelListing(models: ModelInfo[], providerNames: string[], 
 
   if (providerNames.length > 0 && !filterProvider) {
     // Group by provider: Copilot first, then each BYOK provider
-    const copilotModels = models.filter(m => !providerNames.some(p => m.id.startsWith(`${p}:`)));
+    const copilotModels = copilotModelsList;
     if (copilotModels.length > 0) {
       lines.push('**GitHub Copilot**', '', copilotHeader);
-      for (const m of copilotModels) lines.push(formatRow(m, true));
+      for (const m of copilotModels) lines.push(formatRow(m, billingMode));
       lines.push('');
     }
     for (const prov of providerNames) {
       const provModels = models.filter(m => m.id.startsWith(`${prov}:`));
       if (provModels.length > 0) {
         lines.push(`**${prov}**`, '', byokHeader);
-        for (const m of provModels) lines.push(formatRow(m, false));
+        for (const m of provModels) lines.push(formatRow(m, 'none'));
         lines.push('');
       }
     }
   } else if (filterProvider) {
-    // Filtered to single BYOK provider — no billing column
+    // Filtered to single BYOK provider -- no billing column
     lines.push(byokHeader);
-    for (const m of models) lines.push(formatRow(m, false));
+    for (const m of models) lines.push(formatRow(m, 'none'));
     lines.push('');
   } else {
     // Flat listing (no providers configured)
     lines.push(copilotHeader);
-    for (const m of models) lines.push(formatRow(m, true));
+    for (const m of models) lines.push(formatRow(m, billingMode));
     lines.push('');
   }
 
-  const hasCopilotModels = !filterProvider && models.some(m => !providerNames.some(p => m.id.startsWith(`${p}:`)));
-  const legend = hasCopilotModels
-    ? '🧠 = supports reasoning effort · Billing = premium request multiplier'
-    : '🧠 = supports reasoning effort';
-  lines.push(legend);
+  const hasCopilotModels = !filterProvider && copilotModelsList.length > 0;
+  let legend = '🧠 = supports reasoning effort';
+  if (hasCopilotModels) {
+    if (useTokenPricing) {
+      legend += ' -- prices are $/M tokens';
+      lines.push(legend);
+      if (copilotModelsList.some(m => m.id.startsWith('claude-'))) {
+        lines.push('Anthropic models also incur cache write costs not shown above.');
+      }
+      lines.push('[Full pricing details](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing)');
+    } else if (useMultiplier) {
+      legend += ' -- Billing = premium request multiplier';
+      lines.push(legend);
+    } else {
+      lines.push(legend);
+    }
+  } else {
+    lines.push(legend);
+  }
   lines.push('↳ Use `/model <name>` to switch');
   if (providerNames.length > 0 && !filterProvider) {
     const shown = providerNames.slice(0, 3).join(', ');
