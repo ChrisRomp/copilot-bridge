@@ -11,7 +11,6 @@ const log = createLogger('config');
 const VALID_ACCESS_MODES = ['allowlist', 'blocklist', 'open'];
 const DEFAULT_HTTP_BIND = '127.0.0.1';
 const DEFAULT_HTTP_PORT = 7878;
-const DEFAULT_HTTP_MAX_EVENTS_PER_CARD = 1000;
 
 // Runtime-only store for resolved HTTP API key secrets (never written back to config.json)
 const _resolvedHttpApiKeys = new Map<string, string>();
@@ -108,22 +107,6 @@ function validateAndNormalize(raw: any): AppConfig {
         }
         p.bind = p.bind ?? DEFAULT_HTTP_BIND;
         p.port = p.port ?? DEFAULT_HTTP_PORT;
-
-        if (p.eventBuffer !== undefined) {
-          if (p.eventBuffer === null || typeof p.eventBuffer !== 'object' || Array.isArray(p.eventBuffer)) {
-            throw new Error('Platform "http" eventBuffer must be an object');
-          }
-          if (p.eventBuffer.maxEventsPerCard !== undefined
-            && (typeof p.eventBuffer.maxEventsPerCard !== 'number'
-              || !Number.isInteger(p.eventBuffer.maxEventsPerCard)
-              || p.eventBuffer.maxEventsPerCard <= 0)) {
-            throw new Error('Platform "http" eventBuffer.maxEventsPerCard must be a positive integer');
-          }
-        }
-        p.eventBuffer = {
-          ...(p.eventBuffer ?? {}),
-          maxEventsPerCard: p.eventBuffer?.maxEventsPerCard ?? DEFAULT_HTTP_MAX_EVENTS_PER_CARD,
-        };
 
         for (const [apiKeyName, apiKey] of Object.entries(p.apiKeys)) {
           const keyConfig = apiKey as any;

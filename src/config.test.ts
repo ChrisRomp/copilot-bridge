@@ -546,7 +546,6 @@ describe('reloadConfig', () => {
     expect(http.enabled).toBe(true);
     expect(http.bind).toBe('127.0.0.1');
     expect(http.port).toBe(7878);
-    expect(http.eventBuffer.maxEventsPerCard).toBe(1000);
     expect(http.apiKeys.test.secret).toBe('env:HTTP_API_KEY_TEST');
     expect(getHttpApiKeySecret('test')).toBe('resolved-http-secret');
   });

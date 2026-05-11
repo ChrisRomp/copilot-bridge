@@ -20,55 +20,12 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig, DatabaseConfig, HttpPlatformConfig } from './types.js';
-import { routeHttpSessionEvent, type HttpEventRouteDeps } from './channels/http/event-routing.js';
-import type { ICardStore } from './channels/http/store.js';
-import type { SseManager } from './channels/http/sse.js';
 import { CallbackRegistry } from './channels/http/callback-registry.js';
 import { CallbackDelivery } from './channels/http/callback-delivery.js';
 import { registerExecuteRoutes } from './channels/http/routes/execute.js';
+import { registerAgentRoutes } from './channels/http/routes/agents.js';
 
 const log = createLogger('bridge');
-
-export function registerHttpSessionToolHandlers(
-  sessionManager: Pick<SessionManager, 'registerCustomToolHandler'>,
-  cardStore: Pick<ICardStore, 'createCard' | 'addLabels' | 'updateCard'>,
-  sseManager: Pick<SseManager, 'emit'>,
-): void {
-  sessionManager.registerCustomToolHandler('update_card_status', async (channelId, args) => {
-    const cardId = channelId;
-    const { status } = args as { status: string };
-    await cardStore.updateCard(cardId, { status });
-    sseManager.emit(cardId, '', { event: 'card.status', data: { card_id: cardId, status } });
-    return { success: true, status };
-  });
-
-  sessionManager.registerCustomToolHandler('create_card', async (_channelId, args) => {
-    const { title, description, agent, labels, metadata } = args as {
-      title?: string;
-      description?: string;
-      agent?: string;
-      labels?: string[];
-      metadata?: Record<string, unknown>;
-    };
-
-    if (!title?.trim()) {
-      throw new Error('title is required');
-    }
-
-    const card = await cardStore.createCard({
-      title,
-      description,
-      agent_bot: agent,
-      status: 'open',
-      created_by: 'agent',
-      metadata,
-    });
-    if (labels?.length) {
-      await cardStore.addLabels(card.id, labels);
-    }
-    return { card_id: card.id, status: card.status };
-  });
-}
 
 // Active streaming responses, keyed by channelId
 const activeStreams = new Map<string, string>(); // channelId → streamKey
@@ -570,89 +527,35 @@ async function main(): Promise<void> {
     }
   }
 
-  let httpSseManager: { stop(): void } | null = null;
-  let httpEventRouteDeps: HttpEventRouteDeps | null = null;
   let callbackDelivery: CallbackDelivery | null = null;
   const httpPlatform = config.platforms.http as HttpPlatformConfig | undefined;
   if (httpPlatform?.enabled) {
     const [
       { HttpChannelAdapter },
       { createHttpServer },
-      { SqliteCardStore },
-      { CopilotHarnessAdapter },
       { registerAuthHook },
-      { registerAcpRoutes },
-      { registerCardRoutes },
-      { registerChatRoutes },
-      { SseManager },
       { buildHttpAuthConfig, buildHttpRouteBots },
     ] = await Promise.all([
       import('./channels/http/index.js'),
       import('./channels/http/server.js'),
-      import('./channels/http/store-sqlite.js'),
-      import('./channels/http/harness.js'),
       import('./channels/http/auth.js'),
-      import('./channels/http/routes/acp.js'),
-      import('./channels/http/routes/cards.js'),
-      import('./channels/http/routes/chat.js'),
-      import('./channels/http/sse.js'),
       import('./channels/http/startup.js'),
     ]);
 
     const bind = httpPlatform.bind ?? '127.0.0.1';
     const port = httpPlatform.port ?? 7878;
-    const httpStore = new SqliteCardStore();
-    await httpStore.initialize();
 
-    const httpHarness = new CopilotHarnessAdapter(httpStore);
-    const createdHttpSseManager = new SseManager(httpPlatform.eventBuffer?.maxEventsPerCard);
-    createdHttpSseManager.start();
-    httpSseManager = createdHttpSseManager;
-    httpEventRouteDeps = {
-      store: httpStore,
-      harness: httpHarness,
-      sseManager: createdHttpSseManager,
-    };
     const callbackRegistry = new CallbackRegistry();
     callbackDelivery = new CallbackDelivery(callbackRegistry);
-    registerHttpSessionToolHandlers(sessionManager, httpStore, createdHttpSseManager);
 
     const httpBots = buildHttpRouteBots(httpPlatform);
     const authConfig = buildHttpAuthConfig(httpPlatform, getHttpApiKeySecret);
     let httpAdapter: ChannelAdapter | null = null;
     await createHttpServer({ bind, port }, async (server) => {
-      const createdHttpAdapter = new HttpChannelAdapter(server, httpStore, httpHarness);
+      const createdHttpAdapter = new HttpChannelAdapter(server);
       httpAdapter = createdHttpAdapter;
       registerAuthHook(server, authConfig);
-      registerAcpRoutes(server, {
-        store: httpStore,
-        adapter: createdHttpAdapter,
-        bots: httpBots,
-        sseManager: createdHttpSseManager,
-      });
-      registerCardRoutes(server, {
-        store: httpStore,
-        adapter: createdHttpAdapter,
-        sseManager: createdHttpSseManager,
-        sessionManager,
-        registerChannel: async (cardId, agentBot) => {
-          if (await isConfiguredChannel(cardId)) return;
-          const workspacePath = await getWorkspacePath(agentBot);
-          await initWorkspace(agentBot);
-          registerDynamicChannel({
-            id: cardId,
-            platform: 'http',
-            bot: agentBot,
-            name: `Card ${cardId.slice(0, 8)}...`,
-            workingDirectory: workspacePath,
-            triggerMode: 'all',
-            threadedReplies: false,
-            verbose: false,
-            isDM: false,
-          });
-          log.info(`Registered card channel ${cardId.slice(0, 8)}... for bot "${agentBot}"`);
-        },
-      });
+      registerAgentRoutes(server, { bots: httpBots });
       registerExecuteRoutes(server, {
         adapter: createdHttpAdapter,
         callbackRegistry,
@@ -673,10 +576,6 @@ async function main(): Promise<void> {
           });
           log.info(`Registered execute channel ${channelId.slice(0, 8)}... for bot "${bot}"`);
         },
-      });
-      registerChatRoutes(server, {
-        store: httpStore,
-        adapter: createdHttpAdapter,
       });
     });
 
@@ -702,7 +601,7 @@ async function main(): Promise<void> {
   sessionManager.onSessionEvent((sessionId, channelId, event) => {
     const prev = eventLocks.get(channelId) ?? Promise.resolve();
     const next = prev.then(() =>
-      handleSessionEvent(sessionId, channelId, event, sessionManager, httpEventRouteDeps, callbackDelivery)
+      handleSessionEvent(sessionId, channelId, event, sessionManager, callbackDelivery)
         .catch(err => log.error(`Unhandled error in event handler:`, err))
     );
     eventLocks.set(channelId, next);
@@ -868,7 +767,6 @@ async function main(): Promise<void> {
   const shutdown = async () => {
     log.info('Shutting down...');
     stopScheduler();
-    httpSseManager?.stop();
     configWatcher.stop();
     workspaceWatcher.stop();
     await sessionManager.shutdown();
@@ -2192,7 +2090,6 @@ async function handleSessionEvent(
   channelId: string,
   event: any,
   sessionManager: SessionManager,
-  httpEventRouteDeps: HttpEventRouteDeps | null,
   callbackDelivery: CallbackDelivery | null,
 ): Promise<void> {
   // Reset loop detector when the session changes (e.g., model fallback creates new session)
@@ -2259,9 +2156,6 @@ async function handleSessionEvent(
   if (channelConfig.platform === 'http') {
     if (callbackDelivery && await callbackDelivery.handleEvent(channelId, event)) {
       return;
-    }
-    if (httpEventRouteDeps) {
-      await routeHttpSessionEvent(channelId, event, httpEventRouteDeps);
     }
     return;
   }
