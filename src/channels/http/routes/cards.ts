@@ -57,6 +57,17 @@ type CreateCheckpointBody = {
 
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
+type CardWithLabels = Card & { labels: string[] };
+
+async function withLabels(store: ICardStore, card: Card): Promise<CardWithLabels> {
+  const labels = await store.getLabels(card.id);
+  return { ...card, labels };
+}
+
+async function withLabelsMany(store: ICardStore, cards: Card[]): Promise<CardWithLabels[]> {
+  return Promise.all(cards.map((card) => withLabels(store, card)));
+}
+
 export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): void {
 
   app.post<{ Body: CreateCardBody }>('/v1/cards', async (request, reply) => {
@@ -92,7 +103,7 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
       await deps.store.addLabels(card.id, body.labels);
     }
 
-    return reply.status(201).send({ card });
+    return reply.status(201).send({ card: await withLabels(deps.store, card) });
   });
 
   app.get<{ Querystring: ListCardsQuery }>('/v1/cards', async (request, reply) => {
@@ -120,7 +131,7 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
     }
 
     const cards = await deps.store.listCards(filter);
-    return { cards };
+    return { cards: await withLabelsMany(deps.store, cards) };
   });
 
   app.get<{ Params: CardParams }>('/v1/cards/:id', async (request, reply) => {
@@ -139,7 +150,7 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
       deps.store.listComments(card.id),
     ]);
 
-    return { card, runs, comments };
+    return { card: await withLabels(deps.store, card), runs, comments };
   });
 
   app.get<{ Params: CardParams }>('/v1/cards/:id/events', async (request, reply) => {
@@ -218,7 +229,7 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
     }
 
     const updated = await deps.store.updateCard(card.id, patch);
-    return { card: updated };
+    return { card: await withLabels(deps.store, updated) };
   });
 
   app.get<{ Params: CardParams }>('/v1/cards/:id/checkpoints', async (request, reply) => {
@@ -401,7 +412,8 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
     }
 
     const updatedCard = await deps.store.getCard(id);
-    return { card: updatedCard ?? card };
+    const resultCard = updatedCard ?? card;
+    return { card: await withLabels(deps.store, resultCard) };
   });
 
   app.post<{ Params: CardParams }>('/v1/cards/:id/archive', async (request, reply) => {
@@ -418,7 +430,7 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
     await cancelActiveRuns(deps.store, card.id);
     const updated = await deps.store.updateCard(card.id, { status: 'archived' });
 
-    return { card: updated };
+    return { card: await withLabels(deps.store, updated) };
   });
 
   app.delete<{ Params: CardParams }>('/v1/cards/:id', async (request, reply) => {

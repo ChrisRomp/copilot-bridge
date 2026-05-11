@@ -520,7 +520,7 @@ describe('registerCardRoutes', () => {
       headers: authHeader,
     });
     expect(noneResponse.statusCode).toBe(200);
-    expect(noneResponse.json()).toEqual({ cards: [cards.get('card-1')] });
+    expect(noneResponse.json()).toEqual({ cards: [{ ...cards.get('card-1'), labels: [] }] });
     expect(listCards).toHaveBeenLastCalledWith({ agent_bot: null });
 
     const filteredResponse = await app.inject({
@@ -529,7 +529,7 @@ describe('registerCardRoutes', () => {
       headers: authHeader,
     });
     expect(filteredResponse.statusCode).toBe(200);
-    expect(filteredResponse.json()).toEqual({ cards: [cards.get('card-2')] });
+    expect(filteredResponse.json()).toEqual({ cards: [{ ...cards.get('card-2'), labels: ['backend'] }] });
     expect(listCards).toHaveBeenLastCalledWith({
       agent_bot: 'bob',
       status: 'in_progress',
@@ -553,7 +553,7 @@ describe('registerCardRoutes', () => {
     });
     expect(ok.statusCode).toBe(200);
     expect(ok.json()).toEqual({
-      card: cards.get('card-1'),
+      card: { ...cards.get('card-1'), labels: [] },
       runs: [runs.get('run-1')],
       comments: comments.get('card-1'),
     });
