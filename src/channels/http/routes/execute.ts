@@ -24,7 +24,7 @@ export function registerExecuteRoutes(
 ): void {
   app.post<{ Body: ExecuteBody }>('/v1/agent/execute', async (request, reply) => {
     const apiKey = request.apiKey!;
-    const { bot, prompt, channel_id, callback_url, session_id } = request.body;
+    const { bot, prompt, channel_id, callback_url, session_id } = request.body ?? {} as Partial<ExecuteBody>;
 
     if (!bot || !prompt || !channel_id || !callback_url) {
       return reply.status(400).send({ error: 'Missing required fields: bot, prompt, channel_id, callback_url' });
