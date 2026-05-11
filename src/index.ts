@@ -629,6 +629,23 @@ async function main(): Promise<void> {
         adapter: createdHttpAdapter,
         sseManager: createdHttpSseManager,
         sessionManager,
+        registerChannel: async (cardId, agentBot) => {
+          if (await isConfiguredChannel(cardId)) return;
+          const workspacePath = await getWorkspacePath(agentBot);
+          await initWorkspace(agentBot);
+          registerDynamicChannel({
+            id: cardId,
+            platform: 'http',
+            bot: agentBot,
+            name: `Card ${cardId.slice(0, 8)}...`,
+            workingDirectory: workspacePath,
+            triggerMode: 'all',
+            threadedReplies: false,
+            verbose: false,
+            isDM: false,
+          });
+          log.info(`Registered card channel ${cardId.slice(0, 8)}... for bot "${agentBot}"`);
+        },
       });
       registerChatRoutes(server, {
         store: httpStore,

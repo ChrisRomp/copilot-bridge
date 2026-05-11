@@ -14,6 +14,7 @@ export interface CardRouteDeps {
   adapter: HttpChannelAdapter;
   sseManager: Pick<SseManager, 'subscribeCard'>;
   sessionManager: Pick<SessionManager, 'abortSession'>;
+  registerChannel?: (cardId: string, agentBot: string) => Promise<void>;
 }
 
 type CardParams = { id: string };
@@ -106,6 +107,10 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
     // When an agent is assigned, auto-dispatch the description (or title) as
     // the first message so the agent session starts immediately.
     if (card.agent_bot) {
+      if (deps.registerChannel) {
+        await deps.registerChannel(card.id, card.agent_bot);
+      }
+
       const prompt = card.description || card.title;
       const input = createUserMessage(prompt);
       const comment = await deps.store.addComment({
@@ -123,7 +128,7 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
       });
 
       dispatchCardComment(deps.adapter, {
-        channelId: card.channel_id ?? card.id,
+        channelId: card.id,
         userId: apiKey.keyId,
         username: apiKey.keyId,
         text: prompt,
