@@ -33,7 +33,7 @@ import type {
 const log = createLogger('session');
 
 /** Custom tools auto-approved without interactive prompt (read-only or enforce workspace boundaries internally). */
-export const BRIDGE_CUSTOM_TOOLS = ['send_file', 'show_file_in_chat', 'ask_agent', 'schedule', 'fetch_copilot_bridge_documentation', 'no_reply', 'update_card_status', 'create_card'];
+export const BRIDGE_CUSTOM_TOOLS = ['send_file', 'show_file_in_chat', 'ask_agent', 'schedule', 'fetch_copilot_bridge_documentation', 'no_reply'];
 
 type SessionEventHandler = (sessionId: string, channelId: string, event: any) => void;
 type CustomToolHandler = (channelId: string, args: Record<string, unknown>) => Promise<unknown>;
@@ -2643,72 +2643,6 @@ export class SessionManager {
     const iaConfig = getInterAgentConfig();
     if (iaConfig.enabled) {
       tools.push(await this.buildAskAgentToolDef(channelId));
-    }
-
-    const updateCardStatusHandler = this.customToolHandlers.get('update_card_status');
-    if (channelConfig.platform === 'http' && updateCardStatusHandler) {
-      tools.push({
-        name: 'update_card_status',
-        description: 'Update your card status for the current HTTP session and emit a card.status event.',
-        parameters: {
-          type: 'object',
-          properties: {
-            status: { type: 'string', description: 'New status for the current card.' },
-          },
-          required: ['status'],
-        },
-        handler: async (args: { status: string }) => {
-          try {
-            const result = await updateCardStatusHandler(channelId, args);
-            return { content: JSON.stringify(result) };
-          } catch (err: any) {
-            log.error(`update_card_status failed for channel ${channelId.slice(0, 8)}...:`, err);
-            return { content: JSON.stringify({ success: false, error: 'tool_error', detail: err?.message ?? 'unknown error' }) };
-          }
-        },
-      });
-    }
-
-    const createCardHandler = this.customToolHandlers.get('create_card');
-    if (channelConfig.platform === 'http' && createCardHandler) {
-      tools.push({
-        name: 'create_card',
-        description: 'Create a new work card for tracking a task',
-        parameters: {
-          type: 'object',
-          properties: {
-            title: { type: 'string', description: 'Short title for the new card.' },
-            description: { type: 'string', description: 'Optional longer description of the work to track.' },
-            agent: { type: 'string', description: 'Optional agent bot to assign to the card.' },
-            labels: {
-              type: 'array',
-              description: 'Optional labels to apply to the card.',
-              items: { type: 'string' },
-            },
-            metadata: {
-              type: 'object',
-              description: 'Optional structured metadata to store with the card.',
-              additionalProperties: true,
-            },
-          },
-          required: ['title'],
-        },
-        handler: async (args: {
-          title: string;
-          description?: string;
-          agent?: string;
-          labels?: string[];
-          metadata?: Record<string, unknown>;
-        }) => {
-          try {
-            const result = await createCardHandler(channelId, args);
-            return { content: JSON.stringify(result) };
-          } catch (err: any) {
-            log.error(`create_card failed for channel ${channelId.slice(0, 8)}...:`, err);
-            return { content: JSON.stringify({ success: false, error: 'tool_error', detail: err?.message ?? 'unknown error' }) };
-          }
-        },
-      });
     }
 
     // Scheduler tool: create/list/cancel/pause/resume scheduled tasks
