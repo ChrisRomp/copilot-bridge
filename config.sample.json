@@ -13,6 +13,26 @@
           "admin": true
         }
       }
+    },
+    "_comment_http": "Optional: HTTP REST API platform for external integrations (dashboards, CI, custom UIs)",
+    "http": {
+      "enabled": true,
+      "bind": "127.0.0.1",
+      "port": 7878,
+      "access": {
+        "mode": "allowlist",
+        "users": ["your-username"]
+      },
+      "apiKeys": {
+        "my-api-key": {
+          "secret": "env:HTTP_API_KEY",
+          "allowedAgents": ["*"],
+          "allowedOps": ["*"]
+        }
+      },
+      "eventBuffer": {
+        "maxEventsPerCard": 200
+      }
     }
   },
   "channels": [
