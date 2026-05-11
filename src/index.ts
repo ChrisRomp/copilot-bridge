@@ -23,6 +23,9 @@ import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, M
 import { routeHttpSessionEvent, type HttpEventRouteDeps } from './channels/http/event-routing.js';
 import type { ICardStore } from './channels/http/store.js';
 import type { SseManager } from './channels/http/sse.js';
+import { CallbackRegistry } from './channels/http/callback-registry.js';
+import { CallbackDelivery } from './channels/http/callback-delivery.js';
+import { registerExecuteRoutes } from './channels/http/routes/execute.js';
 
 const log = createLogger('bridge');
 
@@ -569,6 +572,7 @@ async function main(): Promise<void> {
 
   let httpSseManager: { stop(): void } | null = null;
   let httpEventRouteDeps: HttpEventRouteDeps | null = null;
+  let callbackDelivery: CallbackDelivery | null = null;
   const httpPlatform = config.platforms.http as HttpPlatformConfig | undefined;
   if (httpPlatform?.enabled) {
     const [
@@ -609,6 +613,8 @@ async function main(): Promise<void> {
       harness: httpHarness,
       sseManager: createdHttpSseManager,
     };
+    const callbackRegistry = new CallbackRegistry();
+    callbackDelivery = new CallbackDelivery(callbackRegistry);
     registerHttpSessionToolHandlers(sessionManager, httpStore, createdHttpSseManager);
 
     const httpBots = buildHttpRouteBots(httpPlatform);
@@ -647,6 +653,27 @@ async function main(): Promise<void> {
           log.info(`Registered card channel ${cardId.slice(0, 8)}... for bot "${agentBot}"`);
         },
       });
+      registerExecuteRoutes(server, {
+        adapter: createdHttpAdapter,
+        callbackRegistry,
+        registerChannel: async (channelId, bot) => {
+          if (await isConfiguredChannel(channelId)) return;
+          const workspacePath = await getWorkspacePath(bot);
+          await initWorkspace(bot);
+          registerDynamicChannel({
+            id: channelId,
+            platform: 'http',
+            bot,
+            name: `Execute ${channelId.slice(0, 8)}...`,
+            workingDirectory: workspacePath,
+            triggerMode: 'all',
+            threadedReplies: false,
+            verbose: false,
+            isDM: false,
+          });
+          log.info(`Registered execute channel ${channelId.slice(0, 8)}... for bot "${bot}"`);
+        },
+      });
       registerChatRoutes(server, {
         store: httpStore,
         adapter: createdHttpAdapter,
@@ -675,7 +702,7 @@ async function main(): Promise<void> {
   sessionManager.onSessionEvent((sessionId, channelId, event) => {
     const prev = eventLocks.get(channelId) ?? Promise.resolve();
     const next = prev.then(() =>
-      handleSessionEvent(sessionId, channelId, event, sessionManager, httpEventRouteDeps)
+      handleSessionEvent(sessionId, channelId, event, sessionManager, httpEventRouteDeps, callbackDelivery)
         .catch(err => log.error(`Unhandled error in event handler:`, err))
     );
     eventLocks.set(channelId, next);
@@ -2166,6 +2193,7 @@ async function handleSessionEvent(
   event: any,
   sessionManager: SessionManager,
   httpEventRouteDeps: HttpEventRouteDeps | null,
+  callbackDelivery: CallbackDelivery | null,
 ): Promise<void> {
   // Reset loop detector when the session changes (e.g., model fallback creates new session)
   const prevSession = lastSessionIds.get(channelId);
@@ -2229,6 +2257,9 @@ async function handleSessionEvent(
 
   const channelConfig = await getChannelConfig(channelId);
   if (channelConfig.platform === 'http') {
+    if (callbackDelivery && await callbackDelivery.handleEvent(channelId, event)) {
+      return;
+    }
     if (httpEventRouteDeps) {
       await routeHttpSessionEvent(channelId, event, httpEventRouteDeps);
     }
