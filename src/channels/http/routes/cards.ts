@@ -103,6 +103,34 @@ export function registerCardRoutes(app: FastifyInstance, deps: CardRouteDeps): v
       await deps.store.addLabels(card.id, body.labels);
     }
 
+    // When an agent is assigned, auto-dispatch the description (or title) as
+    // the first message so the agent session starts immediately.
+    if (card.agent_bot) {
+      const prompt = card.description || card.title;
+      const input = createUserMessage(prompt);
+      const comment = await deps.store.addComment({
+        card_id: card.id,
+        author_kind: 'human',
+        author_id: apiKey.keyId,
+        content: JSON.stringify(input[0]),
+      });
+
+      await deps.store.createRun({
+        card_id: card.id,
+        session_id: card.id,
+        agent_name: card.agent_bot,
+        input,
+      });
+
+      dispatchCardComment(deps.adapter, {
+        channelId: card.channel_id ?? card.id,
+        userId: apiKey.keyId,
+        username: apiKey.keyId,
+        text: prompt,
+        postId: comment.id,
+      });
+    }
+
     return reply.status(201).send({ card: await withLabels(deps.store, card) });
   });
 
