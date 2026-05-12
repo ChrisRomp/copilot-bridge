@@ -61,10 +61,14 @@ export function registerRunStreamRoutes(app: FastifyInstance, deps: RunStreamRou
 
     let closed = false;
     let unsubscribe: (() => void) | undefined;
+    deps.runRegistry.setEmitter(entry.runId, (event) => {
+      if (!closed) writeAcpEvent(reply.raw, event as AcpEvent);
+    });
     const close = (): void => {
       if (closed) return;
       closed = true;
       unsubscribe?.();
+      deps.runRegistry.setEmitter(entry.runId, () => undefined);
       reply.raw.end();
     };
 

@@ -12,6 +12,7 @@ export interface RunEntry {
   createdAt: string;
   finishedAt?: string;
   error?: string;
+  emitter?: (event: any) => void;
 }
 
 export class RunRegistry {
@@ -30,6 +31,15 @@ export class RunRegistry {
 
   get(runId: string): RunEntry | undefined {
     return this.entries.get(runId);
+  }
+
+  setEmitter(runId: string, emit: (event: any) => void): void {
+    const entry = this.entries.get(runId);
+    if (entry) entry.emitter = emit;
+  }
+
+  getEmitter(runId: string): ((event: any) => void) | undefined {
+    return this.entries.get(runId)?.emitter;
   }
 
   updateStatus(runId: string, status: RunStatus, extra?: { error?: string; finishedAt?: string }): boolean {

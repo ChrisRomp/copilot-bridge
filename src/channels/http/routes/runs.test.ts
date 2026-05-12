@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerAuthHook, type AuthConfig } from '../auth.js';
+import type { PendingPermissionStore } from '../pending-permission-store.js';
 import type { PermissionStore } from '../permission-store.js';
 import type { RunEntry, RunRegistry } from '../run-registry.js';
 import { registerRunRoutes, type RunRouteDeps } from './runs.js';
@@ -53,7 +54,7 @@ describe('registerRunRoutes', () => {
   let registerRun: ReturnType<typeof vi.fn>;
   let getRun: ReturnType<typeof vi.fn>;
   let updateStatus: ReturnType<typeof vi.fn>;
-  let ensureSession: ReturnType<typeof vi.fn>;
+  let createSessionWithPermissions: ReturnType<typeof vi.fn>;
   let registerChannel: ReturnType<typeof vi.fn>;
   let getSession: ReturnType<typeof vi.fn>;
   let abortSession: ReturnType<typeof vi.fn>;
@@ -63,7 +64,7 @@ describe('registerRunRoutes', () => {
     registerRun = vi.fn().mockReturnValue(makeRunEntry());
     getRun = vi.fn();
     updateStatus = vi.fn().mockReturnValue(true);
-    ensureSession = vi.fn().mockResolvedValue({ sessionId: 'mock-session-id', isNew: true });
+    createSessionWithPermissions = vi.fn().mockResolvedValue({ sessionId: 'mock-session-id' });
     registerChannel = vi.fn().mockResolvedValue(undefined);
     getSession = vi.fn();
     abortSession = vi.fn().mockResolvedValue(undefined);
@@ -73,10 +74,12 @@ describe('registerRunRoutes', () => {
         register: registerRun,
         get: getRun,
         updateStatus,
+        getEmitter: vi.fn(),
       } as Partial<RunRegistry> as RunRegistry,
-      permissionStore: {} as PermissionStore,
+      permissionStore: { shouldApprove: vi.fn() } as unknown as PermissionStore,
+      pendingPermissionStore: { park: vi.fn() } as unknown as PendingPermissionStore,
       registerChannel,
-      ensureSession,
+      createSessionWithPermissions,
       getSession,
       abortSession,
     };
@@ -211,7 +214,11 @@ describe('registerRunRoutes', () => {
       payload: { ...validPayload, session_id: 'client-session-id' },
     });
 
-    expect(ensureSession).toHaveBeenCalledWith('client-session-id');
+    expect(createSessionWithPermissions).toHaveBeenCalledWith(
+      'client-session-id',
+      'bot-a',
+      expect.any(Function),
+    );
     expect(registerRun).toHaveBeenCalledWith('mock-session-id', {
       bot: 'bot-a',
       channelId: 'client-session-id',

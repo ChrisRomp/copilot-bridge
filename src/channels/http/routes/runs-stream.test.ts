@@ -46,6 +46,7 @@ describe('registerRunStreamRoutes', () => {
   let app: FastifyInstance;
   let getRun: ReturnType<typeof vi.fn>;
   let getMessages: ReturnType<typeof vi.fn>;
+  let setEmitter: ReturnType<typeof vi.fn>;
   let getSession: ReturnType<typeof vi.fn>;
   let subscribeToSessionEvents: ReturnType<typeof vi.fn>;
   let unsubscribe: ReturnType<typeof vi.fn>;
@@ -56,6 +57,7 @@ describe('registerRunStreamRoutes', () => {
   beforeEach(() => {
     getRun = vi.fn().mockReturnValue(makeRunEntry());
     getMessages = vi.fn().mockResolvedValue([]);
+    setEmitter = vi.fn();
     getSession = vi.fn().mockReturnValue({ getMessages });
     unsubscribe = vi.fn();
     capturedHandler = undefined;
@@ -65,7 +67,7 @@ describe('registerRunStreamRoutes', () => {
       return unsubscribe;
     });
     deps = {
-      runRegistry: { get: getRun } as Partial<RunRegistry> as RunRegistry,
+      runRegistry: { get: getRun, setEmitter } as Partial<RunRegistry> as RunRegistry,
       subscribeToSessionEvents,
       getSession,
     };
@@ -123,6 +125,7 @@ describe('registerRunStreamRoutes', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers['content-type']).toContain('text/event-stream');
+    expect(setEmitter).toHaveBeenCalledWith('run-123', expect.any(Function));
   });
 
   it('replays completed run events from getMessages and closes', async () => {

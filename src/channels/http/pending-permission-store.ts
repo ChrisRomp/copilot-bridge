@@ -18,7 +18,7 @@ export class PendingPermissionStore {
 
   park(
     runId: string,
-    request: Omit<PendingPermissionRequest, 'resolve' | 'createdAt'>,
+    request: Omit<PendingPermissionRequest, 'runId' | 'resolve' | 'createdAt'> & Partial<Pick<PendingPermissionRequest, 'runId'>>,
   ): Promise<AcpPermissionDecision> {
     return new Promise<AcpPermissionDecision>((resolve) => {
       this.pending.set(runId, { ...request, runId, resolve, createdAt: Date.now() });

@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
+import type { PermissionHandler } from '@github/copilot-sdk';
 import { canAccessAgent, canPerformOp } from '../auth.js';
 import type { HttpChannelAdapter } from '../index.js';
 import type { RunRegistry } from '../run-registry.js';
 import type { PermissionStore } from '../permission-store.js';
+import type { PendingPermissionStore } from '../pending-permission-store.js';
+import { createAcpPermissionHandler } from '../acp-permission-handler.js';
 
 type RunCreateBody = {
   agent_name: string;
@@ -23,8 +26,13 @@ export interface RunRouteDeps {
   adapter: HttpChannelAdapter;
   runRegistry: RunRegistry;
   permissionStore: PermissionStore;
+  pendingPermissionStore: PendingPermissionStore;
   registerChannel: (channelId: string, bot: string) => Promise<void>;
-  ensureSession: (channelId: string) => Promise<{ sessionId: string; isNew: boolean }>;
+  createSessionWithPermissions: (
+    channelId: string,
+    bot: string,
+    onPermissionRequest: PermissionHandler,
+  ) => Promise<{ sessionId: string }>;
   getSession: (sessionId: string) => { getMessages(): Promise<import('@github/copilot-sdk').SessionEvent[]> } | undefined;
   abortSession: (sessionId: string) => Promise<void>;
 }
@@ -55,7 +63,15 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
 
     const apiKey = request.apiKey;
     const channelId = session_id ?? randomUUID();
-    const { sessionId } = await deps.ensureSession(channelId);
+    const runIdRef = { current: '' };
+    const onPermissionRequest = createAcpPermissionHandler(
+      runIdRef,
+      deps.permissionStore,
+      deps.pendingPermissionStore,
+      (runId) => deps.runRegistry.getEmitter(runId),
+    );
+    const { sessionId } = await deps.createSessionWithPermissions(channelId, agent_name, onPermissionRequest);
+    runIdRef.current = sessionId;
     const runId = sessionId;
 
     deps.runRegistry.register(runId, { bot: agent_name, channelId, status: 'created' });

@@ -73,6 +73,24 @@ describe('RunRegistry', () => {
     expect(registry.get('run-1')).toBeUndefined();
   });
 
+  it('setEmitter stores an emitter retrievable by getEmitter', () => {
+    const registry = new RunRegistry();
+    const emitter = () => undefined;
+
+    registry.register('run-1', entry);
+    registry.setEmitter('run-1', emitter);
+
+    expect(registry.getEmitter('run-1')).toBe(emitter);
+  });
+
+  it('getEmitter returns undefined for an unknown runId', () => {
+    const registry = new RunRegistry();
+
+    registry.setEmitter('missing-run', () => undefined);
+
+    expect(registry.getEmitter('missing-run')).toBeUndefined();
+  });
+
   it('all returns all registered entries', () => {
     const registry = new RunRegistry();
 
