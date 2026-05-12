@@ -25,6 +25,8 @@ export interface RunRouteDeps {
   permissionStore: PermissionStore;
   registerChannel: (channelId: string, bot: string) => Promise<void>;
   ensureSession: (channelId: string) => Promise<{ sessionId: string; isNew: boolean }>;
+  getSession: (sessionId: string) => { getMessages(): Promise<import('@github/copilot-sdk').SessionEvent[]> } | undefined;
+  abortSession: (sessionId: string) => Promise<void>;
 }
 
 export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): void {
@@ -70,5 +72,63 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     });
 
     return reply.status(202).send({ run_id: runId, status: 'created' });
+  });
+
+  app.get<{ Params: { run_id: string } }>('/runs/:run_id', async (request, reply) => {
+    if (!request.apiKey || !canPerformOp(request.apiKey, 'agent:read')) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    const entry = deps.runRegistry.get(request.params.run_id);
+    if (!entry) {
+      return reply.status(404).send({ error: 'Run not found' });
+    }
+
+    if (!canAccessAgent(request.apiKey, entry.bot)) {
+      return reply.status(403).send({ error: 'Not authorized for this agent' });
+    }
+
+    if (entry.status === 'created' || entry.status === 'in_progress') {
+      return reply.status(200).send({ run_id: entry.runId, status: 'in_progress' });
+    }
+    if (entry.status === 'awaiting') {
+      return reply.status(200).send({ run_id: entry.runId, status: 'awaiting' });
+    }
+    if (entry.status === 'completed') {
+      const events = await deps.getSession(entry.runId)?.getMessages() ?? [];
+      const output = events
+        .filter((event) => event.type === 'assistant.message')
+        .map((event) => ({
+          role: 'agent',
+          parts: [{ content: event.data?.content ?? '' }],
+        }));
+
+      return reply.status(200).send({ run_id: entry.runId, status: 'completed', output });
+    }
+    if (entry.status === 'failed') {
+      return reply.status(200).send({ run_id: entry.runId, status: 'failed', error: entry.error ?? '' });
+    }
+
+    return reply.status(200).send({ run_id: entry.runId, status: 'cancelled' });
+  });
+
+  app.delete<{ Params: { run_id: string } }>('/runs/:run_id', async (request, reply) => {
+    if (!request.apiKey || !canPerformOp(request.apiKey, 'agent:execute')) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    const entry = deps.runRegistry.get(request.params.run_id);
+    if (!entry) {
+      return reply.status(404).send({ error: 'Run not found' });
+    }
+
+    if (!canAccessAgent(request.apiKey, entry.bot)) {
+      return reply.status(403).send({ error: 'Not authorized for this agent' });
+    }
+
+    await deps.abortSession(entry.runId).catch(() => {});
+    deps.runRegistry.updateStatus(request.params.run_id, 'cancelled', { finishedAt: new Date().toISOString() });
+
+    return reply.status(204).send();
   });
 }
