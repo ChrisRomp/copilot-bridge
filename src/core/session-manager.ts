@@ -1,4 +1,4 @@
-import { CopilotSession, approveAll } from '@github/copilot-sdk';
+import { CopilotSession, approveAll, type PermissionHandler } from '@github/copilot-sdk';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -783,10 +783,13 @@ export class SessionManager {
   }
 
   /** Get or create a session for a channel. */
-  async ensureSession(channelId: string): Promise<{ sessionId: string; isNew: boolean }> {
+  async ensureSession(channelId: string, opts?: { onPermissionRequest?: PermissionHandler }): Promise<{ sessionId: string; isNew: boolean }> {
     // Check in-memory cache first
     const cachedSessionId = this.channelSessions.get(channelId);
     if (cachedSessionId && this.bridge.getSession(cachedSessionId)) {
+      if (opts?.onPermissionRequest) {
+        this.bridge.updatePermissionHandler(cachedSessionId, opts.onPermissionRequest);
+      }
       return { sessionId: cachedSessionId, isNew: false };
     }
 
@@ -794,7 +797,7 @@ export class SessionManager {
     const storedSessionId = await getChannelSession(channelId);
     if (storedSessionId) {
       try {
-        await this.attachSession(channelId, storedSessionId);
+        await this.attachSession(channelId, storedSessionId, opts);
         return { sessionId: storedSessionId, isNew: false };
       } catch (err) {
       log.warn(`Failed to resume session ${storedSessionId} for channel ${channelId}, creating new:`, err);
@@ -803,7 +806,7 @@ export class SessionManager {
     }
 
     // Create new session
-    const sessionId = await this.createNewSession(channelId);
+    const sessionId = await this.createNewSession(channelId, opts);
     return { sessionId, isNew: true };
   }
 
@@ -1828,7 +1831,7 @@ export class SessionManager {
     });
   }
 
-  private async createNewSession(channelId: string): Promise<string> {
+  private async createNewSession(channelId: string, opts?: { onPermissionRequest?: PermissionHandler }): Promise<string> {
     const prefs = await this.getEffectivePrefs(channelId);
     const workingDirectory = await this.resolveWorkingDirectory(channelId);
 
@@ -1887,7 +1890,7 @@ export class SessionManager {
           skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
           disabledSkills,
           excludedTools,
-          onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
+          onPermissionRequest: opts?.onPermissionRequest ?? ((request, invocation) => this.handlePermissionRequest(channelId, request, invocation)),
           onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
           customAgents: customAgents.length > 0 ? customAgents : undefined,
           tools: customTools.length > 0 ? customTools : undefined,
@@ -1938,7 +1941,7 @@ export class SessionManager {
               mcpServers: resolvedMcpServers,
               skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
               disabledSkills,
-              onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
+              onPermissionRequest: opts?.onPermissionRequest ?? ((request, invocation) => this.handlePermissionRequest(channelId, request, invocation)),
               onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
               customAgents: customAgents.length > 0 ? customAgents : undefined,
               tools: customTools.length > 0 ? customTools : undefined,
@@ -2010,7 +2013,7 @@ export class SessionManager {
     return sessionId;
   }
 
-  private async attachSession(channelId: string, sessionId: string): Promise<void> {
+  private async attachSession(channelId: string, sessionId: string, opts?: { onPermissionRequest?: PermissionHandler }): Promise<void> {
     const prefs = await this.getEffectivePrefs(channelId);
     const workingDirectory = await this.resolveWorkingDirectory(channelId);
     const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
@@ -2041,7 +2044,7 @@ export class SessionManager {
 
     const session = await withWorkspaceEnv(workingDirectory, () =>
       this.bridge.resumeSession(sessionId, {
-        onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
+        onPermissionRequest: opts?.onPermissionRequest ?? ((request, invocation) => this.handlePermissionRequest(channelId, request, invocation)),
         onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
         configDir: defaultConfigDir,
         workingDirectory,

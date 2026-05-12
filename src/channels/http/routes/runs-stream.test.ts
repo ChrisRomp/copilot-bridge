@@ -48,6 +48,7 @@ describe('registerRunStreamRoutes', () => {
   let getMessages: ReturnType<typeof vi.fn>;
   let setEmitter: ReturnType<typeof vi.fn>;
   let getSession: ReturnType<typeof vi.fn>;
+  let isActiveRun: ReturnType<typeof vi.fn>;
   let subscribeToSessionEvents: ReturnType<typeof vi.fn>;
   let unsubscribe: ReturnType<typeof vi.fn>;
   let capturedHandler: ((sessionId: string, channelId: string, event: any) => void) | undefined;
@@ -59,6 +60,7 @@ describe('registerRunStreamRoutes', () => {
     getMessages = vi.fn().mockResolvedValue([]);
     setEmitter = vi.fn();
     getSession = vi.fn().mockReturnValue({ getMessages });
+    isActiveRun = vi.fn().mockReturnValue(true);
     unsubscribe = vi.fn();
     capturedHandler = undefined;
     capturedRequestRaw = undefined;
@@ -67,7 +69,7 @@ describe('registerRunStreamRoutes', () => {
       return unsubscribe;
     });
     deps = {
-      runRegistry: { get: getRun, setEmitter } as Partial<RunRegistry> as RunRegistry,
+      runRegistry: { get: getRun, setEmitter, isActiveRun } as Partial<RunRegistry> as RunRegistry,
       subscribeToSessionEvents,
       getSession,
     };
@@ -150,6 +152,33 @@ describe('registerRunStreamRoutes', () => {
     expect(getMessages).toHaveBeenCalledOnce();
   });
 
+  it('replays terminal run events from the run entry without shared session leakage', async () => {
+    getRun.mockReturnValue(makeRunEntry({
+      status: 'completed',
+      sessionEvents: [
+        sdkEvent('assistant.message', { content: 'old run' }),
+        sdkEvent('session.idle'),
+      ],
+    }));
+    getMessages.mockResolvedValue([
+      sdkEvent('assistant.message', { content: 'later run' }),
+      sdkEvent('session.idle'),
+    ]);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/runs/run-123/stream',
+      headers: fullAccessHeader,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe(
+      'event: message.completed\ndata: {"role":"agent","content":"old run"}\n\n' +
+      'event: run.completed\ndata: {"run_id":"run-123"}\n\n'
+    );
+    expect(getSession).not.toHaveBeenCalled();
+  });
+
   it('closes terminal stream and writes terminal event when getMessages rejects', async () => {
     getRun.mockReturnValue(makeRunEntry({ status: 'completed' }));
     getMessages.mockRejectedValue(new Error('replay failed'));
@@ -179,7 +208,7 @@ describe('registerRunStreamRoutes', () => {
     }
   });
 
-  it('writes SSE events as subscribeToSessionEvents fires them for a live run', async () => {
+  it('writes SSE events before production run-state updates clear terminal runs', async () => {
     const responsePromise = app.inject({
       method: 'GET',
       url: '/runs/run-123/stream',
@@ -189,6 +218,7 @@ describe('registerRunStreamRoutes', () => {
     await vi.waitFor(() => expect(capturedHandler).toBeDefined());
     capturedHandler?.('run-123', 'different-channel', sdkEvent('assistant.message', { content: 'ignored' }));
     capturedHandler?.('run-123', 'channel-123', sdkEvent('assistant.message_delta', { deltaContent: 'hel' }));
+    isActiveRun.mockReturnValueOnce(true).mockReturnValue(false);
     capturedHandler?.('run-123', 'channel-123', sdkEvent('session.idle'));
     const response = await responsePromise;
 
@@ -197,6 +227,30 @@ describe('registerRunStreamRoutes', () => {
       'event: run.completed\ndata: {"run_id":"run-123"}\n\n'
     );
     expect(response.body.match(/event: run\.completed/g)).toHaveLength(1);
+  });
+
+  it('ignores and stays open for events when the streamed run is no longer active', async () => {
+    const responsePromise = app.inject({
+      method: 'GET',
+      url: '/runs/run-123/stream',
+      headers: fullAccessHeader,
+    });
+
+    await vi.waitFor(() => expect(capturedHandler).toBeDefined());
+    isActiveRun.mockReturnValue(false);
+    capturedHandler?.('reused-sdk-session', 'channel-123', sdkEvent('assistant.message_delta', { deltaContent: 'wrong run' }));
+    capturedHandler?.('reused-sdk-session', 'channel-123', sdkEvent('session.idle'));
+
+    isActiveRun.mockReturnValue(true);
+    capturedHandler?.('reused-sdk-session', 'channel-123', sdkEvent('assistant.message_delta', { deltaContent: 'right run' }));
+    capturedHandler?.('reused-sdk-session', 'channel-123', sdkEvent('session.idle'));
+    const response = await responsePromise;
+
+    expect(response.body).toBe(
+      'event: message.part\ndata: {"role":"agent","content":"right run"}\n\n' +
+      'event: run.completed\ndata: {"run_id":"run-123"}\n\n'
+    );
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
   it('unsubscribes when session.idle event arrives', async () => {
@@ -227,6 +281,22 @@ describe('registerRunStreamRoutes', () => {
 
     expect(response.body).toBe('event: run.failed\ndata: {"run_id":"run-123","error":"boom"}\n\n');
     expect(response.body.match(/event: run\.failed/g)).toHaveLength(1);
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it('closes the exact run stream when DELETE emits terminal cancellation through the run emitter', async () => {
+    const responsePromise = app.inject({
+      method: 'GET',
+      url: '/runs/run-123/stream',
+      headers: fullAccessHeader,
+    });
+
+    await vi.waitFor(() => expect(capturedHandler).toBeDefined());
+    const emit = setEmitter.mock.calls[0]?.[1] as ((event: unknown) => void) | undefined;
+    emit?.({ type: 'run.failed', data: { run_id: 'run-123', error: 'cancelled' } });
+    const response = await responsePromise;
+
+    expect(response.body).toBe('event: run.failed\ndata: {"run_id":"run-123","error":"cancelled"}\n\n');
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 

@@ -137,7 +137,10 @@ export class CopilotBridge {
   ): Promise<CopilotSession> {
     await this.start();
     const existing = this.sessions.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      if (opts?.onPermissionRequest) existing.registerPermissionHandler(opts.onPermissionRequest);
+      return existing;
+    }
 
     const session = await this.client.resumeSession(sessionId, {
       clientName: 'copilot-bridge',
@@ -202,6 +205,13 @@ export class CopilotBridge {
 
   getSession(id: string): CopilotSession | undefined {
     return this.sessions.get(id);
+  }
+
+  updatePermissionHandler(id: string, handler: PermissionHandler): boolean {
+    const session = this.sessions.get(id);
+    if (!session) return false;
+    session.registerPermissionHandler(handler);
+    return true;
   }
 
   releaseSession(id: string): void {

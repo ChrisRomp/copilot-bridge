@@ -39,12 +39,20 @@ export function registerRunStreamRoutes(app: FastifyInstance, deps: RunStreamRou
 
     if (isTerminalStatus(entry.status)) {
       try {
-        const session = deps.getSession(entry.runId);
-        if (session) {
+        if (entry.sessionEvents) {
+          for (const event of entry.sessionEvents) {
+            if (!isTerminalSdkEvent(event)) {
+              writeAcpEvent(reply.raw, mapSdkEventToAcp(event as SessionEvent, entry.runId));
+            }
+          }
+        } else {
+          const session = deps.getSession(entry.sdkSessionId ?? entry.runId);
           try {
-            const sdkEvents = await session.getMessages();
+            const sdkEvents = await session?.getMessages() ?? [];
             for (const event of sdkEvents) {
-              writeAcpEvent(reply.raw, mapSdkEventToAcp(event, entry.runId));
+              if (!isTerminalSdkEvent(event)) {
+                writeAcpEvent(reply.raw, mapSdkEventToAcp(event, entry.runId));
+              }
             }
           } catch (error) {
             log.warn('Failed to replay terminal run events', { runId: entry.runId, error });
@@ -62,7 +70,12 @@ export function registerRunStreamRoutes(app: FastifyInstance, deps: RunStreamRou
     let closed = false;
     let unsubscribe: (() => void) | undefined;
     deps.runRegistry.setEmitter(entry.runId, (event) => {
-      if (!closed) writeAcpEvent(reply.raw, event as AcpEvent);
+      if (closed) return;
+      const acpEvent = event as AcpEvent;
+      writeAcpEvent(reply.raw, acpEvent);
+      if (isTerminalAcpEvent(acpEvent)) {
+        close();
+      }
     });
     const close = (): void => {
       if (closed) return;
@@ -73,7 +86,7 @@ export function registerRunStreamRoutes(app: FastifyInstance, deps: RunStreamRou
     };
 
     unsubscribe = deps.subscribeToSessionEvents(entry.channelId, (_sessionId, channelId, event) => {
-      if (closed || channelId !== entry.channelId) {
+      if (closed || channelId !== entry.channelId || !deps.runRegistry.isActiveRun(entry.runId)) {
         return;
       }
 
@@ -106,6 +119,14 @@ function writeAcpEvent(raw: { write: (chunk: string) => void }, acpEvent: AcpEve
 
 function isTerminalStatus(status: RunStatus): status is Extract<RunStatus, 'completed' | 'failed' | 'cancelled'> {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+function isTerminalSdkEvent(event: { type?: string }): boolean {
+  return event.type === 'session.idle' || event.type === 'session.error';
+}
+
+function isTerminalAcpEvent(event: { type?: string }): boolean {
+  return event.type === 'run.completed' || event.type === 'run.failed';
 }
 
 function terminalEvent(status: Extract<RunStatus, 'completed' | 'failed' | 'cancelled'>, runId: string, error?: string): AcpEvent {

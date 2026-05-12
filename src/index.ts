@@ -6,7 +6,7 @@ import { formatEvent, formatPermissionRequest, formatUserInputRequest } from './
 import { WorkspaceWatcher, initWorkspace, getWorkspacePath } from './core/workspace-manager.js';
 import { MattermostAdapter } from './channels/mattermost/adapter.js';
 import { StreamingHandler } from './channels/mattermost/streaming.js';
-import { initStore, getChannelPrefs, setChannelPrefs, getAllChannelSessions, closeDb, listPermissionRulesForScope, removePermissionRule, clearPermissionRules, getTaskHistory } from './state/store.js';
+import { initStore, getChannelPrefs, setChannelPrefs, getAllChannelSessions, closeDb, listPermissionRulesForScope, addPermissionRule, removePermissionRule, clearPermissionRules, getTaskHistory, checkPermission } from './state/store.js';
 import type { StateStore } from './state/types.js';
 import { extractThreadRequest, resolveThreadRoot } from './core/thread-utils.js';
 import { initScheduler, stopAll as stopScheduler, listJobs, removeJob, pauseJob, resumeJob, formatInTimezone, describeCron } from './core/scheduler.js';
@@ -20,10 +20,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig, DatabaseConfig, HttpPlatformConfig } from './types.js';
-import { CallbackRegistry } from './channels/http/callback-registry.js';
-import { CallbackDelivery } from './channels/http/callback-delivery.js';
-import { registerExecuteRoutes } from './channels/http/routes/execute.js';
-import { registerAgentRoutes } from './channels/http/routes/agents.js';
+import type { RunRegistry } from './channels/http/run-registry.js';
 
 const log = createLogger('bridge');
 
@@ -56,6 +53,10 @@ const channelLocks = new Map<string, Promise<void>>();
 
 // Per-channel promise chain to serialize SESSION EVENT handling (prevents race on auto-start)
 const eventLocks = new Map<string, Promise<void>>();
+
+type HttpSessionEventSubscriber = (sessionId: string, channelId: string, event: unknown) => void;
+const httpSessionEventSubscribers = new Map<string, Set<HttpSessionEventSubscriber>>();
+let httpRunRegistry: RunRegistry | null = null;
 
 // Channels in "quiet mode" — all streaming output suppressed until we determine
 // whether the response is NO_REPLY. Used for scheduled tasks and silent cron jobs.
@@ -217,6 +218,42 @@ async function cleanupTempFiles(channelId: string): Promise<void> {
       log.info(`Cleaned up ${files.length} temp file(s) for ${channelId.slice(0, 8)}...`);
     }
   } catch (err) { log.debug(`cleanupTempFiles(${channelId.slice(0, 8)}) failed:`, err); }
+}
+
+
+async function registerHttpChannel(channelId: string, bot: string): Promise<void> {
+  if (await isConfiguredChannel(channelId)) return;
+  const workspacePath = await getWorkspacePath(bot);
+  await initWorkspace(bot);
+  registerDynamicChannel({
+    id: channelId,
+    platform: 'http',
+    bot,
+    name: `Run ${channelId.slice(0, 8)}...`,
+    workingDirectory: workspacePath,
+    triggerMode: 'all',
+    threadedReplies: false,
+    verbose: false,
+    isDM: false,
+  });
+  log.info(`Registered HTTP run channel ${channelId.slice(0, 8)}... for bot "${bot}"`);
+}
+
+function emitHttpSessionEvent(sessionId: string, channelId: string, event: unknown): void {
+  const subscribers = httpSessionEventSubscribers.get(channelId);
+  if (!subscribers) return;
+  for (const handler of Array.from(subscribers)) {
+    try {
+      handler(sessionId, channelId, event);
+    } catch (err) {
+      log.warn('HTTP session event subscriber failed:', err);
+    }
+  }
+}
+
+function updateHttpRunState(channelId: string, event: any): void {
+  if (!httpRunRegistry) return;
+  httpRunRegistry.updateActiveRunFromSessionEvent(channelId, event);
 }
 
 async function getAdapterForChannel(channelId: string): Promise<{ adapter: ChannelAdapter; streaming: StreamingHandler } | null> {
@@ -527,14 +564,13 @@ async function main(): Promise<void> {
     }
   }
 
-  let callbackDelivery: CallbackDelivery | null = null;
   const httpPlatform = config.platforms.http as HttpPlatformConfig | undefined;
   if (httpPlatform?.enabled) {
     const [
       { HttpChannelAdapter },
       { createHttpServer },
       { registerAuthHook },
-      { buildHttpAuthConfig, buildHttpRouteBots },
+      { buildHttpAuthConfig, buildHttpRouteBots, registerHttpAcpRoutes },
     ] = await Promise.all([
       import('./channels/http/index.js'),
       import('./channels/http/server.js'),
@@ -545,8 +581,6 @@ async function main(): Promise<void> {
     const bind = httpPlatform.bind ?? '127.0.0.1';
     const port = httpPlatform.port ?? 7878;
 
-    const callbackRegistry = new CallbackRegistry();
-    callbackDelivery = new CallbackDelivery(callbackRegistry);
 
     const httpBots = buildHttpRouteBots(httpPlatform);
     const authConfig = buildHttpAuthConfig(httpPlatform, getHttpApiKeySecret);
@@ -555,29 +589,32 @@ async function main(): Promise<void> {
       const createdHttpAdapter = new HttpChannelAdapter(server);
       httpAdapter = createdHttpAdapter;
       registerAuthHook(server, authConfig);
-      registerAgentRoutes(server, { bots: httpBots });
-      registerExecuteRoutes(server, {
+      const routeStores = registerHttpAcpRoutes(server, {
         adapter: createdHttpAdapter,
-        callbackRegistry,
-        registerChannel: async (channelId, bot) => {
-          if (await isConfiguredChannel(channelId)) return;
-          const workspacePath = await getWorkspacePath(bot);
-          await initWorkspace(bot);
-          registerDynamicChannel({
-            id: channelId,
-            platform: 'http',
-            bot,
-            name: `Execute ${channelId.slice(0, 8)}...`,
-            workingDirectory: workspacePath,
-            triggerMode: 'all',
-            threadedReplies: false,
-            verbose: false,
-            isDM: false,
-          });
-          log.info(`Registered execute channel ${channelId.slice(0, 8)}... for bot "${bot}"`);
-        },
         bots: httpBots,
+        registerChannel: registerHttpChannel,
+        createSessionWithPermissions: async (channelId, _bot, onPermissionRequest) => {
+          const { sessionId } = await sessionManager.ensureSession(channelId, { onPermissionRequest });
+          return { sessionId };
+        },
+        getSession: (sessionId) => bridge.getSession(sessionId),
+        abortSession: (sessionId) => bridge.abortSession(sessionId),
+        subscribeToSessionEvents: (channelId, handler) => {
+          let subscribers = httpSessionEventSubscribers.get(channelId);
+          if (!subscribers) {
+            subscribers = new Set();
+            httpSessionEventSubscribers.set(channelId, subscribers);
+          }
+          subscribers.add(handler);
+          return () => {
+            subscribers?.delete(handler);
+            if (subscribers?.size === 0) httpSessionEventSubscribers.delete(channelId);
+          };
+        },
+        addPermissionRule,
+        checkPermission,
       });
+      httpRunRegistry = routeStores.runRegistry;
     });
 
     if (!httpAdapter) {
@@ -602,7 +639,7 @@ async function main(): Promise<void> {
   sessionManager.onSessionEvent((sessionId, channelId, event) => {
     const prev = eventLocks.get(channelId) ?? Promise.resolve();
     const next = prev.then(() =>
-      handleSessionEvent(sessionId, channelId, event, sessionManager, callbackDelivery)
+      handleSessionEvent(sessionId, channelId, event, sessionManager)
         .catch(err => log.error(`Unhandled error in event handler:`, err))
     );
     eventLocks.set(channelId, next);
@@ -2091,7 +2128,6 @@ async function handleSessionEvent(
   channelId: string,
   event: any,
   sessionManager: SessionManager,
-  callbackDelivery: CallbackDelivery | null,
 ): Promise<void> {
   // Reset loop detector when the session changes (e.g., model fallback creates new session)
   const prevSession = lastSessionIds.get(channelId);
@@ -2099,6 +2135,9 @@ async function handleSessionEvent(
     loopDetector.reset(channelId);
   }
   lastSessionIds.set(channelId, sessionId);
+
+  emitHttpSessionEvent(sessionId, channelId, event);
+  updateHttpRunState(channelId, event);
 
   if (event.type === 'session.error' || event.type?.includes('error')) {
     log.error(`SDK error event: ${JSON.stringify(event).slice(0, 1000)}`);
@@ -2161,9 +2200,6 @@ async function handleSessionEvent(
 
   const channelConfig = await getChannelConfig(channelId);
   if (channelConfig.platform === 'http') {
-    if (callbackDelivery && await callbackDelivery.handleEvent(channelId, event)) {
-      return;
-    }
     return;
   }
 

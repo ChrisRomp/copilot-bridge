@@ -75,14 +75,13 @@ export function registerRunEventsRoutes(app: FastifyInstance, deps: RunEventsRou
       return reply.status(403).send({ error: 'Not authorized for this agent' });
     }
 
-    const session = deps.getSession(entry.runId);
-    if (!session) {
+    const sdkEvents = entry.sessionEvents ?? await deps.getSession(entry.sdkSessionId ?? entry.runId)?.getMessages();
+    if (!sdkEvents) {
       return reply.status(200).send({ events: [] });
     }
 
-    const sdkEvents = await session.getMessages();
     const events = sdkEvents.flatMap((event) => {
-      const acpEvent = mapSdkEventToAcp(event, entry.runId);
+      const acpEvent = mapSdkEventToAcp(event as SessionEvent, entry.runId);
       return acpEvent ? [acpEvent] : [];
     });
 

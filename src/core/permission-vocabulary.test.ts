@@ -23,6 +23,7 @@ vi.mock('node:fs', async () => {
   };
 });
 
+import type { PermissionHandler } from '@github/copilot-sdk';
 import { SessionManager } from './session-manager.js';
 import { CopilotBridge } from './bridge.js';
 
@@ -152,6 +153,37 @@ describe('permission vocabulary (hook → SDK resolution)', () => {
   it('resolvePermission returns false when no pending permissions', async () => {
     const result = await manager.resolvePermission('nonexistent', true);
     expect(result).toBe(false);
+  });
+
+  it('updates permission handler when ensureSession reuses cached session', async () => {
+    const channelId = 'acp-reused-session';
+    const sessionId = 'session-reused';
+    const previousHandler: PermissionHandler = vi.fn().mockResolvedValue({ kind: 'reject' });
+    const nextHandler: PermissionHandler = vi.fn().mockResolvedValue({ kind: 'approve-once' });
+    let activeHandler = previousHandler;
+    const session = { sessionId, registerPermissionHandler: vi.fn() };
+    const stubBridge = {
+      getSession: vi.fn().mockReturnValue(session),
+      updatePermissionHandler: vi.fn((id: string, handler: PermissionHandler) => {
+        activeHandler = handler;
+        session.registerPermissionHandler(handler);
+        return true;
+      }),
+      destroySession: vi.fn(),
+    } as unknown as CopilotBridge;
+    manager = new SessionManager(stubBridge);
+    (manager as any).channelSessions.set(channelId, sessionId);
+
+    const result = await manager.ensureSession(channelId, { onPermissionRequest: nextHandler });
+
+    expect(result).toEqual({ sessionId, isNew: false });
+    expect((stubBridge as any).updatePermissionHandler).toHaveBeenCalledWith(sessionId, nextHandler);
+    expect(session.registerPermissionHandler).toHaveBeenCalledWith(nextHandler);
+
+    await activeHandler({ toolName: 'shell' } as any, { sessionId } as any);
+
+    expect(nextHandler).toHaveBeenCalledWith({ toolName: 'shell' }, { sessionId });
+    expect(previousHandler).not.toHaveBeenCalled();
   });
 });
 

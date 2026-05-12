@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerAuthHook, type AuthConfig } from '../auth.js';
 import type { PendingPermissionStore } from '../pending-permission-store.js';
 import type { PermissionStore } from '../permission-store.js';
-import type { RunEntry, RunRegistry } from '../run-registry.js';
+import { RunRegistry, type RunEntry } from '../run-registry.js';
 import { registerRunRoutes, type RunRouteDeps } from './runs.js';
 
 const fullAccessHeader = { authorization: 'Bearer test-secret-full' };
@@ -54,8 +54,11 @@ describe('registerRunRoutes', () => {
   let registerRun: ReturnType<typeof vi.fn>;
   let getRun: ReturnType<typeof vi.fn>;
   let updateStatus: ReturnType<typeof vi.fn>;
+  let updateSdkSessionId: ReturnType<typeof vi.fn>;
+  let getNonTerminalActiveRun: ReturnType<typeof vi.fn>;
+  let getEmitter: ReturnType<typeof vi.fn>;
   let createSessionWithPermissions: ReturnType<typeof vi.fn>;
-  let registerChannel: ReturnType<typeof vi.fn>;
+  let checkPermission: ReturnType<typeof vi.fn>;
   let getSession: ReturnType<typeof vi.fn>;
   let abortSession: ReturnType<typeof vi.fn>;
 
@@ -64,8 +67,11 @@ describe('registerRunRoutes', () => {
     registerRun = vi.fn().mockReturnValue(makeRunEntry());
     getRun = vi.fn();
     updateStatus = vi.fn().mockReturnValue(true);
+    updateSdkSessionId = vi.fn().mockReturnValue(true);
+    getNonTerminalActiveRun = vi.fn().mockReturnValue(undefined);
+    getEmitter = vi.fn();
     createSessionWithPermissions = vi.fn().mockResolvedValue({ sessionId: 'mock-session-id' });
-    registerChannel = vi.fn().mockResolvedValue(undefined);
+    checkPermission = vi.fn().mockResolvedValue(null);
     getSession = vi.fn();
     abortSession = vi.fn().mockResolvedValue(undefined);
     deps = {
@@ -74,11 +80,13 @@ describe('registerRunRoutes', () => {
         register: registerRun,
         get: getRun,
         updateStatus,
-        getEmitter: vi.fn(),
+        updateSdkSessionId,
+        getNonTerminalActiveRun,
+        getEmitter,
       } as Partial<RunRegistry> as RunRegistry,
       permissionStore: { shouldApprove: vi.fn() } as unknown as PermissionStore,
       pendingPermissionStore: { park: vi.fn() } as unknown as PendingPermissionStore,
-      registerChannel,
+      checkPermission,
       createSessionWithPermissions,
       getSession,
       abortSession,
@@ -174,7 +182,7 @@ describe('registerRunRoutes', () => {
     expect(emptyResponse.statusCode).toBe(400);
   });
 
-  it('returns 202 with run_id equal to the ensured sessionId on valid request', async () => {
+  it('returns 202 with an ACP run_id independent from the ensured SDK sessionId', async () => {
     const response = await app.inject({
       method: 'POST',
       url: '/runs',
@@ -183,16 +191,18 @@ describe('registerRunRoutes', () => {
     });
 
     expect(response.statusCode).toBe(202);
-    expect(response.json()).toEqual({ run_id: 'mock-session-id', status: 'created' });
+    expect(response.json()).toEqual({ run_id: expect.any(String), status: 'created' });
+    expect(response.json().run_id).not.toBe('mock-session-id');
   });
 
   it('dispatches inbound message with the request content', async () => {
-    await app.inject({
+    const response = await app.inject({
       method: 'POST',
       url: '/runs',
       headers: fullAccessHeader,
       payload: validPayload,
     });
+    const runId = response.json().run_id;
 
     expect(dispatchInboundMessage).toHaveBeenCalledWith({
       platform: 'http',
@@ -200,13 +210,69 @@ describe('registerRunRoutes', () => {
       userId: 'full-access',
       username: 'full-access',
       text: 'hello from ACP',
-      postId: 'mock-session-id',
+      postId: runId,
       mentionsBot: true,
       isDM: false,
     });
   });
 
-  it('registers the run with runId equal to the ensured sessionId', async () => {
+  it('returns 409 when a nonterminal run already exists for the ACP session_id', async () => {
+    getNonTerminalActiveRun.mockReturnValue(makeRunEntry({
+      runId: 'existing-run-id',
+      channelId: 'client-session-id',
+      status: 'in_progress',
+    }));
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      headers: fullAccessHeader,
+      payload: { ...validPayload, session_id: 'client-session-id' },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'Run already in progress for this session_id' });
+    expect(createSessionWithPermissions).not.toHaveBeenCalled();
+    expect(registerRun).not.toHaveBeenCalled();
+    expect(dispatchInboundMessage).not.toHaveBeenCalled();
+  });
+
+  it('permits a later run on the same ACP session_id after the prior run is terminal', async () => {
+    const registry = new RunRegistry();
+    deps.runRegistry = registry;
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      headers: fullAccessHeader,
+      payload: { ...validPayload, session_id: 'client-session-id' },
+    });
+    const firstRunId = first.json().run_id;
+
+    const conflict = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      headers: fullAccessHeader,
+      payload: { ...validPayload, session_id: 'client-session-id' },
+    });
+
+    registry.updateStatus(firstRunId, 'completed', { finishedAt: '2026-05-12T00:00:00.000Z' });
+    const afterTerminal = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      headers: fullAccessHeader,
+      payload: { ...validPayload, session_id: 'client-session-id' },
+    });
+
+    expect(first.statusCode).toBe(202);
+    expect(conflict.statusCode).toBe(409);
+    expect(afterTerminal.statusCode).toBe(202);
+    expect(afterTerminal.json().run_id).not.toBe(firstRunId);
+    expect(createSessionWithPermissions).toHaveBeenCalledTimes(2);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('registers the ACP run before creating the SDK session to reserve the channel', async () => {
     await app.inject({
       method: 'POST',
       url: '/runs',
@@ -219,23 +285,63 @@ describe('registerRunRoutes', () => {
       'bot-a',
       expect.any(Function),
     );
-    expect(registerRun).toHaveBeenCalledWith('mock-session-id', {
+    const [runId, entry] = registerRun.mock.calls[0];
+    expect(runId).toEqual(expect.any(String));
+    expect(runId).not.toBe('mock-session-id');
+    expect(entry).toEqual({
       bot: 'bot-a',
       channelId: 'client-session-id',
       status: 'created',
     });
+    expect(updateSdkSessionId).toHaveBeenCalledWith(runId, 'mock-session-id');
   });
 
-  it('registers the HTTP channel before dispatching the message', async () => {
-    await app.inject({
+  it('updates the run status to awaiting when the per-run permission handler parks a request', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      headers: fullAccessHeader,
+      payload: validPayload,
+    });
+    const runId = response.json().run_id;
+    const onPermissionRequest = createSessionWithPermissions.mock.calls[0]?.[2];
+
+    await expect(onPermissionRequest(
+      { kind: 'shell', toolCallId: 'tool-call-1' },
+      { sessionId: 'mock-session-id' },
+    )).resolves.toEqual({ kind: 'denied-by-rules', rules: [] });
+
+    expect(updateStatus).toHaveBeenCalledWith(runId, 'awaiting');
+  });
+
+  it('returns distinct run_id values after the previous run for the ACP session_id is terminal', async () => {
+    const first = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      headers: fullAccessHeader,
+      payload: { ...validPayload, session_id: 'client-session-id' },
+    });
+    getNonTerminalActiveRun.mockReturnValueOnce(undefined).mockReturnValueOnce(undefined);
+    const second = await app.inject({
       method: 'POST',
       url: '/runs',
       headers: fullAccessHeader,
       payload: { ...validPayload, session_id: 'client-session-id' },
     });
 
-    expect(registerChannel).toHaveBeenCalledWith('client-session-id', 'bot-a');
-    expect(dispatchInboundMessage).toHaveBeenCalled();
+    const firstRunId = first.json().run_id;
+    const secondRunId = second.json().run_id;
+    expect(firstRunId).not.toBe(secondRunId);
+    expect(registerRun).toHaveBeenNthCalledWith(1, firstRunId, {
+      bot: 'bot-a',
+      channelId: 'client-session-id',
+      status: 'created',
+    });
+    expect(registerRun).toHaveBeenNthCalledWith(2, secondRunId, {
+      bot: 'bot-a',
+      channelId: 'client-session-id',
+      status: 'created',
+    });
   });
 
   it('returns 404 for GET when run_id is unknown', async () => {
@@ -378,6 +484,24 @@ describe('registerRunRoutes', () => {
     expect(response.statusCode).toBe(204);
     expect(updateStatus).toHaveBeenCalledWith('mock-session-id', 'cancelled', {
       finishedAt: expect.any(String),
+    });
+  });
+
+  it('emits terminal cancellation event to connected run stream after DELETE', async () => {
+    const emit = vi.fn();
+    getRun.mockReturnValue(makeRunEntry());
+    getEmitter.mockReturnValue(emit);
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/runs/mock-session-id',
+      headers: fullAccessHeader,
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(emit).toHaveBeenCalledWith({
+      type: 'run.failed',
+      data: { run_id: 'mock-session-id', error: 'cancelled' },
     });
   });
 });

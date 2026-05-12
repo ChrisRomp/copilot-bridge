@@ -10,17 +10,27 @@ const DENIED = { kind: 'denied-by-rules', rules: [] } as unknown as PermissionRe
 
 export function createAcpPermissionHandler(
   runIdRef: { current: string },
+  channelId: string,
   permissionStore: PermissionStore,
   pendingPermissionStore: PendingPermissionStore,
   getEmitter: (runId: string) => ((event: any) => void) | undefined,
+  checkPermission: (channelId: string, toolName: string, command: string) => Promise<'allow' | 'deny' | null>,
+  markAwaiting: (runId: string) => void,
 ): PermissionHandler {
   return async (request, invocation) => {
-    if (permissionStore.shouldApprove(invocation.sessionId, request.kind)) {
+    const runId = runIdRef.current;
+    if (permissionStore.shouldApprove(runId, request.kind)) {
       return APPROVED;
     }
-
-    const runId = runIdRef.current;
+    try {
+      const persistentDecision = await checkPermission(channelId, request.kind, '*');
+      if (persistentDecision === 'allow') return APPROVED;
+      if (persistentDecision === 'deny') return DENIED;
+    } catch (err) {
+      log.warn('Persistent permission check failed, falling through to ACP prompt', { runId, tool: request.kind, err });
+    }
     const detail = JSON.stringify(request);
+    markAwaiting(runId);
     getEmitter(runId)?.({
       type: 'run.awaiting',
       data: {

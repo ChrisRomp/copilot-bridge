@@ -27,7 +27,7 @@ export interface RunRouteDeps {
   runRegistry: RunRegistry;
   permissionStore: PermissionStore;
   pendingPermissionStore: PendingPermissionStore;
-  registerChannel: (channelId: string, bot: string) => Promise<void>;
+  checkPermission: (channelId: string, toolName: string, command: string) => Promise<'allow' | 'deny' | null>;
   createSessionWithPermissions: (
     channelId: string,
     bot: string,
@@ -63,19 +63,38 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
 
     const apiKey = request.apiKey;
     const channelId = session_id ?? randomUUID();
-    const runIdRef = { current: '' };
+    const existingRun = deps.runRegistry.getNonTerminalActiveRun(channelId);
+    if (existingRun) {
+      return reply.status(409).send({ error: 'Run already in progress for this session_id' });
+    }
+
+    const runId = randomUUID();
+    const runIdRef = { current: runId };
     const onPermissionRequest = createAcpPermissionHandler(
       runIdRef,
+      channelId,
       deps.permissionStore,
       deps.pendingPermissionStore,
       (runId) => deps.runRegistry.getEmitter(runId),
+      deps.checkPermission,
+      (runId) => {
+        deps.runRegistry.updateStatus(runId, 'awaiting');
+      },
     );
-    const { sessionId } = await deps.createSessionWithPermissions(channelId, agent_name, onPermissionRequest);
-    runIdRef.current = sessionId;
-    const runId = sessionId;
-
     deps.runRegistry.register(runId, { bot: agent_name, channelId, status: 'created' });
-    await deps.registerChannel(channelId, agent_name);
+
+    let sessionId: string;
+    try {
+      ({ sessionId } = await deps.createSessionWithPermissions(channelId, agent_name, onPermissionRequest));
+      deps.runRegistry.updateSdkSessionId(runId, sessionId);
+    } catch (error) {
+      deps.runRegistry.updateStatus(runId, 'failed', {
+        error: error instanceof Error ? error.message : String(error),
+        finishedAt: new Date().toISOString(),
+      });
+      throw error;
+    }
+
     deps.adapter.dispatchInboundMessage({
       platform: 'http',
       channelId,
@@ -111,7 +130,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
       return reply.status(200).send({ run_id: entry.runId, status: 'awaiting' });
     }
     if (entry.status === 'completed') {
-      const events = await deps.getSession(entry.runId)?.getMessages() ?? [];
+      const events = entry.sessionEvents ?? await deps.getSession(entry.sdkSessionId ?? entry.runId)?.getMessages() ?? [];
       const output = events
         .filter((event) => event.type === 'assistant.message')
         .map((event) => ({
@@ -142,8 +161,12 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
       return reply.status(403).send({ error: 'Not authorized for this agent' });
     }
 
-    await deps.abortSession(entry.runId).catch(() => {});
     deps.runRegistry.updateStatus(request.params.run_id, 'cancelled', { finishedAt: new Date().toISOString() });
+    deps.runRegistry.getEmitter(request.params.run_id)?.({
+      type: 'run.failed',
+      data: { run_id: request.params.run_id, error: 'cancelled' },
+    });
+    await deps.abortSession(entry.sdkSessionId ?? entry.runId).catch(() => {});
 
     return reply.status(204).send();
   });
