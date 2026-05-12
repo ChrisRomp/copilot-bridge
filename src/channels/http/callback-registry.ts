@@ -2,6 +2,7 @@ export interface CallbackEntry {
   callbackUrl: string;
   runId: string;
   bot: string;
+  callbackToken?: string;
 }
 
 export class CallbackRegistry {

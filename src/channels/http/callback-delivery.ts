@@ -37,7 +37,7 @@ export class CallbackDelivery {
           content,
           session_id: channelId,
           status: 'completed',
-        });
+        }, entry.callbackToken);
       }
       this.registry.unregister(channelId);
       return true;
@@ -52,7 +52,7 @@ export class CallbackDelivery {
         session_id: channelId,
         status: 'failed',
         error: String(errorMsg),
-      });
+      }, entry.callbackToken);
       this.registry.unregister(channelId);
       return true;
     }
@@ -60,11 +60,16 @@ export class CallbackDelivery {
     return true;
   }
 
-  private async postCallback(url: string, body: Record<string, unknown>): Promise<void> {
+  private async postCallback(url: string, body: Record<string, unknown>, callbackToken?: string): Promise<void> {
     try {
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (callbackToken) {
+        headers.authorization = `Bearer ${callbackToken}`;
+      }
+
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers,
         body: JSON.stringify(body),
       });
 

@@ -16,11 +16,12 @@ vi.mock('../../logger.js', () => ({
 const callbackUrl = 'https://example.com/callback';
 const channelId = 'channel-1';
 
-function registerCallback(registry: CallbackRegistry): void {
+function registerCallback(registry: CallbackRegistry, callbackToken?: string): void {
   registry.register(channelId, {
     callbackUrl,
     runId: 'run-1',
     bot: 'bob',
+    callbackToken,
   });
 }
 
@@ -36,10 +37,15 @@ function stubFetch(response: Partial<Response> = { ok: true, status: 200, status
   return fetchMock;
 }
 
-function expectJsonPost(fetchMock: ReturnType<typeof vi.fn>, body: Record<string, unknown>): void {
+function expectJsonPost(
+  fetchMock: ReturnType<typeof vi.fn>,
+  body: Record<string, unknown>,
+  expectedHeaders?: Record<string, string>,
+): void {
+  const headers = { 'content-type': 'application/json', ...expectedHeaders };
   expect(fetchMock).toHaveBeenCalledWith(callbackUrl, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   });
 }
@@ -93,6 +99,38 @@ describe('CallbackDelivery', () => {
       status: 'completed',
     });
     expect(registry.get(channelId)).toBeUndefined();
+  });
+
+  it('includes Authorization header when callbackToken is set', async () => {
+    const fetchMock = stubFetch();
+    const registry = new CallbackRegistry();
+    registerCallback(registry, 'secret-token');
+    const delivery = new CallbackDelivery(registry);
+
+    await delivery.handleEvent(channelId, { type: 'assistant.message', data: { content: 'done' } });
+    await expect(delivery.handleEvent(channelId, { type: 'session.idle' })).resolves.toBe(true);
+
+    expectJsonPost(fetchMock, {
+      run_id: 'run-1',
+      content: 'done',
+      session_id: channelId,
+      status: 'completed',
+    }, { authorization: 'Bearer secret-token' });
+  });
+
+  it('omits Authorization header when callbackToken is not set', async () => {
+    const fetchMock = stubFetch();
+    const { delivery } = createDelivery();
+
+    await delivery.handleEvent(channelId, { type: 'assistant.message', data: { content: 'done' } });
+    await expect(delivery.handleEvent(channelId, { type: 'session.idle' })).resolves.toBe(true);
+
+    expectJsonPost(fetchMock, {
+      run_id: 'run-1',
+      content: 'done',
+      session_id: channelId,
+      status: 'completed',
+    });
   });
 
   it('POSTs error to callback URL and unregisters on session.error', async () => {
