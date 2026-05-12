@@ -60,7 +60,10 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
       return reply.status(400).send({ error: 'Missing required field: input[0].parts[0].content' });
     }
 
-    if (!request.apiKey || !canPerformOp(request.apiKey, 'agent:execute')) {
+    if (!request.apiKey) {
+      return reply.status(401).send({ error: 'Missing or invalid Authorization header' });
+    }
+    if (!canPerformOp(request.apiKey, 'agent:execute')) {
       return reply.status(403).send({ error: 'Forbidden' });
     }
     if (!canAccessAgent(request.apiKey, agent_name)) {
@@ -118,7 +121,10 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
   });
 
   app.get<{ Params: { run_id: string } }>('/runs/:run_id', async (request, reply) => {
-    if (!request.apiKey || !canPerformOp(request.apiKey, 'agent:read')) {
+    if (!request.apiKey) {
+      return reply.status(401).send({ error: 'Missing or invalid Authorization header' });
+    }
+    if (!canPerformOp(request.apiKey, 'agent:read')) {
       return reply.status(403).send({ error: 'Forbidden' });
     }
 
@@ -156,7 +162,10 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
   });
 
   app.delete<{ Params: { run_id: string } }>('/runs/:run_id', async (request, reply) => {
-    if (!request.apiKey || !canPerformOp(request.apiKey, 'agent:execute')) {
+    if (!request.apiKey) {
+      return reply.status(401).send({ error: 'Missing or invalid Authorization header' });
+    }
+    if (!canPerformOp(request.apiKey, 'agent:execute')) {
       return reply.status(403).send({ error: 'Forbidden' });
     }
 

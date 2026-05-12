@@ -198,16 +198,19 @@ describe('registerRunRoutes', () => {
     expect(emptyResponse.statusCode).toBe(400);
   });
 
-  it('returns 202 with the requested session_id as the run_id', async () => {
+  it('returns 202 with run_id equal to the CLI-assigned session ID (not the client session_id)', async () => {
+    createSessionWithPermissions.mockResolvedValueOnce({ sessionId: 'cli-assigned-run-id' });
+
     const response = await app.inject({
       method: 'POST',
       url: '/runs',
       headers: fullAccessHeader,
-      payload: { ...validPayload, session_id: 'client-session-id' },
+      payload: { ...validPayload, session_id: 'client-channel-id' },
     });
 
     expect(response.statusCode).toBe(202);
-    expect(response.json()).toEqual({ run_id: 'client-session-id', status: 'created' });
+    expect(response.json()).toEqual({ run_id: 'cli-assigned-run-id', status: 'created' });
+    expect(response.json().run_id).not.toBe('client-channel-id');
   });
 
   it('dispatches inbound message with the request content', async () => {
@@ -365,34 +368,35 @@ describe('registerRunRoutes', () => {
     expect(updateStatus).toHaveBeenCalledWith(runId, 'awaiting');
   });
 
-  it('keeps the ACP session_id as the run_id after the previous run is terminal', async () => {
-    createSessionWithPermissions.mockResolvedValue({ sessionId: 'client-session-id' });
+  it('returns the same run_id for consecutive runs when the CLI reuses the same session', async () => {
+    createSessionWithPermissions.mockResolvedValue({ sessionId: 'cli-session-uuid' });
     const first = await app.inject({
       method: 'POST',
       url: '/runs',
       headers: fullAccessHeader,
-      payload: { ...validPayload, session_id: 'client-session-id' },
+      payload: { ...validPayload, session_id: 'my-channel' },
     });
     getNonTerminalActiveRun.mockReturnValueOnce(undefined).mockReturnValueOnce(undefined);
     const second = await app.inject({
       method: 'POST',
       url: '/runs',
       headers: fullAccessHeader,
-      payload: { ...validPayload, session_id: 'client-session-id' },
+      payload: { ...validPayload, session_id: 'my-channel' },
     });
 
     const firstRunId = first.json().run_id;
     const secondRunId = second.json().run_id;
-    expect(firstRunId).toBe('client-session-id');
-    expect(secondRunId).toBe('client-session-id');
-    expect(registerRun).toHaveBeenNthCalledWith(1, 'client-session-id', {
+    expect(firstRunId).toBe('cli-session-uuid');
+    expect(secondRunId).toBe('cli-session-uuid');
+    expect(firstRunId).not.toBe('my-channel');
+    expect(registerRun).toHaveBeenNthCalledWith(1, 'cli-session-uuid', {
       bot: 'bot-a',
-      channelId: 'client-session-id',
+      channelId: 'my-channel',
       status: 'created',
     });
-    expect(registerRun).toHaveBeenNthCalledWith(2, 'client-session-id', {
+    expect(registerRun).toHaveBeenNthCalledWith(2, 'cli-session-uuid', {
       bot: 'bot-a',
-      channelId: 'client-session-id',
+      channelId: 'my-channel',
       status: 'created',
     });
   });
