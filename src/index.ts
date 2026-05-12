@@ -576,6 +576,7 @@ async function main(): Promise<void> {
           });
           log.info(`Registered execute channel ${channelId.slice(0, 8)}... for bot "${bot}"`);
         },
+        bots: httpBots,
       });
     });
 

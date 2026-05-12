@@ -55,6 +55,7 @@ describe('registerExecuteRoutes', () => {
       adapter: adapter as HttpChannelAdapter,
       callbackRegistry,
       registerChannel,
+      bots: { bob: { callback_token: 'test-cb-token' } },
     });
   });
 
@@ -179,7 +180,32 @@ describe('registerExecuteRoutes', () => {
       callbackUrl: 'http://localhost:9999/callback',
       runId,
       bot: 'test-bot',
+      callbackToken: undefined,
     });
+  });
+
+  it('stores callback_token from bot config in registry', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/agent/execute',
+      headers: fullAccessHeader,
+      payload: createPayload({ bot: 'bob' }),
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(callbackRegistry.get('chan-123')?.callbackToken).toBe('test-cb-token');
+  });
+
+  it('stores undefined callbackToken when bot has no callback_token', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/agent/execute',
+      headers: fullAccessHeader,
+      payload: createPayload({ bot: 'missing-bot' }),
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(callbackRegistry.get('chan-123')?.callbackToken).toBeUndefined();
   });
 
   it('calls registerChannel with channelId and bot', async () => {
@@ -211,6 +237,7 @@ describe('registerExecuteRoutes', () => {
       callbackUrl: 'http://localhost:9999/callback',
       runId,
       bot: 'test-bot',
+      callbackToken: undefined,
     });
   });
 
@@ -232,6 +259,7 @@ describe('registerExecuteRoutes', () => {
       callbackUrl: 'http://localhost:9999/callback',
       runId,
       bot: 'test-bot',
+      callbackToken: undefined,
     });
   });
 });

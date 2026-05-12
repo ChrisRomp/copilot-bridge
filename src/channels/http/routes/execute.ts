@@ -8,6 +8,7 @@ export interface ExecuteRouteDeps {
   adapter: HttpChannelAdapter;
   callbackRegistry: CallbackRegistry;
   registerChannel: (channelId: string, bot: string) => Promise<void>;
+  bots: Record<string, { callback_token?: string }>;
 }
 
 type ExecuteBody = {
@@ -44,6 +45,7 @@ export function registerExecuteRoutes(
       callbackUrl: callback_url,
       runId,
       bot,
+      callbackToken: deps.bots[bot]?.callback_token,
     });
 
     await deps.registerChannel(channelId, bot);
