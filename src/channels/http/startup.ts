@@ -3,6 +3,7 @@ import type { BotConfig, HttpPlatformConfig } from '../../types.js';
 
 export type HttpRouteBotConfig = Pick<BotConfig, 'agent' | 'token'> & {
   model?: string;
+  callback_token?: string;
 };
 
 export function buildHttpAuthConfig(
@@ -34,6 +35,7 @@ export function buildHttpRouteBots(httpConfig: HttpPlatformConfig): Record<strin
       {
         token: bot.token,
         agent: bot.agent,
+        callback_token: bot.callback_token,
       },
     ]),
   );

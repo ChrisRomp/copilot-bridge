@@ -2,6 +2,7 @@
 export interface BotConfig {
   token: string;
   appToken?: string;         // app-level token for Slack Socket Mode (xapp-...)
+  callback_token?: string;   // token for authenticating callbacks to external services
   agent?: string | null;     // default agent for this bot identity
   admin?: boolean;           // admin bots can manage all workspaces
   access?: AccessConfig;     // user-level access control

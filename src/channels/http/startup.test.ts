@@ -17,6 +17,7 @@ function createHttpConfig(overrides: Partial<HttpPlatformConfig> = {}): HttpPlat
     bots: {
       bob: {
         token: 'token-1',
+        callback_token: 'cb-token-bob',
         agent: 'bob-agent',
         admin: true,
       },
@@ -74,10 +75,12 @@ describe('http startup helpers', () => {
       bob: {
         token: 'token-1',
         agent: 'bob-agent',
+        callback_token: 'cb-token-bob',
       },
       annie: {
         token: 'token-2',
         agent: undefined,
+        callback_token: undefined,
       },
     });
   });
