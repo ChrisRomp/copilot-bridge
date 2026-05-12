@@ -101,6 +101,17 @@ export interface BridgeTelemetryConfig {
   authEnv?: string;            // env var name holding the Authorization header value
 }
 
+export interface MemoryConsolidationConfig {
+  model?: string;
+  idleMinutes?: number;
+}
+
+export interface MemoryConfig {
+  tier?: 0 | 1 | 2;
+  cloudMemory?: boolean;
+  consolidation?: MemoryConsolidationConfig;
+}
+
 export interface AppConfig {
   platforms: Record<string, PlatformConfig>;
   channels: ChannelConfig[];
@@ -122,6 +133,7 @@ export interface AppConfig {
   providers?: Record<string, BridgeProviderConfig>;
   telemetry?: BridgeTelemetryConfig;
   database?: DatabaseConfig;
+  memory?: MemoryConfig;
 }
 
 export interface DatabaseConfig {

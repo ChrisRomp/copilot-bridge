@@ -304,6 +304,36 @@ function validateAndNormalize(raw: any): AppConfig {
     }
   }
 
+  // Validate memory config (optional)
+  if (raw.memory !== undefined) {
+    if (raw.memory === null || typeof raw.memory !== 'object' || Array.isArray(raw.memory)) {
+      throw new Error('"memory" must be an object');
+    }
+    const m = raw.memory;
+    if (m.tier !== undefined && ![0, 1, 2].includes(m.tier)) {
+      throw new Error('memory.tier must be 0, 1, or 2');
+    }
+    if (m.cloudMemory !== undefined && typeof m.cloudMemory !== 'boolean') {
+      throw new Error('memory.cloudMemory must be a boolean');
+    }
+    if (m.consolidation !== undefined) {
+      if (typeof m.consolidation !== 'object' || Array.isArray(m.consolidation)) {
+        throw new Error('memory.consolidation must be an object');
+      }
+      if (m.consolidation === null) {
+        throw new Error('memory.consolidation must be an object');
+      }
+      if (m.consolidation.model !== undefined && typeof m.consolidation.model !== 'string') {
+        throw new Error('memory.consolidation.model must be a string');
+      }
+      if (m.consolidation.idleMinutes !== undefined) {
+        if (typeof m.consolidation.idleMinutes !== 'number' || m.consolidation.idleMinutes < 0) {
+          throw new Error('memory.consolidation.idleMinutes must be a non-negative number');
+        }
+      }
+    }
+  }
+
   // Apply defaults
   const defaults = {
     model: 'claude-sonnet-4.6',
@@ -326,6 +356,7 @@ function validateAndNormalize(raw: any): AppConfig {
     interAgent: raw.interAgent,
     providers: raw.providers,
     telemetry: raw.telemetry,
+    memory: raw.memory ?? undefined,
     database: raw.database && typeof raw.database === 'object' && typeof raw.database.module === 'string' ? {
       module: raw.database.module,
       options: raw.database.options && typeof raw.database.options === 'object' ? raw.database.options : undefined,
@@ -489,6 +520,11 @@ function diffConfigs(oldCfg: AppConfig, newCfg: AppConfig): { changes: string[];
   if (JSON.stringify(oldCfg.telemetry ?? {}) !== JSON.stringify(newCfg.telemetry ?? {})) {
     changes.push('telemetry config updated');
     restartNeeded.push('telemetry config changed (requires restart)');
+  }
+
+  // --- Memory ---
+  if (JSON.stringify(oldCfg.memory ?? {}) !== JSON.stringify(newCfg.memory ?? {})) {
+    changes.push('memory config updated');
   }
 
   // --- Logging ---

@@ -22,12 +22,14 @@ import {
 } from './inter-agent.js';
 import { createLogger } from '../logger.js';
 import { tryWithFallback, isModelError, buildFallbackChain } from './model-fallback.js';
+import { mergeCompactionSummary, scheduleIdleConsolidation, cancelIdleConsolidation, runConsolidation, buildConsolidationPrompt } from './memory-consolidation.js';
 import type { McpServerInfo } from './command-handler.js';
 import { loadHooks, getHooksInfo, type SessionHooks, type HookInfo } from './hooks-loader.js';
 import { getBridgeDocs } from './bridge-docs.js';
 import type { SystemMessageCustomizeConfig } from '@github/copilot-sdk';
 import type {
   ChannelAdapter, InboundMessage, PendingPermission, PendingUserInput, PendingPlanExit,
+  MemoryConfig,
 } from '../types.js';
 
 const log = createLogger('session');
@@ -469,6 +471,54 @@ export function extractPlanSummary(content: string): string {
   return '(empty plan)';
 }
 
+/**
+ * Build the <memory> system message block for a workspace.
+ * Reads MEMORY.md section headlines and constructs a small pointer.
+ * Returns null if MEMORY.md doesn't exist (first run).
+ */
+export function buildMemoryPointer(workingDirectory: string, memoryConfig?: MemoryConfig): string {
+  const memoryPath = path.join(workingDirectory, 'MEMORY.md');
+  const cloudMemory = memoryConfig?.cloudMemory ?? false;
+
+  const lines: string[] = ['<memory>'];
+  lines.push('You have persistent memory in MEMORY.md in your workspace root.');
+
+  // Read section headlines if file exists
+  let exists = false;
+  try {
+    if (fs.existsSync(memoryPath)) {
+      exists = true;
+      const content = fs.readFileSync(memoryPath, 'utf-8');
+      const headings = content.split('\n')
+        .filter(line => /^##\s/.test(line))
+        .map(line => line.replace(/^##\s+/, '').trim());
+      if (headings.length > 0) {
+        lines.push(`Sections: ${headings.join(', ')}`);
+      }
+    }
+  } catch (err: any) {
+    if (err?.code !== 'ENOENT') {
+      log.warn(`Failed to read MEMORY.md from ${memoryPath}:`, err);
+    }
+  }
+
+  if (!exists) {
+    lines.push('MEMORY.md does not exist yet. Create it when you learn something worth remembering across sessions.');
+  } else {
+    lines.push('Read MEMORY.md at session start or when you need past context.');
+    lines.push('Update MEMORY.md when you learn something worth remembering across sessions.');
+  }
+
+  if (cloudMemory) {
+    lines.push('Cloud memory (store_memory/vote_memory) is also enabled for this workspace.');
+    lines.push('Use store_memory for facts that benefit from cross-session cloud persistence.');
+    lines.push('Use MEMORY.md for detailed workspace context and human-readable notes.');
+  }
+
+  lines.push('</memory>');
+  return lines.join('\n');
+}
+
 /** Load AGENTS.local.md from a workspace directory, wrapped in XML tags.
  *  Returns the wrapped content string, or undefined if the file doesn't exist or is empty. */
 export function loadLocalInstructions(workingDirectory?: string): string | undefined {
@@ -885,6 +935,11 @@ export class SessionManager {
   /** Send a message to a channel's session. Returns immediately; responses come via events. */
   async sendMessage(channelId: string, text: string, attachments?: Array<{ type: 'file'; path: string; displayName?: string }>, userId?: string): Promise<string> {
     if (userId) this.lastMessageUserIds.set(channelId, userId);
+
+    // Cancel any pending idle memory consolidation (activity resumed)
+    this.cancelMemoryConsolidation(channelId).catch((err) => {
+      log.debug(`cancelMemoryConsolidation failed:`, err);
+    });
 
     // Auto-deny any pending permissions so the session unblocks
     this.clearPendingPermissions(channelId);
@@ -1663,6 +1718,14 @@ export class SessionManager {
       '</bridge_instructions>',
     ].join('\n'));
 
+    // Memory pointer
+    if (workingDirectory) {
+      const memoryBlock = buildMemoryPointer(workingDirectory, getConfig().memory);
+      if (memoryBlock) {
+        parts.push(memoryBlock);
+      }
+    }
+
     // Load AGENTS.local.md if present (gitignored, per-operator conventions)
     const localInstructions = loadLocalInstructions(workingDirectory);
     if (localInstructions) {
@@ -1675,6 +1738,94 @@ export class SessionManager {
         custom_instructions: { action: 'append' as const, content: parts.join('\n\n') },
       },
     };
+  }
+
+  /** Compute excludedTools based on memory config (e.g., cloud memory gating). */
+  private getExcludedTools(): string[] | undefined {
+    const memCfg = getConfig().memory;
+    const cloudMemory = memCfg?.cloudMemory ?? false;
+    if (!cloudMemory) {
+      return ['store_memory', 'vote_memory'];
+    }
+    return undefined;
+  }
+
+  /**
+   * Handle compaction save — merge summaryContent into MEMORY.md.
+   * Called from index.ts on session.compaction_complete.
+   */
+  async handleCompactionSave(channelId: string, summaryContent: string): Promise<void> {
+    const workspacePath = await this.resolveWorkingDirectory(channelId);
+    await mergeCompactionSummary(workspacePath, summaryContent);
+  }
+
+  /**
+   * Schedule idle memory consolidation for a channel's workspace.
+   * Called from index.ts on session.idle.
+   */
+  async scheduleMemoryConsolidation(channelId: string): Promise<void> {
+    const workspacePath = await this.resolveWorkingDirectory(channelId);
+    const memoryPath = path.join(workspacePath, 'MEMORY.md');
+
+    // Only schedule if MEMORY.md exists
+    try {
+      fs.accessSync(memoryPath);
+    } catch {
+      return;
+    }
+
+    const memCfg = getConfig().memory;
+    scheduleIdleConsolidation(workspacePath, memCfg, async (wsPath) => {
+      await this.runMemoryConsolidation(wsPath);
+    });
+  }
+
+  /**
+   * Cancel pending memory consolidation for a channel's workspace.
+   * Called when new activity arrives (sendMessage).
+   */
+  async cancelMemoryConsolidation(channelId: string): Promise<void> {
+    const workspacePath = await this.resolveWorkingDirectory(channelId);
+    cancelIdleConsolidation(workspacePath);
+  }
+
+  /**
+   * Run memory consolidation via a background ephemeral session.
+   */
+  private async runMemoryConsolidation(workspacePath: string): Promise<void> {
+    const memCfg = getConfig().memory;
+    const consolidationModel = memCfg?.consolidation?.model;
+
+    await runConsolidation(workspacePath, async (currentContent) => {
+      const prompt = buildConsolidationPrompt(currentContent);
+      const defaultConfigDir = process.env.HOME ? `${process.env.HOME}/.copilot` : undefined;
+
+      let session: any;
+      try {
+        session = await this.bridge.createSession({
+          ...(consolidationModel ? { model: consolidationModel } : {}),
+          workingDirectory: workspacePath,
+          configDir: defaultConfigDir,
+          excludedTools: this.getExcludedTools(),
+          onPermissionRequest: async () => ({ kind: 'reject' as const }),
+          systemMessage: { content: 'You are a memory file organizer. Respond with ONLY the updated file content, no explanations or code fences.' },
+        });
+
+        const response = await this.sendAndWaitForIdle(session, prompt, 60_000);
+
+        // Strip code fences if the model wrapped the response
+        let cleaned = response.trim();
+        if (cleaned.startsWith('```')) {
+          cleaned = cleaned.replace(/^```(?:markdown)?\n?/, '').replace(/\n?```$/, '');
+        }
+
+        return cleaned;
+      } finally {
+        if (session) {
+          await this.safeDestroySession(session.sessionId);
+        }
+      }
+    });
   }
 
   private async createNewSession(channelId: string): Promise<string> {
@@ -1720,6 +1871,8 @@ export class SessionManager {
 
     const customAgents = buildCustomAgents(workingDirectory);
 
+    const excludedTools = this.getExcludedTools();
+
     const createWithModel = async (model: string) => {
       return withWorkspaceEnv(workingDirectory, () =>
         this.bridge.createSession({
@@ -1733,6 +1886,7 @@ export class SessionManager {
           mcpServers: resolvedMcpServers,
           skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
           disabledSkills,
+          excludedTools,
           onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
           onUserInputRequest: (request, invocation) => this.handleUserInputRequest(channelId, request, invocation),
           customAgents: customAgents.length > 0 ? customAgents : undefined,
@@ -1883,6 +2037,8 @@ export class SessionManager {
       log.warn(`Provider "${providerName}" set for channel ${channelId} but not found in config — using Copilot`);
     }
 
+    const excludedTools = this.getExcludedTools();
+
     const session = await withWorkspaceEnv(workingDirectory, () =>
       this.bridge.resumeSession(sessionId, {
         onPermissionRequest: (request, invocation) => this.handlePermissionRequest(channelId, request, invocation),
@@ -1896,6 +2052,7 @@ export class SessionManager {
         mcpServers,
         skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
         disabledSkills,
+        excludedTools,
         customAgents: customAgents.length > 0 ? customAgents : undefined,
         tools: customTools.length > 0 ? customTools : undefined,
         hooks,
@@ -1999,6 +2156,7 @@ export class SessionManager {
           enableConfigDiscovery: true,
           mcpServers: this.resolveMcpServers(targetWorkspace),
           skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
+          excludedTools: this.getExcludedTools(),
           onPermissionRequest: ephemeralPermissionHandler,
           systemMessage: { content: systemParts.filter(Boolean).join('\n\n') },
           tools: ephemeralTools.length > 0 ? ephemeralTools : undefined,

@@ -145,5 +145,14 @@
   "_example_database": {
     "module": "./path/to/custom-store.js",
     "options": { "connectionString": "postgresql://..." }
+  },
+  "_comment_memory": "Optional: persistent agent memory (default: tier 0 with MEMORY.md, cloud memory disabled)",
+  "_example_memory": {
+    "tier": 0,
+    "cloudMemory": false,
+    "consolidation": {
+      "model": "claude-sonnet-4.6",
+      "idleMinutes": 5
+    }
   }
 }
