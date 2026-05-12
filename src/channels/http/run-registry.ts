@@ -1,27 +1,31 @@
 import { createLogger } from '../../logger.js';
-import type { SessionEvent } from '@github/copilot-sdk';
 
 const log = createLogger('run-registry');
 
 export type RunStatus = 'created' | 'in_progress' | 'awaiting' | 'completed' | 'failed' | 'cancelled';
-export type StoredRunSessionEvent = SessionEvent | ({ type: 'bridge.permission_request'; data?: Record<string, unknown> } & Record<string, unknown>);
 
 export interface RunEntry {
   runId: string;
   bot: string;
   channelId: string;
-  sdkSessionId?: string;
   status: RunStatus;
   createdAt: string;
   finishedAt?: string;
   error?: string;
-  sessionEvents?: StoredRunSessionEvent[];
   emitter?: (event: any) => void;
 }
+
+type CancellationSuppression = {
+  expiresAt: number;
+  cleanupQueued?: boolean;
+};
+
+const CANCELLATION_SUPPRESSION_TTL_MS = 30_000;
 
 export class RunRegistry {
   private entries = new Map<string, RunEntry>();
   private activeRunByChannel = new Map<string, string>();
+  private cancellationSuppressions = new Map<string, CancellationSuppression>();
 
   register(runId: string, entry: Omit<RunEntry, 'runId' | 'createdAt'>): RunEntry {
     const runEntry: RunEntry = {
@@ -46,15 +50,6 @@ export class RunRegistry {
 
   getEmitter(runId: string): ((event: any) => void) | undefined {
     return this.entries.get(runId)?.emitter;
-  }
-
-  updateSdkSessionId(runId: string, sdkSessionId: string): boolean {
-    const entry = this.entries.get(runId);
-    if (!entry) return false;
-
-    entry.sdkSessionId = sdkSessionId;
-    log.debug('Updated run SDK session ID', { runId });
-    return true;
   }
 
   updateStatus(runId: string, status: RunStatus, extra?: { error?: string; finishedAt?: string }): boolean {
@@ -100,28 +95,45 @@ export class RunRegistry {
     return entry ? this.activeRunByChannel.get(entry.channelId) === runId : false;
   }
 
-  updateActiveRunFromSessionEvent(channelId: string, event: StoredRunSessionEvent): boolean {
-    const entry = this.getActiveRun(channelId);
-    if (!entry) return false;
-    (entry.sessionEvents ??= []).push(event);
+  recordCancellationSuppression(runId: string, channelId: string): void {
+    this.pruneCancellationSuppressions();
+    this.cancellationSuppressions.set(this.suppressionKey(runId, channelId), {
+      expiresAt: Date.now() + CANCELLATION_SUPPRESSION_TTL_MS,
+    });
+  }
 
-    if (event.type === 'session.idle') {
-      return this.updateStatus(entry.runId, 'completed', { finishedAt: new Date().toISOString() });
+  shouldSuppressCancellationTerminal(runId: string, channelId: string, event: { type?: string }): boolean {
+    if (event.type !== 'session.error') {
+      return false;
     }
-    if (event.type === 'session.error') {
-      const data = event.data as unknown as Record<string, unknown> | undefined;
-      const error = typeof data?.message === 'string'
-        ? data.message
-        : String(data?.error ?? 'session error');
-      return this.updateStatus(entry.runId, 'failed', { error, finishedAt: new Date().toISOString() });
+
+    this.pruneCancellationSuppressions();
+    const key = this.suppressionKey(runId, channelId);
+    const suppression = this.cancellationSuppressions.get(key);
+    if (!suppression) {
+      return false;
     }
-    if (event.type === 'bridge.permission_request') {
-      return this.updateStatus(entry.runId, 'awaiting');
+
+    if (!suppression.cleanupQueued) {
+      suppression.cleanupQueued = true;
+      queueMicrotask(() => {
+        this.cancellationSuppressions.delete(key);
+      });
     }
-    if (entry.status === 'created') {
-      return this.updateStatus(entry.runId, 'in_progress');
+    return true;
+  }
+
+  private suppressionKey(runId: string, channelId: string): string {
+    return `${channelId}\0${runId}`;
+  }
+
+  private pruneCancellationSuppressions(): void {
+    const now = Date.now();
+    for (const [key, suppression] of this.cancellationSuppressions) {
+      if (suppression.expiresAt <= now) {
+        this.cancellationSuppressions.delete(key);
+      }
     }
-    return false;
   }
 }
 

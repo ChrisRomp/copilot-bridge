@@ -91,6 +91,7 @@ export function registerHttpAcpRoutes(app: FastifyInstance, deps: HttpAcpRouteDe
       await deps.registerChannel(channelId, bot);
       return deps.createSessionWithPermissions(channelId, bot, onPermissionRequest);
     },
+    subscribeToSessionEvents: deps.subscribeToSessionEvents,
     getSession: deps.getSession,
     abortSession: deps.abortSession,
   });

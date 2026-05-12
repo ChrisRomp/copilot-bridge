@@ -75,7 +75,7 @@ export function registerRunEventsRoutes(app: FastifyInstance, deps: RunEventsRou
       return reply.status(403).send({ error: 'Not authorized for this agent' });
     }
 
-    const sdkEvents = entry.sessionEvents ?? await deps.getSession(entry.sdkSessionId ?? entry.runId)?.getMessages();
+    const sdkEvents = await deps.getSession(entry.runId)?.getMessages();
     if (!sdkEvents) {
       return reply.status(200).send({ events: [] });
     }

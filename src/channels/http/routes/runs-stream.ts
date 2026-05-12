@@ -39,16 +39,10 @@ export function registerRunStreamRoutes(app: FastifyInstance, deps: RunStreamRou
 
     if (isTerminalStatus(entry.status)) {
       try {
-        if (entry.sessionEvents) {
-          for (const event of entry.sessionEvents) {
-            if (!isTerminalSdkEvent(event)) {
-              writeAcpEvent(reply.raw, mapSdkEventToAcp(event as SessionEvent, entry.runId));
-            }
-          }
-        } else {
-          const session = deps.getSession(entry.sdkSessionId ?? entry.runId);
+        const session = deps.getSession(entry.runId);
+        if (session) {
           try {
-            const sdkEvents = await session?.getMessages() ?? [];
+            const sdkEvents = await session.getMessages();
             for (const event of sdkEvents) {
               if (!isTerminalSdkEvent(event)) {
                 writeAcpEvent(reply.raw, mapSdkEventToAcp(event, entry.runId));
@@ -86,13 +80,21 @@ export function registerRunStreamRoutes(app: FastifyInstance, deps: RunStreamRou
     };
 
     unsubscribe = deps.subscribeToSessionEvents(entry.channelId, (_sessionId, channelId, event) => {
-      if (closed || channelId !== entry.channelId || !deps.runRegistry.isActiveRun(entry.runId)) {
+      if (closed || channelId !== entry.channelId) {
+        return;
+      }
+
+      const terminal = isTerminalSdkEvent(event);
+      if (terminal && deps.runRegistry.shouldSuppressCancellationTerminal(entry.runId, entry.channelId, event)) {
+        return;
+      }
+      if (!terminal && !deps.runRegistry.isActiveRun(entry.runId)) {
         return;
       }
 
       writeAcpEvent(reply.raw, mapSdkEventToAcp(event as SessionEvent, entry.runId));
 
-      if (event?.type === 'session.idle' || event?.type === 'session.error') {
+      if (terminal) {
         close();
       }
     });

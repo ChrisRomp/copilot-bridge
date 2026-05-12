@@ -35,21 +35,6 @@ describe('RunRegistry', () => {
     expect(registry.get('run-1')).toEqual(registered);
   });
 
-  it('updateSdkSessionId stores the SDK session ID', () => {
-    const registry = new RunRegistry();
-
-    registry.register('run-1', entry);
-
-    expect(registry.updateSdkSessionId('run-1', 'sdk-session-1')).toBe(true);
-    expect(registry.get('run-1')?.sdkSessionId).toBe('sdk-session-1');
-  });
-
-  it('updateSdkSessionId returns false for unknown runId', () => {
-    const registry = new RunRegistry();
-
-    expect(registry.updateSdkSessionId('missing-run', 'sdk-session-1')).toBe(false);
-  });
-
   it('updateStatus returns false for unknown runId', () => {
     const registry = new RunRegistry();
 
@@ -122,11 +107,10 @@ describe('RunRegistry', () => {
   it('register marks only the newest run for a reused channel as active', () => {
     const registry = new RunRegistry();
 
-    const first = registry.register('run-1', { ...entry, sdkSessionId: 'sdk-session-1', status: 'completed' });
-    const second = registry.register('run-2', { ...entry, sdkSessionId: 'sdk-session-1', status: 'created' });
+    const first = registry.register('run-1', { ...entry, status: 'completed' });
+    const second = registry.register('run-2', { ...entry, status: 'created' });
 
     expect(first.channelId).toBe(second.channelId);
-    expect(first.sdkSessionId).toBe(second.sdkSessionId);
     expect(registry.getActiveRun('channel-1')).toBe(second);
     expect(registry.isActiveRun('run-1')).toBe(false);
     expect(registry.isActiveRun('run-2')).toBe(true);
@@ -145,8 +129,8 @@ describe('RunRegistry', () => {
   it('terminal status clears only the matching active run', () => {
     const registry = new RunRegistry();
 
-    registry.register('run-1', { ...entry, sdkSessionId: 'sdk-session-1', status: 'completed' });
-    const second = registry.register('run-2', { ...entry, sdkSessionId: 'sdk-session-1', status: 'created' });
+    registry.register('run-1', { ...entry, status: 'completed' });
+    const second = registry.register('run-2', { ...entry, status: 'created' });
 
     registry.updateStatus('run-1', 'failed', { error: 'late error' });
     expect(registry.getActiveRun('channel-1')).toBe(second);
@@ -155,28 +139,4 @@ describe('RunRegistry', () => {
     expect(registry.getActiveRun('channel-1')).toBeUndefined();
   });
 
-  it('session events update only the active run for a reused channel and SDK session', () => {
-    const registry = new RunRegistry();
-    const originalFinishedAt = '2026-05-12T00:00:00.000Z';
-
-    registry.register('run-1', {
-      ...entry,
-      sdkSessionId: 'sdk-session-1',
-      status: 'completed',
-      finishedAt: originalFinishedAt,
-    });
-    registry.register('run-2', { ...entry, sdkSessionId: 'sdk-session-1', status: 'created' });
-
-    expect(registry.updateActiveRunFromSessionEvent('channel-1', { type: 'session.idle' } as import('@github/copilot-sdk').SessionEvent)).toBe(true);
-
-    expect(registry.get('run-1')).toMatchObject({
-      status: 'completed',
-      finishedAt: originalFinishedAt,
-    });
-    expect(registry.get('run-2')).toMatchObject({
-      status: 'completed',
-      finishedAt: expect.any(String),
-    });
-    expect(registry.get('run-2')?.finishedAt).not.toBe(originalFinishedAt);
-  });
 });

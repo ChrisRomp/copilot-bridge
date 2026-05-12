@@ -54,40 +54,56 @@ describe('registerRunRoutes', () => {
   let registerRun: ReturnType<typeof vi.fn>;
   let getRun: ReturnType<typeof vi.fn>;
   let updateStatus: ReturnType<typeof vi.fn>;
-  let updateSdkSessionId: ReturnType<typeof vi.fn>;
+  let unregisterRun: ReturnType<typeof vi.fn>;
   let getNonTerminalActiveRun: ReturnType<typeof vi.fn>;
   let getEmitter: ReturnType<typeof vi.fn>;
   let createSessionWithPermissions: ReturnType<typeof vi.fn>;
+  let subscribeToSessionEvents: ReturnType<typeof vi.fn>;
+  let unsubscribe: ReturnType<typeof vi.fn>;
+  let capturedHandler: ((sessionId: string, channelId: string, event: unknown) => void) | undefined;
   let checkPermission: ReturnType<typeof vi.fn>;
   let getSession: ReturnType<typeof vi.fn>;
   let abortSession: ReturnType<typeof vi.fn>;
+  let recordCancellationSuppression: ReturnType<typeof vi.fn>;
+  let shouldSuppressCancellationTerminal: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     dispatchInboundMessage = vi.fn();
     registerRun = vi.fn().mockReturnValue(makeRunEntry());
     getRun = vi.fn();
     updateStatus = vi.fn().mockReturnValue(true);
-    updateSdkSessionId = vi.fn().mockReturnValue(true);
+    unregisterRun = vi.fn().mockReturnValue(true);
     getNonTerminalActiveRun = vi.fn().mockReturnValue(undefined);
     getEmitter = vi.fn();
-    createSessionWithPermissions = vi.fn().mockResolvedValue({ sessionId: 'mock-session-id' });
+    createSessionWithPermissions = vi.fn(async (channelId: string) => ({ sessionId: channelId }));
+    unsubscribe = vi.fn();
+    capturedHandler = undefined;
+    subscribeToSessionEvents = vi.fn((_channelId, handler) => {
+      capturedHandler = handler;
+      return unsubscribe;
+    });
     checkPermission = vi.fn().mockResolvedValue(null);
     getSession = vi.fn();
     abortSession = vi.fn().mockResolvedValue(undefined);
+    recordCancellationSuppression = vi.fn();
+    shouldSuppressCancellationTerminal = vi.fn().mockReturnValue(false);
     deps = {
       adapter: { dispatchInboundMessage } as Partial<RunRouteDeps['adapter']> as RunRouteDeps['adapter'],
       runRegistry: {
         register: registerRun,
         get: getRun,
         updateStatus,
-        updateSdkSessionId,
+        unregister: unregisterRun,
         getNonTerminalActiveRun,
         getEmitter,
+        recordCancellationSuppression,
+        shouldSuppressCancellationTerminal,
       } as Partial<RunRegistry> as RunRegistry,
       permissionStore: { shouldApprove: vi.fn() } as unknown as PermissionStore,
       pendingPermissionStore: { park: vi.fn() } as unknown as PendingPermissionStore,
       checkPermission,
       createSessionWithPermissions,
+      subscribeToSessionEvents,
       getSession,
       abortSession,
     };
@@ -182,17 +198,16 @@ describe('registerRunRoutes', () => {
     expect(emptyResponse.statusCode).toBe(400);
   });
 
-  it('returns 202 with an ACP run_id independent from the ensured SDK sessionId', async () => {
+  it('returns 202 with the requested session_id as the run_id', async () => {
     const response = await app.inject({
       method: 'POST',
       url: '/runs',
       headers: fullAccessHeader,
-      payload: validPayload,
+      payload: { ...validPayload, session_id: 'client-session-id' },
     });
 
     expect(response.statusCode).toBe(202);
-    expect(response.json()).toEqual({ run_id: expect.any(String), status: 'created' });
-    expect(response.json().run_id).not.toBe('mock-session-id');
+    expect(response.json()).toEqual({ run_id: 'client-session-id', status: 'created' });
   });
 
   it('dispatches inbound message with the request content', async () => {
@@ -237,9 +252,10 @@ describe('registerRunRoutes', () => {
     expect(dispatchInboundMessage).not.toHaveBeenCalled();
   });
 
-  it('permits a later run on the same ACP session_id after the prior run is terminal', async () => {
+  it('marks a run completed on session idle and permits a later run on the same session_id', async () => {
     const registry = new RunRegistry();
     deps.runRegistry = registry;
+    createSessionWithPermissions.mockResolvedValue({ sessionId: 'client-session-id' });
 
     const first = await app.inject({
       method: 'POST',
@@ -256,7 +272,9 @@ describe('registerRunRoutes', () => {
       payload: { ...validPayload, session_id: 'client-session-id' },
     });
 
-    registry.updateStatus(firstRunId, 'completed', { finishedAt: '2026-05-12T00:00:00.000Z' });
+    capturedHandler?.('client-session-id', 'client-session-id', { type: 'session.idle' });
+    expect(registry.get(firstRunId)?.status).toBe('completed');
+    expect(registry.get(firstRunId)?.finishedAt).toEqual(expect.any(String));
     const afterTerminal = await app.inject({
       method: 'POST',
       url: '/runs',
@@ -267,36 +285,69 @@ describe('registerRunRoutes', () => {
     expect(first.statusCode).toBe(202);
     expect(conflict.statusCode).toBe(409);
     expect(afterTerminal.statusCode).toBe(202);
-    expect(afterTerminal.json().run_id).not.toBe(firstRunId);
+    expect(afterTerminal.json().run_id).toBe(firstRunId);
     expect(createSessionWithPermissions).toHaveBeenCalledTimes(2);
     expect(dispatchInboundMessage).toHaveBeenCalledTimes(2);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('registers the ACP run before creating the SDK session to reserve the channel', async () => {
-    await app.inject({
+  it('marks a run failed on session error and permits a later run on the same session_id', async () => {
+    const registry = new RunRegistry();
+    deps.runRegistry = registry;
+    createSessionWithPermissions.mockResolvedValue({ sessionId: 'client-session-id' });
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      headers: fullAccessHeader,
+      payload: { ...validPayload, session_id: 'client-session-id' },
+    });
+    const firstRunId = first.json().run_id;
+
+    const conflict = await app.inject({
       method: 'POST',
       url: '/runs',
       headers: fullAccessHeader,
       payload: { ...validPayload, session_id: 'client-session-id' },
     });
 
-    expect(createSessionWithPermissions).toHaveBeenCalledWith(
-      'client-session-id',
-      'bot-a',
-      expect.any(Function),
-    );
-    const [runId, entry] = registerRun.mock.calls[0];
-    expect(runId).toEqual(expect.any(String));
-    expect(runId).not.toBe('mock-session-id');
-    expect(entry).toEqual({
-      bot: 'bot-a',
-      channelId: 'client-session-id',
-      status: 'created',
+    capturedHandler?.('client-session-id', 'client-session-id', {
+      type: 'session.error',
+      data: { message: 'boom' },
     });
-    expect(updateSdkSessionId).toHaveBeenCalledWith(runId, 'mock-session-id');
+    expect(registry.get(firstRunId)?.status).toBe('failed');
+    expect(registry.get(firstRunId)?.error).toBe('boom');
+    expect(registry.get(firstRunId)?.finishedAt).toEqual(expect.any(String));
+    const afterTerminal = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      headers: fullAccessHeader,
+      payload: { ...validPayload, session_id: 'client-session-id' },
+    });
+
+    expect(first.statusCode).toBe(202);
+    expect(conflict.statusCode).toBe(409);
+    expect(afterTerminal.statusCode).toBe(202);
+    expect(createSessionWithPermissions).toHaveBeenCalledTimes(2);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(2);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('updates the run status to awaiting when the per-run permission handler parks a request', async () => {
+  it('returns 500 when session creation fails', async () => {
+    createSessionWithPermissions.mockRejectedValue(new Error('create failed'));
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      headers: fullAccessHeader,
+      payload: { ...validPayload, session_id: 'client-session-id' },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(dispatchInboundMessage).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for GET when run_id is unknown', async () => {
     const response = await app.inject({
       method: 'POST',
       url: '/runs',
@@ -314,7 +365,8 @@ describe('registerRunRoutes', () => {
     expect(updateStatus).toHaveBeenCalledWith(runId, 'awaiting');
   });
 
-  it('returns distinct run_id values after the previous run for the ACP session_id is terminal', async () => {
+  it('keeps the ACP session_id as the run_id after the previous run is terminal', async () => {
+    createSessionWithPermissions.mockResolvedValue({ sessionId: 'client-session-id' });
     const first = await app.inject({
       method: 'POST',
       url: '/runs',
@@ -331,17 +383,32 @@ describe('registerRunRoutes', () => {
 
     const firstRunId = first.json().run_id;
     const secondRunId = second.json().run_id;
-    expect(firstRunId).not.toBe(secondRunId);
-    expect(registerRun).toHaveBeenNthCalledWith(1, firstRunId, {
+    expect(firstRunId).toBe('client-session-id');
+    expect(secondRunId).toBe('client-session-id');
+    expect(registerRun).toHaveBeenNthCalledWith(1, 'client-session-id', {
       bot: 'bot-a',
       channelId: 'client-session-id',
       status: 'created',
     });
-    expect(registerRun).toHaveBeenNthCalledWith(2, secondRunId, {
+    expect(registerRun).toHaveBeenNthCalledWith(2, 'client-session-id', {
       bot: 'bot-a',
       channelId: 'client-session-id',
       status: 'created',
     });
+  });
+
+  it('returns 500 when session creation fails', async () => {
+    createSessionWithPermissions.mockRejectedValue(new Error('create failed'));
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      headers: fullAccessHeader,
+      payload: { ...validPayload, session_id: 'client-session-id' },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(dispatchInboundMessage).not.toHaveBeenCalled();
   });
 
   it('returns 404 for GET when run_id is unknown', async () => {
@@ -503,5 +570,89 @@ describe('registerRunRoutes', () => {
       type: 'run.failed',
       data: { run_id: 'mock-session-id', error: 'cancelled' },
     });
+  });
+
+  it('keeps DELETE cancellation terminal when abort later emits session error', async () => {
+    const registry = new RunRegistry();
+    deps.runRegistry = registry;
+    createSessionWithPermissions.mockResolvedValue({ sessionId: 'client-session-id' });
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      headers: fullAccessHeader,
+      payload: { ...validPayload, session_id: 'client-session-id' },
+    });
+    const deleteResponse = await app.inject({
+      method: 'DELETE',
+      url: '/runs/client-session-id',
+      headers: fullAccessHeader,
+    });
+
+    capturedHandler?.('client-session-id', 'client-session-id', {
+      type: 'session.error',
+      data: { message: 'abort failed' },
+    });
+
+    expect(createResponse.statusCode).toBe(202);
+    expect(deleteResponse.statusCode).toBe(204);
+    expect(registry.get('client-session-id')?.status).toBe('cancelled');
+    expect(registry.get('client-session-id')?.error).toBeUndefined();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(abortSession).toHaveBeenCalledWith('client-session-id');
+  });
+
+  it('prevents a current watcher from treating a stale abort error as the later run terminal', async () => {
+    const registry = new RunRegistry();
+    const subscribers = new Set<(sessionId: string, channelId: string, event: unknown) => void>();
+    const unsubscribes: Array<ReturnType<typeof vi.fn>> = [];
+    deps.runRegistry = registry;
+    deps.subscribeToSessionEvents = vi.fn((_channelId, handler) => {
+      subscribers.add(handler);
+      const stop = vi.fn(() => subscribers.delete(handler));
+      unsubscribes.push(stop);
+      return stop;
+    });
+    createSessionWithPermissions.mockResolvedValue({ sessionId: 'client-session-id' });
+
+    const firstCreate = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      headers: fullAccessHeader,
+      payload: { ...validPayload, session_id: 'client-session-id' },
+    });
+    const deleteResponse = await app.inject({
+      method: 'DELETE',
+      url: '/runs/client-session-id',
+      headers: fullAccessHeader,
+    });
+    const secondCreate = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      headers: fullAccessHeader,
+      payload: { ...validPayload, session_id: 'client-session-id' },
+    });
+
+    for (const handler of Array.from(subscribers)) {
+      handler('client-session-id', 'client-session-id', {
+        type: 'session.error',
+        data: { message: 'stale abort error' },
+      });
+    }
+    const afterStaleError = registry.get('client-session-id');
+    const afterStaleStatus = afterStaleError?.status;
+    const afterStaleMessage = afterStaleError?.error;
+    for (const handler of Array.from(subscribers)) {
+      handler('client-session-id', 'client-session-id', { type: 'session.idle' });
+    }
+
+    expect(firstCreate.statusCode).toBe(202);
+    expect(deleteResponse.statusCode).toBe(204);
+    expect(secondCreate.statusCode).toBe(202);
+    expect(afterStaleStatus).toBe('created');
+    expect(afterStaleMessage).toBeUndefined();
+    expect(registry.get('client-session-id')?.status).toBe('completed');
+    expect(unsubscribes[0]).toHaveBeenCalledTimes(1);
+    expect(unsubscribes[1]).toHaveBeenCalledTimes(1);
   });
 });

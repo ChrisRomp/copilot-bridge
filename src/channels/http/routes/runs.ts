@@ -33,11 +33,17 @@ export interface RunRouteDeps {
     bot: string,
     onPermissionRequest: PermissionHandler,
   ) => Promise<{ sessionId: string }>;
+  subscribeToSessionEvents: (
+    channelId: string,
+    handler: (sessionId: string, channelId: string, event: unknown) => void,
+  ) => () => void;
   getSession: (sessionId: string) => { getMessages(): Promise<import('@github/copilot-sdk').SessionEvent[]> } | undefined;
   abortSession: (sessionId: string) => Promise<void>;
 }
 
 export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): void {
+  const runWatchers = new Map<string, () => void>();
+
   app.post<{ Body: RunCreateBody; Reply: RunCreateResponse | { error: string } }>('/runs', async (request, reply) => {
     const body = request.body ?? {} as Partial<RunCreateBody>;
     const { agent_name, input, session_id } = body;
@@ -68,8 +74,8 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
       return reply.status(409).send({ error: 'Run already in progress for this session_id' });
     }
 
-    const runId = randomUUID();
-    const runIdRef = { current: runId };
+    // Empty ref - filled in after session creation with the CLI-assigned sessionId
+    const runIdRef = { current: '' };
     const onPermissionRequest = createAcpPermissionHandler(
       runIdRef,
       channelId,
@@ -81,19 +87,21 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
         deps.runRegistry.updateStatus(runId, 'awaiting');
       },
     );
-    deps.runRegistry.register(runId, { bot: agent_name, channelId, status: 'created' });
 
+    // Create session first - CLI assigns the sessionId, which becomes the run_id
     let sessionId: string;
     try {
       ({ sessionId } = await deps.createSessionWithPermissions(channelId, agent_name, onPermissionRequest));
-      deps.runRegistry.updateSdkSessionId(runId, sessionId);
     } catch (error) {
-      deps.runRegistry.updateStatus(runId, 'failed', {
-        error: error instanceof Error ? error.message : String(error),
-        finishedAt: new Date().toISOString(),
-      });
       throw error;
     }
+
+    // runId IS the CLI sessionId - one ID, no mapping needed
+    const runId = sessionId;
+    runIdRef.current = runId;
+
+    deps.runRegistry.register(runId, { bot: agent_name, channelId, status: 'created' });
+    watchRunUntilTerminal(runId, channelId, deps, runWatchers);
 
     deps.adapter.dispatchInboundMessage({
       platform: 'http',
@@ -130,7 +138,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
       return reply.status(200).send({ run_id: entry.runId, status: 'awaiting' });
     }
     if (entry.status === 'completed') {
-      const events = entry.sessionEvents ?? await deps.getSession(entry.sdkSessionId ?? entry.runId)?.getMessages() ?? [];
+      const events = await deps.getSession(entry.runId)?.getMessages() ?? [];
       const output = events
         .filter((event) => event.type === 'assistant.message')
         .map((event) => ({
@@ -161,13 +169,75 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
       return reply.status(403).send({ error: 'Not authorized for this agent' });
     }
 
-    deps.runRegistry.updateStatus(request.params.run_id, 'cancelled', { finishedAt: new Date().toISOString() });
-    deps.runRegistry.getEmitter(request.params.run_id)?.({
+    const runId = request.params.run_id;
+    runWatchers.get(runId)?.();
+    deps.runRegistry.recordCancellationSuppression(runId, entry.channelId);
+    deps.runRegistry.updateStatus(runId, 'cancelled', { finishedAt: new Date().toISOString() });
+    deps.runRegistry.getEmitter(runId)?.({
       type: 'run.failed',
-      data: { run_id: request.params.run_id, error: 'cancelled' },
+      data: { run_id: runId, error: 'cancelled' },
     });
-    await deps.abortSession(entry.sdkSessionId ?? entry.runId).catch(() => {});
+    await deps.abortSession(entry.runId).catch(() => {});
 
     return reply.status(204).send();
   });
+}
+
+function watchRunUntilTerminal(
+  runId: string,
+  channelId: string,
+  deps: RunRouteDeps,
+  runWatchers: Map<string, () => void>,
+): () => void {
+  let active = true;
+  let unsubscribe = (): void => undefined;
+  const stopWatchingRun = (): void => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    unsubscribe();
+    if (runWatchers.get(runId) === stopWatchingRun) {
+      runWatchers.delete(runId);
+    }
+  };
+  runWatchers.set(runId, stopWatchingRun);
+  unsubscribe = deps.subscribeToSessionEvents(channelId, (eventSessionId, eventChannelId, event) => {
+    if (!active || eventSessionId !== runId || eventChannelId !== channelId || !isRecord(event)) {
+      return;
+    }
+
+    if (event.type === 'session.idle') {
+      deps.runRegistry.updateStatus(runId, 'completed', { finishedAt: new Date().toISOString() });
+      stopWatchingRun();
+    } else if (event.type === 'session.error') {
+      if (deps.runRegistry.shouldSuppressCancellationTerminal(runId, channelId, event)) {
+        return;
+      }
+      deps.runRegistry.updateStatus(runId, 'failed', {
+        finishedAt: new Date().toISOString(),
+        error: readErrorMessage(event),
+      });
+      stopWatchingRun();
+    }
+  });
+  if (!active) {
+    unsubscribe();
+  }
+  return stopWatchingRun;
+}
+
+function readErrorMessage(event: Record<string, unknown>): string {
+  const data = event.data;
+  if (isRecord(data)) {
+    const message = data.message ?? data.error;
+    if (typeof message === 'string') {
+      return message;
+    }
+  }
+  return '';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

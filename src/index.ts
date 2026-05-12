@@ -20,7 +20,6 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig, DatabaseConfig, HttpPlatformConfig } from './types.js';
-import type { RunRegistry } from './channels/http/run-registry.js';
 
 const log = createLogger('bridge');
 
@@ -56,7 +55,6 @@ const eventLocks = new Map<string, Promise<void>>();
 
 type HttpSessionEventSubscriber = (sessionId: string, channelId: string, event: unknown) => void;
 const httpSessionEventSubscribers = new Map<string, Set<HttpSessionEventSubscriber>>();
-let httpRunRegistry: RunRegistry | null = null;
 
 // Channels in "quiet mode" — all streaming output suppressed until we determine
 // whether the response is NO_REPLY. Used for scheduled tasks and silent cron jobs.
@@ -249,11 +247,6 @@ function emitHttpSessionEvent(sessionId: string, channelId: string, event: unkno
       log.warn('HTTP session event subscriber failed:', err);
     }
   }
-}
-
-function updateHttpRunState(channelId: string, event: any): void {
-  if (!httpRunRegistry) return;
-  httpRunRegistry.updateActiveRunFromSessionEvent(channelId, event);
 }
 
 async function getAdapterForChannel(channelId: string): Promise<{ adapter: ChannelAdapter; streaming: StreamingHandler } | null> {
@@ -589,7 +582,7 @@ async function main(): Promise<void> {
       const createdHttpAdapter = new HttpChannelAdapter(server);
       httpAdapter = createdHttpAdapter;
       registerAuthHook(server, authConfig);
-      const routeStores = registerHttpAcpRoutes(server, {
+      registerHttpAcpRoutes(server, {
         adapter: createdHttpAdapter,
         bots: httpBots,
         registerChannel: registerHttpChannel,
@@ -614,7 +607,6 @@ async function main(): Promise<void> {
         addPermissionRule,
         checkPermission,
       });
-      httpRunRegistry = routeStores.runRegistry;
     });
 
     if (!httpAdapter) {
@@ -2137,7 +2129,6 @@ async function handleSessionEvent(
   lastSessionIds.set(channelId, sessionId);
 
   emitHttpSessionEvent(sessionId, channelId, event);
-  updateHttpRunState(channelId, event);
 
   if (event.type === 'session.error' || event.type?.includes('error')) {
     log.error(`SDK error event: ${JSON.stringify(event).slice(0, 1000)}`);
