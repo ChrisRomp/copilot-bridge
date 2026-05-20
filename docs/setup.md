@@ -6,7 +6,7 @@ This guide walks you through installing and configuring copilot-bridge from scra
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| **Node.js** | 20+ | [nodejs.org](https://nodejs.org/) |
+| **Node.js** | 22+ | [nodejs.org](https://nodejs.org/) |
 | **GitHub Copilot CLI** | latest | Installed automatically via `npm install` (bundled in `@github/copilot-sdk`) |
 | **Chat platform** | — | At least one: **Mattermost** 7+ or **Slack** workspace with admin access to create apps/bots |
 

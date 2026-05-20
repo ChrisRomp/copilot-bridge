@@ -47,7 +47,7 @@ More screenshots [here](docs/screenshots.md).
 
 ## Quick Start
 
-1. **Prerequisites**: Node.js 20+, GitHub Copilot CLI installed and authenticated
+1. **Prerequisites**: Node.js 22+, GitHub Copilot CLI installed and authenticated
 2. **Install** (pick one):
    - **npm**: `npm install -g @chrisromp/copilot-bridge`
    - **From source**: `git clone https://github.com/ChrisRomp/copilot-bridge.git && cd copilot-bridge && npm install`
