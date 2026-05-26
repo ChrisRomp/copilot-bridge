@@ -17,6 +17,7 @@ import {
   type TelemetryConfig,
   type ProviderConfig,
 } from '@github/copilot-sdk';
+import os from 'node:os';
 import type { SessionHooks } from './hooks-loader.js';
 import type { BridgeProviderConfig } from '../types.js';
 
@@ -37,9 +38,10 @@ export class CopilotBridge {
 
   onLifecycleEvent?: SessionLifecycleHandler;
 
-  constructor(options?: { telemetry?: TelemetryConfig; env?: NodeJS.ProcessEnv }) {
+  constructor(options?: { telemetry?: TelemetryConfig; env?: NodeJS.ProcessEnv; cwd?: string }) {
     this.client = new CopilotClient({
       autoStart: true,
+      cwd: options?.cwd ?? os.homedir(),
       telemetry: options?.telemetry,
       env: options?.env,
     });

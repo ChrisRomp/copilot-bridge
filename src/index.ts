@@ -449,7 +449,9 @@ async function main(): Promise<void> {
 
   // Initialize Copilot SDK bridge
   const { telemetry: sdkTelemetry, env: telemetryEnv } = resolveTelemetryConfig(config);
-  const bridge = new CopilotBridge(sdkTelemetry || telemetryEnv ? { telemetry: sdkTelemetry, env: telemetryEnv } : undefined);
+  const bridge = new CopilotBridge(sdkTelemetry || telemetryEnv
+  ? { telemetry: sdkTelemetry, env: telemetryEnv, cwd: os.homedir() }
+  : { cwd: os.homedir() });
   await bridge.start();
   log.info('Copilot SDK connected');
 
