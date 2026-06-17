@@ -16,6 +16,11 @@ const copilotModelsTokenBilling: ModelInfo[] = [
   { id: 'claude-opus-4.6', name: 'Claude Opus 4.6', billing: { token_prices: { batch_size: 1000000, cache_price: 50000000000, input_price: 500000000000, output_price: 2500000000000 } }, supportedReasoningEfforts: ['low', 'medium', 'high'] },
 ];
 
+const copilotModelsCurrentTokenBilling: ModelInfo[] = [
+  { id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6', billing: { tokenPrices: { batchSize: 1000000, cachePrice: 30, inputPrice: 300, outputPrice: 1500 } } },
+  { id: 'gpt-5.4', name: 'GPT-5.4', billing: { tokenPrices: { batchSize: 1000000, cachePrice: 25, inputPrice: 250, outputPrice: 1500 } } },
+];
+
 const byokModels: ModelInfo[] = [
   { id: 'ollama-local:qwen3:8b', name: 'Qwen 3 8B' },
   { id: 'ollama-local:qwen3:14b', name: 'Qwen 3 14B' },
@@ -151,7 +156,7 @@ describe('/model command listing', () => {
 
   it('shows current model indicator for Copilot model', async () => {
     const result = await handleCommand(channelId, '/model', sessionInfo, prefs, meta, allModels, undefined, null, providers);
-    expect(result.response).toContain('<- current');
+    expect(result.response).toContain('| current |');
   });
 
   it('filters by provider name', async () => {
@@ -167,7 +172,7 @@ describe('/model command listing', () => {
     const sections = result.response!.split('**ollama-local**');
     expect(sections[0]).toMatch(/\| Model \| (Billing|Input) \|/);
     // BYOK section table header should NOT have Billing/pricing
-    const byokTable = sections[1].split('🧠')[0]; // before the legend
+    const byokTable = sections[1].match(/\| Model[\s\S]*?(?=\n\n)/)?.[0] ?? sections[1];
     expect(byokTable).not.toContain('Billing');
     expect(byokTable).not.toContain('Input');
   });
@@ -201,6 +206,19 @@ describe('/model command listing', () => {
     // Anthropic note and docs link (claude models present)
     expect(result.response).toContain('cache write');
     expect(result.response).toContain('models-and-pricing');
+  });
+
+  it('shows token-based pricing columns when API returns tokenPrices', async () => {
+    const result = await handleCommand(channelId, '/model', sessionInfo, prefs, meta, copilotModelsCurrentTokenBilling);
+    expect(result.response).toContain('| Input |');
+    expect(result.response).toContain('| Cached input |');
+    expect(result.response).toContain('| Output |');
+    expect(result.response).toContain('$3.00');
+    expect(result.response).toContain('$0.30');
+    expect(result.response).toContain('$15.00');
+    expect(result.response).toContain('$2.50');
+    expect(result.response).toContain('$0.25');
+    expect(result.response).toContain('$/M tokens');
   });
 
   it('shows multiplier billing when API returns multiplier', async () => {

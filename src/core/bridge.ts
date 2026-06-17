@@ -16,12 +16,19 @@ import {
   type Tool,
   type TelemetryConfig,
   type ProviderConfig,
+  type ContextTier,
 } from '@github/copilot-sdk';
 import type { SessionHooks } from './hooks-loader.js';
 import type { BridgeProviderConfig } from '../types.js';
 
 // Re-export SDK ProviderConfig under the old name for backward compat
 export type SDKProviderConfig = ProviderConfig;
+export type SDKReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+export type SDKContextTier = ContextTier;
+type RuntimeSetModelOptions = {
+  reasoningEffort?: SDKReasoningEffort | 'none';
+  contextTier?: SDKContextTier;
+};
 
 // SDK types not re-exported from package root
 type UserInputHandler = (
@@ -39,7 +46,6 @@ export class CopilotBridge {
 
   constructor(options?: { telemetry?: TelemetryConfig; env?: NodeJS.ProcessEnv }) {
     this.client = new CopilotClient({
-      autoStart: true,
       telemetry: options?.telemetry,
       env: options?.env,
     });
@@ -49,7 +55,7 @@ export class CopilotBridge {
     if (this.started) return;
     await this.client.start();
     this.started = true;
-    this.lifecycleUnsubscribe = this.client.on((event) => {
+    this.lifecycleUnsubscribe = this.client.onLifecycle((event) => {
       this.onLifecycleEvent?.(event);
     });
   }
@@ -71,7 +77,8 @@ export class CopilotBridge {
     provider?: SDKProviderConfig;
     workingDirectory?: string;
     configDir?: string;
-    reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+    reasoningEffort?: SDKReasoningEffort;
+    contextTier?: SDKContextTier;
     agent?: string;
     mcpServers?: Record<string, MCPServerConfig>;
     skillDirectories?: string[];
@@ -92,8 +99,9 @@ export class CopilotBridge {
       model: opts.model,
       provider: opts.provider,
       workingDirectory: opts.workingDirectory,
-      configDir: opts.configDir,
+      configDirectory: opts.configDir,
       reasoningEffort: opts.reasoningEffort,
+      contextTier: opts.contextTier,
       agent: opts.agent,
       mcpServers: opts.mcpServers,
       skillDirectories: opts.skillDirectories,
@@ -124,7 +132,8 @@ export class CopilotBridge {
       configDir?: string;
       workingDirectory?: string;
       provider?: SDKProviderConfig;
-      reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+      reasoningEffort?: SDKReasoningEffort;
+      contextTier?: SDKContextTier;
       agent?: string;
       mcpServers?: Record<string, MCPServerConfig>;
       skillDirectories?: string[];
@@ -147,10 +156,11 @@ export class CopilotBridge {
       systemMessage: opts?.systemMessage,
       customAgents: opts?.customAgents,
       enableConfigDiscovery: opts?.enableConfigDiscovery,
-      configDir: opts?.configDir,
+      configDirectory: opts?.configDir,
       workingDirectory: opts?.workingDirectory,
       provider: opts?.provider,
       reasoningEffort: opts?.reasoningEffort,
+      contextTier: opts?.contextTier,
       agent: opts?.agent,
       mcpServers: opts?.mcpServers,
       skillDirectories: opts?.skillDirectories,
@@ -272,13 +282,18 @@ export class CopilotBridge {
     return session.rpc.model.getCurrent();
   }
 
-  async switchSessionModel(id: string, modelId: string, options?: { reasoningEffort?: string }): Promise<void> {
+  async switchSessionModel(id: string, modelId: string, options?: { reasoningEffort?: string | null; contextTier?: string | null }): Promise<void> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Session ${id} not active`);
-    const opts = options?.reasoningEffort
-      ? { reasoningEffort: options.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' }
-      : undefined;
-    await session.setModel(modelId, opts);
+    const opts: RuntimeSetModelOptions = {};
+    if (options) {
+      if (options.reasoningEffort === null) opts.reasoningEffort = 'none';
+      else if (options.reasoningEffort) opts.reasoningEffort = options.reasoningEffort as SDKReasoningEffort;
+      if (options.contextTier) opts.contextTier = options.contextTier as SDKContextTier;
+    }
+    const sdkOpts = Object.keys(opts).length > 0 ? opts : undefined;
+    // SDK typings lag the runtime: setModel accepts contextTier and "none" to clear reasoning.
+    await session.setModel(modelId, sdkOpts as Parameters<CopilotSession['setModel']>[1]);
   }
 
   async listAgents(id: string): Promise<any> {

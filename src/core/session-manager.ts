@@ -1196,8 +1196,32 @@ export class SessionManager {
       }
     } else {
       // Same provider — use RPC model switch (with session retry)
-      await this.withSessionRetry(channelId, (sid) => this.bridge.switchSessionModel(sid, model));
-      try { await setChannelPrefs(channelId, { model, provider: newProvider }); }
+      let reasoningEffort = currentPrefs.reasoningEffort;
+      if (reasoningEffort) {
+        try {
+          const models = await this.bridge.listModels(getConfig().providers);
+          const targetId = newProvider ? `${newProvider}:${model}` : model;
+          const target = models.find((m: any) => m.id === targetId);
+          const supported = (target as any)?.supportedReasoningEfforts;
+          const explicitlyUnsupported = (target as any)?.capabilities?.supports?.reasoningEffort === false;
+          if ((Array.isArray(supported) && !supported.includes(reasoningEffort)) || explicitlyUnsupported) {
+            reasoningEffort = null;
+          }
+        } catch (err) {
+          log.debug('listModels for reasoning-effort switch validation failed:', err);
+        }
+      }
+      await this.withSessionRetry(channelId, (sid) =>
+        this.bridge.switchSessionModel(sid, model, {
+          reasoningEffort,
+          contextTier: newProvider ? null : currentPrefs.contextTier,
+        })
+      );
+      try { await setChannelPrefs(channelId, {
+        model,
+        provider: newProvider,
+        ...(currentPrefs.reasoningEffort && !reasoningEffort ? { reasoningEffort: null } : {}),
+      }); }
       catch (e) { log.warn('Model switched but failed to persist preference:', e); }
     }
 
@@ -1261,14 +1285,34 @@ export class SessionManager {
     const prefs = await this.getEffectivePrefs(channelId);
     const model = prefs.model;
     await this.withSessionRetry(channelId, (sid) =>
-      this.bridge.switchSessionModel(sid, model, { reasoningEffort: effort })
+      this.bridge.switchSessionModel(sid, model, {
+        reasoningEffort: effort,
+        contextTier: prefs.provider ? null : prefs.contextTier,
+      })
     );
     try { await setChannelPrefs(channelId, { reasoningEffort: effort }); }
     catch (e) { log.warn('Reasoning effort set but failed to persist preference:', e); }
   }
 
+  async setContextTier(channelId: string, contextTier: 'default' | 'long_context'): Promise<void> {
+    const prefs = await this.getEffectivePrefs(channelId);
+    const model = prefs.model;
+    await this.withSessionRetry(channelId, (sid) =>
+      this.bridge.switchSessionModel(sid, model, { reasoningEffort: prefs.reasoningEffort, contextTier })
+    );
+    try { await setChannelPrefs(channelId, { contextTier }); }
+    catch (e) { log.warn('Context tier set but failed to persist preference:', e); }
+    this.contextWindowTokens.delete(channelId);
+    this.bridge.listModels(getConfig().providers).then(async (models) => {
+      const latestPrefs = await this.getEffectivePrefs(channelId);
+      if (latestPrefs.model === model && latestPrefs.contextTier === contextTier) {
+        await this.cacheContextWindowTokens(channelId, model, models);
+      }
+    }).catch((err) => { log.debug("listModels (context cache) failed:", err); });
+  }
+
   /** Get effective preferences for a channel (config merged with runtime overrides). */
-  async getEffectivePrefs(channelId: string): Promise<ChannelPrefs & { model: string; verbose: boolean; threadedReplies: boolean; permissionMode: string; triggerMode: 'mention' | 'all' }> {
+  async getEffectivePrefs(channelId: string): Promise<ChannelPrefs & { model: string; verbose: boolean; threadedReplies: boolean; permissionMode: string; triggerMode: 'mention' | 'all'; contextTier: 'default' | 'long_context' | null }> {
     const configChannel = await getChannelConfig(channelId);
     const storedPrefs = await getChannelPrefs(channelId);
     return {
@@ -1280,6 +1324,7 @@ export class SessionManager {
       threadedReplies: storedPrefs?.threadedReplies ?? configChannel.threadedReplies,
       permissionMode: storedPrefs?.permissionMode ?? configChannel.permissionMode,
       reasoningEffort: storedPrefs?.reasoningEffort ?? (configChannel as any).reasoningEffort ?? null,
+      contextTier: storedPrefs?.contextTier ?? configChannel.contextTier ?? getConfig().defaults.contextTier ?? null,
       disabledSkills: storedPrefs?.disabledSkills,
     };
   }
@@ -1619,17 +1664,22 @@ export class SessionManager {
     return ctxWindow ? { ...usage, contextWindowTokens: ctxWindow } : usage;
   }
 
-  /** Cache the model's max_context_window_tokens for accurate /context display. */
+  /** Cache the active tier's context window for accurate /context display. */
   private async cacheContextWindowTokens(channelId: string, modelId: string, modelList: any[]): Promise<void> {
+    this.contextWindowTokens.delete(channelId);
+    const prefs = await this.getEffectivePrefs(channelId);
     let model = modelList.find((m: any) => m.id === modelId);
     // For BYOK models, the merged list has provider-prefixed IDs (e.g., "ollama-local:qwen3:8b")
-    if (!model) {
-      const prefs = await getChannelPrefs(channelId);
-      if (prefs?.provider) {
-        model = modelList.find((m: any) => m.id === `${prefs.provider}:${modelId}`);
-      }
+    if (!model && prefs.provider) {
+      model = modelList.find((m: any) => m.id === `${prefs.provider}:${modelId}`);
     }
-    const ctxTokens = model?.capabilities?.limits?.max_context_window_tokens;
+    const tokenPrices = model?.billing?.tokenPrices;
+    const tierCtxTokens = prefs.provider
+      ? undefined
+      : prefs.contextTier === 'long_context'
+        ? tokenPrices?.longContext?.contextMax
+        : tokenPrices?.contextMax;
+    const ctxTokens = tierCtxTokens ?? model?.capabilities?.limits?.max_context_window_tokens;
     if (typeof ctxTokens === 'number' && ctxTokens > 0) {
       this.contextWindowTokens.set(channelId, ctxTokens);
     }
@@ -1650,7 +1700,7 @@ export class SessionManager {
   /** List past sessions for this channel's working directory. */
   async listChannelSessions(channelId: string): Promise<Array<{ sessionId: string; startTime: Date; modifiedTime: Date; summary?: string; isCurrent: boolean }>> {
     const workingDirectory = await this.resolveWorkingDirectory(channelId);
-    const sessions = await this.bridge.listSessions({ cwd: workingDirectory });
+    const sessions = await this.bridge.listSessions({ workingDirectory });
     const currentId = this.channelSessions.get(channelId);
     return sessions.map(s => ({
       sessionId: s.sessionId,
@@ -1838,6 +1888,7 @@ export class SessionManager {
     if (providerName && !sdkProvider) {
       log.warn(`Provider "${providerName}" set for channel ${channelId} but not found in config — using Copilot`);
     }
+    const contextTier = (providerName ? undefined : prefs.contextTier) as 'default' | 'long_context' | null | undefined;
 
     // Fetch available models for fallback chain (best-effort — don't block on failure)
     let availableModels: string[] = [];
@@ -1868,6 +1919,7 @@ export class SessionManager {
           workingDirectory,
           configDir: defaultConfigDir,
           reasoningEffort: reasoningEffort ?? undefined,
+          contextTier: contextTier ?? undefined,
           agent: prefs.agent ?? undefined,
           enableConfigDiscovery: true,
           mcpServers: resolvedMcpServers,
@@ -1921,6 +1973,7 @@ export class SessionManager {
               workingDirectory,
               configDir: defaultConfigDir,
               reasoningEffort: reasoningEffort ?? undefined,
+              contextTier: contextTier ?? undefined,
               enableConfigDiscovery: true,
               mcpServers: resolvedMcpServers,
               skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
@@ -2023,6 +2076,7 @@ export class SessionManager {
     if (providerName && !sdkProvider) {
       log.warn(`Provider "${providerName}" set for channel ${channelId} but not found in config — using Copilot`);
     }
+    const contextTier = (providerName ? undefined : prefs.contextTier) as 'default' | 'long_context' | null | undefined;
 
     const excludedTools = this.getExcludedTools();
 
@@ -2034,6 +2088,7 @@ export class SessionManager {
         workingDirectory,
         provider: sdkProvider || undefined,
         reasoningEffort: reasoningEffort ?? undefined,
+        contextTier: contextTier ?? undefined,
         agent: prefs.agent ?? undefined,
         enableConfigDiscovery: true,
         mcpServers,

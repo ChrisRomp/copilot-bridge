@@ -1025,3 +1025,62 @@ d2('memory config validation', () => {
     expect2(result.changes.some((c: string) => c.includes('memory'))).toBe(true);
   });
 });
+
+d2('context tier config validation', () => {
+  let tmpDir: string;
+  let configFile: string;
+
+  beforeEach(() => {
+    _resetConfigForTest();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'config-context-tier-test-'));
+    configFile = path.join(tmpDir, 'config.json');
+  });
+
+  afterEach(() => {
+    _resetConfigForTest();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it2('accepts defaults and channel context tiers', () => {
+    const cfg = makeConfig({
+      defaults: { contextTier: 'long_context' },
+      channels: [{
+        id: 'ch-context-tier',
+        platform: 'mattermost',
+        name: 'Context Tier',
+        workingDirectory: tmpDir,
+        contextTier: 'default',
+        triggerMode: 'mention',
+        threadedReplies: true,
+        verbose: false,
+      }],
+    });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+
+    const loaded = loadConfig(configFile);
+    expect2(loaded.defaults.contextTier).toBe('long_context');
+    expect2(loaded.channels[0].contextTier).toBe('default');
+  });
+
+  it2('rejects invalid defaults context tier', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ defaults: { contextTier: 'huge' } })));
+    expect2(() => loadConfig(configFile)).toThrow('defaults.contextTier must be one of: default, long_context');
+  });
+
+  it2('rejects invalid channel context tier', () => {
+    const cfg = makeConfig({
+      channels: [{
+        id: 'ch-context-tier',
+        platform: 'mattermost',
+        name: 'Context Tier',
+        workingDirectory: tmpDir,
+        contextTier: 'huge',
+        triggerMode: 'mention',
+        threadedReplies: true,
+        verbose: false,
+      }],
+    });
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    expect2(() => loadConfig(configFile)).toThrow('Channel "ch-context-tier" contextTier must be one of: default, long_context');
+  });
+});

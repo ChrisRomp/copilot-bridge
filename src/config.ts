@@ -9,6 +9,7 @@ import { createLogger } from './logger.js';
 const log = createLogger('config');
 
 const VALID_ACCESS_MODES = ['allowlist', 'blocklist', 'open'];
+const VALID_CONTEXT_TIERS = ['default', 'long_context'];
 
 /** Validate an access config block. Throws on invalid input. Normalizes entries in-place. */
 function validateAccessConfig(platformName: string, label: string, access: any): void {
@@ -84,6 +85,9 @@ function validateAndNormalize(raw: any): AppConfig {
     }
     if (!fs.existsSync(ch.workingDirectory)) {
       console.warn(`Warning: workingDirectory "${ch.workingDirectory}" for channel "${ch.id}" does not exist`);
+    }
+    if (ch.contextTier !== undefined && !VALID_CONTEXT_TIERS.includes(ch.contextTier)) {
+      throw new Error(`Channel "${ch.id}" contextTier must be one of: ${VALID_CONTEXT_TIERS.join(', ')}`);
     }
   }
 
@@ -276,6 +280,9 @@ function validateAndNormalize(raw: any): AppConfig {
     permissionMode: 'interactive' as const,
     ...raw.defaults,
   };
+  if (defaults.contextTier !== undefined && !VALID_CONTEXT_TIERS.includes(defaults.contextTier)) {
+    throw new Error(`defaults.contextTier must be one of: ${VALID_CONTEXT_TIERS.join(', ')}`);
+  }
 
   return {
     platforms: raw.platforms,

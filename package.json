@@ -42,8 +42,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@github/copilot": "^1.0.50",
-    "@github/copilot-sdk": "^0.3.0",
+    "@github/copilot": "^1.0.63",
+    "@github/copilot-sdk": "^1.0.1",
     "@mattermost/client": "^11.6.0",
     "@mattermost/types": "^11.6.0",
     "@slack/bolt": "^4.7.2",
@@ -53,7 +53,7 @@
     "follow-redirects": "^1.16.0",
     "luxon": "^3.7.2",
     "tsx": "^4.22.3",
-    "ws": "^8.20.1"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",

@@ -24,6 +24,7 @@
       "workingDirectory": "/path/to/project",
       "agent": null,
       "model": "claude-sonnet-4.6",
+      "contextTier": "default",
       "triggerMode": "mention",
       "threadedReplies": true,
       "verbose": false
@@ -31,6 +32,7 @@
   ],
   "defaults": {
     "model": "claude-sonnet-4.6",
+    "contextTier": "default",
     "fallbackModels": [],
     "agent": null,
     "triggerMode": "mention",
