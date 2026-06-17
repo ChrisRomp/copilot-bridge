@@ -43,6 +43,22 @@ describe('parseCommand', () => {
   });
 });
 
+describe('/help command', () => {
+  it('shows friendly context tier guidance in common help', async () => {
+    const result = await handleCommand('ch-help', '/help');
+    expect(result.response).toContain('/context-tier <default|long>');
+    expect(result.response).toContain('/reasoning <level>');
+    expect(result.response).toContain('max');
+    expect(result.response).not.toContain('/context-tier <default|long_context>');
+  });
+
+  it('shows friendly context tier guidance in full help', async () => {
+    const result = await handleCommand('ch-help-all', '/help all');
+    expect(result.response).toContain('/context-tier <default|long>');
+    expect(result.response).toContain('max');
+  });
+});
+
 // --- /reload subcommands ---
 
 describe('/reload subcommands', () => {
@@ -392,6 +408,14 @@ describe('/context command', () => {
     expect(result.response).toContain('50%');
   });
 
+  it('shows the current context tier', async () => {
+    const result = await handleCommand('ch-ctx-tier', '/context', SESSION_INFO,
+      { ...PREFS, contextTier: 'long_context' }, undefined, undefined, undefined,
+      { currentTokens: 50000, tokenLimit: 168000, contextWindowTokens: 922000 },
+    );
+    expect(result.response).toContain('Context tier: long');
+  });
+
   it('shows context in /status when usage is available', async () => {
     const result = await handleCommand('ch-ctx-5', '/status', SESSION_INFO, PREFS, undefined, undefined, undefined,
       { currentTokens: 50000, tokenLimit: 168000, contextWindowTokens: 200000 },
@@ -411,12 +435,14 @@ describe('/reasoning command', () => {
   };
 
   it('returns set_reasoning action with valid level', async () => {
-    const result = await handleCommand('ch-reason-1', '/reasoning high', SESSION_INFO,
+    const channelId = `ch-reason-1-${Date.now()}`;
+    const result = await handleCommand(channelId, '/reasoning high', SESSION_INFO,
       { verbose: false, permissionMode: 'interactive', reasoningEffort: null },
       undefined, [REASONING_MODEL]);
     expect(result.handled).toBe(true);
     expect(result.action).toBe('set_reasoning');
     expect(result.payload).toBe('high');
+    expect(await store.getChannelPrefs(channelId)).toBeNull();
   });
 
   it('rejects invalid reasoning level', async () => {
@@ -433,6 +459,57 @@ describe('/reasoning command', () => {
       { verbose: false, permissionMode: 'interactive', reasoningEffort: 'high' });
     expect(result.handled).toBe(true);
     expect(result.response).toContain('Current reasoning effort: **high**');
+  });
+});
+
+describe('/context-tier command', () => {
+  const SESSION_INFO = { sessionId: 'sess-ctx-tier', model: 'claude-opus-4.6', agent: null };
+  const PREFS = { verbose: false, permissionMode: 'interactive', reasoningEffort: null, contextTier: null };
+
+  it('returns set_context_tier action with valid tier', async () => {
+    const channelId = `ch-tier-1-${Date.now()}`;
+    const result = await handleCommand(channelId, '/context-tier long', SESSION_INFO, PREFS);
+    expect(result.handled).toBe(true);
+    expect(result.action).toBe('set_context_tier');
+    expect(result.payload).toBe('long_context');
+    expect(await store.getChannelPrefs(channelId)).toBeNull();
+  });
+
+  it('accepts explicit long_context tier', async () => {
+    const result = await handleCommand('ch-tier-2', '/context-tier long_context', SESSION_INFO, PREFS);
+    expect(result.action).toBe('set_context_tier');
+    expect(result.payload).toBe('long_context');
+  });
+
+  it('accepts max as a long tier alias', async () => {
+    const result = await handleCommand('ch-tier-max', '/context-tier max', SESSION_INFO, PREFS);
+    expect(result.action).toBe('set_context_tier');
+    expect(result.payload).toBe('long_context');
+  });
+
+  it('rejects invalid context tier', async () => {
+    const result = await handleCommand('ch-tier-3', '/context-tier huge', SESSION_INFO, PREFS);
+    expect(result.handled).toBe(true);
+    expect(result.action).toBeUndefined();
+    expect(result.response).toContain('Invalid context tier');
+  });
+
+  it('shows current tier when no args', async () => {
+    const result = await handleCommand('ch-tier-4', '/context-tier', SESSION_INFO,
+      { ...PREFS, contextTier: 'long_context' });
+    expect(result.handled).toBe(true);
+    expect(result.response).toContain('Current context tier: **long**');
+    expect(result.response).toContain('/context-tier <default|long>');
+  });
+
+  it('rejects context tier changes for BYOK provider models', async () => {
+    const { setChannelPrefs } = await import('../state/store.js');
+    await setChannelPrefs('ch-tier-byok', { provider: 'azure' });
+
+    const result = await handleCommand('ch-tier-byok', '/context-tier long', SESSION_INFO, PREFS);
+    expect(result.handled).toBe(true);
+    expect(result.action).toBeUndefined();
+    expect(result.response).toContain('GitHub Copilot models');
   });
 });
 
@@ -456,12 +533,13 @@ describe('BYOK reasoning effort suppression', () => {
 
   it('/status suppresses reasoning effort when BYOK provider is active', async () => {
     const { setChannelPrefs } = await import('../state/store.js');
-    await setChannelPrefs('ch-byok-status', { provider: 'azure' });
+    await setChannelPrefs('ch-byok-status', { provider: 'azure', contextTier: 'long_context' });
 
     const result = await handleCommand('ch-byok-status', '/status', SESSION_INFO, PREFS,
       undefined, MODELS);
     expect(result.response).not.toContain('Reasoning effort');
     expect(result.response).not.toContain('🧠');
+    expect(result.response).toContain('Context tier: not applicable (BYOK provider)');
   });
 
   it('/status shows reasoning effort for Copilot model (no provider)', async () => {

@@ -74,6 +74,7 @@ See the [Setup Guide — Running as a Service](docs/setup.md#running-as-a-servic
 | `/model [name]` | `/models` | List models or switch model (fuzzy match) |
 | `/agent <name>` | | Switch custom agent (empty to deselect) |
 | `/reasoning <level>` | | Set reasoning effort (`low`/`medium`/`high`/`xhigh`) |
+| `/context-tier <tier>` | | Set context tier (`default`/`long`; `max` also accepted) |
 | `/context` | | Show context window usage |
 | `/verbose` | | Toggle tool call visibility |
 | `/status` | | Show session info |

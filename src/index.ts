@@ -1,7 +1,7 @@
 import { loadConfig, getConfig, isConfiguredChannel, registerDynamicChannel, markChannelAsDM, getChannelConfig, getPlatformBots, getPlatformAccess, getChannelBotName, isBotAdmin, getHardcodedRules, getConfigRules, reloadConfig, ConfigWatcher } from './config.js';
 import { CopilotBridge } from './core/bridge.js';
 import { SessionManager, BRIDGE_CUSTOM_TOOLS, parseEnvFile } from './core/session-manager.js';
-import { handleCommand, parseCommand } from './core/command-handler.js';
+import { formatContextTierLabel, handleCommand, parseCommand } from './core/command-handler.js';
 import { formatEvent, formatPermissionRequest, formatUserInputRequest } from './core/stream-formatter.js';
 import { WorkspaceWatcher, initWorkspace, getWorkspacePath } from './core/workspace-manager.js';
 import { MattermostAdapter } from './channels/mattermost/adapter.js';
@@ -873,7 +873,7 @@ async function handleMidTurnMessage(
 
       const cmdResult = await handleCommand(
         msg.channelId, commandText, sessionInfo ?? undefined,
-        { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort },
+        { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort, contextTier: effPrefs.contextTier },
         { workingDirectory: channelConfig.workingDirectory, bot: channelConfig.bot },
         models, mcpInfo, contextUsage, getConfig().providers,
       );
@@ -1096,7 +1096,7 @@ async function handleInboundMessage(
 
   const cmdResult = await handleCommand(
     msg.channelId, text, sessionInfo ?? undefined,
-    { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort },
+    { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort, contextTier: effPrefs.contextTier },
     { workingDirectory: channelConfig.workingDirectory, bot: channelConfig.bot },
     models,
     undefined,
@@ -1108,7 +1108,7 @@ async function handleInboundMessage(
     const threadRoot = resolveThreadRoot(msg, threadRequested, channelConfig);
 
     // Send response before action, except for actions that send their own ack after completing
-    const deferResponse = cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent' || cmdResult.action === 'set_reasoning' || cmdResult.action === 'reload_mcp' || cmdResult.action === 'reload_skills';
+    const deferResponse = cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent' || cmdResult.action === 'set_reasoning' || cmdResult.action === 'set_context_tier' || cmdResult.action === 'reload_mcp' || cmdResult.action === 'reload_skills';
     if (cmdResult.response && !deferResponse) {
       await adapter.sendMessage(msg.channelId, cmdResult.response, { threadRootId: threadRoot });
     }
@@ -1309,6 +1309,7 @@ async function handleInboundMessage(
         const reasoningSessionId = await sessionManager.getSessionId(msg.channelId);
         if (!reasoningSessionId) {
           // No active session — pref is saved, will apply on next session creation
+          await setChannelPrefs(msg.channelId, { reasoningEffort: cmdResult.payload as string });
           await adapter.sendMessage(msg.channelId, `🧠 Reasoning effort set to **${cmdResult.payload}**. Will apply when a session starts.`, { threadRootId: threadRoot });
           break;
         }
@@ -1318,7 +1319,25 @@ async function handleInboundMessage(
           await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort set to **${cmdResult.payload}**.`);
         } catch (err: any) {
           log.error(`Failed to set reasoning effort on ${msg.channelId.slice(0, 8)}...:`, err);
-          await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort saved as **${cmdResult.payload}** but RPC failed. Use \`/reload\` to apply.`);
+          await adapter.updateMessage(msg.channelId, ackId, `🧠 Reasoning effort was not applied: ${err?.message ?? 'unknown error'}`);
+        }
+        break;
+      }
+      case 'set_context_tier': {
+        const tierLabel = formatContextTierLabel(cmdResult.payload);
+        const tierSessionId = await sessionManager.getSessionId(msg.channelId);
+        if (!tierSessionId) {
+          await setChannelPrefs(msg.channelId, { contextTier: cmdResult.payload as 'default' | 'long_context' });
+          await adapter.sendMessage(msg.channelId, `📏 Context tier set to **${tierLabel}**. Will apply when a session starts.`, { threadRootId: threadRoot });
+          break;
+        }
+        const ackId = await adapter.sendMessage(msg.channelId, `📏 Setting context tier to **${tierLabel}**...`, { threadRootId: threadRoot });
+        try {
+          await sessionManager.setContextTier(msg.channelId, cmdResult.payload as 'default' | 'long_context');
+          await adapter.updateMessage(msg.channelId, ackId, `📏 Context tier set to **${tierLabel}**.`);
+        } catch (err: any) {
+          log.error(`Failed to set context tier on ${msg.channelId.slice(0, 8)}...:`, err);
+          await adapter.updateMessage(msg.channelId, ackId, `📏 Context tier was not applied: ${err?.message ?? 'unknown error'}`);
         }
         break;
       }

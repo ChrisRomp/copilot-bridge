@@ -128,6 +128,16 @@ describe('SqliteStateStore', () => {
       prefs = await store.getChannelPrefs('ch1');
       expect(prefs?.provider).toBeNull();
     });
+
+    it('contextTier field stores and retrieves null correctly', async () => {
+      await store.setChannelPrefs('ch1', { contextTier: 'long_context' });
+      let prefs = await store.getChannelPrefs('ch1');
+      expect(prefs?.contextTier).toBe('long_context');
+
+      await store.setChannelPrefs('ch1', { contextTier: null });
+      prefs = await store.getChannelPrefs('ch1');
+      expect(prefs?.contextTier).toBeNull();
+    });
   });
 
   // ---- Permissions --------------------------------------------------------

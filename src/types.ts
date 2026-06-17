@@ -30,12 +30,15 @@ export interface ChannelConfig {
   bot?: string;               // which bot identity to use (key into platform.bots)
   agent?: string | null;
   model?: string;
+  contextTier?: ContextTier;
   fallbackModels?: string[];
   triggerMode: 'mention' | 'all';
   threadedReplies: boolean;
   verbose: boolean;
   isDM?: boolean;
 }
+
+export type ContextTier = 'default' | 'long_context';
 
 // Permission rules config (CLI-compatible syntax)
 // e.g., "shell(ls)", "shell(git status)", "shell", "write", "read", "MCP_SERVER(tool)", "MCP_SERVER"
@@ -101,6 +104,7 @@ export interface AppConfig {
   channels: ChannelConfig[];
   defaults: {
     model: string;
+    contextTier?: ContextTier;
     agent: string | null;
     triggerMode: 'mention' | 'all';
     threadedReplies: boolean;

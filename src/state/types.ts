@@ -18,6 +18,7 @@ export interface ChannelPrefs {
   threadedReplies?: boolean;
   permissionMode?: string;
   reasoningEffort?: string | null;
+  contextTier?: 'default' | 'long_context' | null;
   sessionMode?: string;
   disabledSkills?: string[];
 }

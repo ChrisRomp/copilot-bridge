@@ -7,6 +7,10 @@ const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 const TRUTHY = new Set(['on', 'true', 'yes', '1', 'enable', 'enabled']);
 const FALSY = new Set(['off', 'false', 'no', '0', 'disable', 'disabled']);
 
+type LegacyTokenPrices = { batch_size: number; input_price: number; output_price: number; cache_price?: number };
+type TokenPrices = { batchSize: number; inputPrice: number; outputPrice: number; cachePrice?: number };
+type NormalizedTokenPrices = { batchSize: number; inputPrice: number; outputPrice: number; cachePrice?: number; priceFormat: 'legacy' | 'current' };
+
 /** Parse a loose boolean string. Returns fallback if unrecognized. */
 function parseBool(input: string, fallback: boolean): boolean {
   const v = input.toLowerCase().trim();
@@ -35,18 +39,40 @@ export interface ModelInfo {
   name: string;
   billing?: {
     multiplier?: number;
-    token_prices?: { batch_size: number; input_price: number; output_price: number; cache_price?: number };
+    token_prices?: LegacyTokenPrices;
+    tokenPrices?: TokenPrices;
     restricted_to?: string[];
   };
   supportedReasoningEfforts?: string[];
   defaultReasoningEffort?: string;
 }
 
+const VALID_CONTEXT_TIERS = new Set(['default', 'long_context']);
+
+function normalizeContextTier(input: string): 'default' | 'long_context' | null {
+  const normalized = input.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (normalized === 'default' || normalized === 'standard' || normalized === 'normal') return 'default';
+  if (normalized === 'long' || normalized === 'max' || normalized === 'maximum' || normalized === 'long_context' || normalized === '1m' || normalized === '1m_context') return 'long_context';
+  return null;
+}
+
+export function formatContextTierLabel(tier: 'default' | 'long_context' | string | null | undefined): string {
+  return tier === 'long_context' ? 'long' : tier ?? 'default';
+}
+
+function getDefaultContextTier(): 'default' | 'long_context' {
+  try {
+    return getConfig().defaults.contextTier ?? 'default';
+  } catch {
+    return 'default';
+  }
+}
+
 export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'reload_session' | 'reload_config' | 'reload_mcp' | 'reload_skills' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_deny' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'stop_session' | 'schedule' | 'skills' | 'skill_toggle' | 'mcp' | 'plan' | 'implement' | 'provider_test';
+           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_deny' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'set_context_tier' | 'stop_session' | 'schedule' | 'skills' | 'skill_toggle' | 'mcp' | 'plan' | 'implement' | 'provider_test';
   payload?: any;
 }
 
@@ -186,14 +212,38 @@ async function formatModelListing(models: ModelInfo[], providerNames: string[], 
     return m.id === currentModel;
   };
 
-  // API prices are in AI credit sub-units per batch_size tokens.
-  // 1 AI credit = $0.01; dividing by 1e5 converts to dollars per 1M tokens.
-  // See https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing
-  const AI_CREDIT_SCALE = 1e5;
+  const getTokenPrices = (m: ModelInfo): NormalizedTokenPrices | undefined => {
+    const current = m.billing?.tokenPrices;
+    if (current) {
+      return {
+        batchSize: current.batchSize,
+        inputPrice: current.inputPrice,
+        outputPrice: current.outputPrice,
+        cachePrice: current.cachePrice,
+        priceFormat: 'current',
+      };
+    }
+    const legacy = m.billing?.token_prices;
+    if (!legacy) return undefined;
+    return {
+      batchSize: legacy.batch_size,
+      inputPrice: legacy.input_price,
+      outputPrice: legacy.output_price,
+      cachePrice: legacy.cache_price,
+      priceFormat: 'legacy',
+    };
+  };
 
-  const formatPrice = (price: number, batchSize: number): string => {
+  // Legacy API prices are in AI credit sub-units per batch_size tokens.
+  // 1 AI credit = $0.01; dividing by 1e5 converts the legacy shape to dollars per 1M tokens.
+  // See https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing
+  const LEGACY_AI_CREDIT_SCALE = 1e5;
+
+  const formatPrice = (price: number, batchSize: number, priceFormat: NormalizedTokenPrices['priceFormat']): string => {
     if (!Number.isFinite(price) || !batchSize) return '--';
-    const perMillion = price / batchSize / AI_CREDIT_SCALE;
+    const perMillion = priceFormat === 'current'
+      ? (price / 100) * (1_000_000 / batchSize)
+      : price / batchSize / LEGACY_AI_CREDIT_SCALE;
     if (perMillion < 0.01) return `$${perMillion.toPrecision(2)}`;
     if (perMillion < 1) {
       // Show enough precision: $0.30, $0.175, $0.025
@@ -205,37 +255,38 @@ async function formatModelListing(models: ModelInfo[], providerNames: string[], 
 
   // Detect billing format from all Copilot models
   const copilotModelsList = models.filter(m => !providerNames.some(p => m.id.startsWith(`${p}:`)));
-  const useTokenPricing = copilotModelsList.some(m => m.billing?.token_prices !== undefined);
+  const useTokenPricing = copilotModelsList.some(m => getTokenPrices(m) !== undefined);
   const useMultiplier = !useTokenPricing && copilotModelsList.some(m => m.billing?.multiplier !== undefined);
 
   const formatRow = (m: ModelInfo, billingMode: 'none' | 'multiplier' | 'tokens'): string => {
-    const current = isCurrent(m) ? ' <- current' : '';
-    const reasoning = m.supportedReasoningEfforts?.length ? ' 🧠' : '';
+    const status = isCurrent(m) ? 'current' : '';
     const hidden = streamer && isHiddenModel(m);
     const displayName = hidden ? redactedModelLabel(++hiddenIndex) : `\`${m.id}\``;
-    if (billingMode === 'tokens' && m.billing?.token_prices) {
-      const tp = m.billing.token_prices;
-      const input = formatPrice(tp.input_price, tp.batch_size);
-      const cached = tp.cache_price !== undefined ? formatPrice(tp.cache_price, tp.batch_size) : '--';
-      const output = formatPrice(tp.output_price, tp.batch_size);
-      return `| ${displayName} | ${input} | ${cached} | ${output} |${reasoning}${current} |`;
+    const tp = getTokenPrices(m);
+    if (billingMode === 'tokens' && tp) {
+      const input = formatPrice(tp.inputPrice, tp.batchSize, tp.priceFormat);
+      const cached = tp.cachePrice !== undefined ? formatPrice(tp.cachePrice, tp.batchSize, tp.priceFormat) : '--';
+      const output = formatPrice(tp.outputPrice, tp.batchSize, tp.priceFormat);
+      return `| ${displayName} | ${input} | ${cached} | ${output} | ${status} |`;
     }
     if (billingMode === 'tokens') {
       // token pricing mode but this model has no token_prices
-      return `| ${displayName} | -- | -- | -- |${reasoning}${current} |`;
+      return `| ${displayName} | -- | -- | -- | ${status} |`;
     }
     if (billingMode === 'multiplier') {
       const billing = m.billing?.multiplier !== undefined ? `${m.billing.multiplier}x` : '--';
-      return `| ${displayName} | ${billing} |${reasoning}${current} |`;
+      return `| ${displayName} | ${billing} | ${status} |`;
     }
-    return `| ${displayName} |${reasoning}${current} |`;
+    return `| ${displayName} | ${status} |`;
   };
 
   const billingMode = useTokenPricing ? 'tokens' as const : useMultiplier ? 'multiplier' as const : 'none' as const;
-  const copilotHeader = useTokenPricing
-    ? '| Model | Input | Cached input | Output | |\n|:------|------:|-------------:|-------:|:--|'
-    : '| Model | Billing | |\n|:------|--------:|:--|';
-  const byokHeader = '| Model | |\n|:------|:--|';
+  const copilotHeader = billingMode === 'tokens'
+    ? '| Model | Input | Cached input | Output | Status |\n|:------|------:|-------------:|-------:|:------|'
+    : billingMode === 'multiplier'
+      ? '| Model | Billing | Status |\n|:------|--------:|:------|'
+      : '| Model | Status |\n|:------|:------|';
+  const byokHeader = '| Model | Status |\n|:------|:------|';
 
   const title = filterProvider ? `**Models: ${filterProvider}**` : '**Available Models**';
   const lines: string[] = [title, ''];
@@ -269,23 +320,18 @@ async function formatModelListing(models: ModelInfo[], providerNames: string[], 
   }
 
   const hasCopilotModels = !filterProvider && copilotModelsList.length > 0;
-  let legend = '🧠 = supports reasoning effort';
   if (hasCopilotModels) {
     if (useTokenPricing) {
-      legend += ' -- prices are $/M tokens';
-      lines.push(legend);
+      lines.push('Prices are $/M tokens.');
       if (copilotModelsList.some(m => m.id.startsWith('claude-'))) {
         lines.push('Anthropic models also incur cache write costs not shown above.');
       }
       lines.push('[Full pricing details](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing)');
     } else if (useMultiplier) {
-      legend += ' -- Billing = premium request multiplier';
-      lines.push(legend);
+      lines.push('Billing = premium request multiplier.');
     } else {
-      lines.push(legend);
+      lines.push('Billing data was not returned by the model API.');
     }
-  } else {
-    lines.push(legend);
   }
   lines.push('↳ Use `/model <name>` to switch');
   if (providerNames.length > 0 && !filterProvider) {
@@ -486,6 +532,10 @@ export async function resolveEffectiveConfig(
     null, null, null,
     prefs?.reasoningEffort, null) });
 
+  fields.push({ setting: 'contextTier', ...resolve('contextTier',
+    channelObj && 'contextTier' in channelObj ? (channelObj as any).contextTier : undefined, null, defaults.contextTier,
+    prefs?.contextTier, null) });
+
   // Session mode
   fields.push({ setting: 'sessionMode', ...resolve('sessionMode',
     null, null, 'interactive',
@@ -562,7 +612,7 @@ export interface McpServerInfo {
   pending?: boolean;
 }
 
-export async function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[], contextUsage?: { currentTokens: number; tokenLimit: number; contextWindowTokens?: number } | null, providers?: Record<string, BridgeProviderConfig>): Promise<CommandResult> {
+export async function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null; contextTier?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[], contextUsage?: { currentTokens: number; tokenLimit: number; contextWindowTokens?: number } | null, providers?: Record<string, BridgeProviderConfig>): Promise<CommandResult> {
   const parsed = parseCommand(text);
   if (!parsed) return { handled: false };
 
@@ -795,11 +845,31 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
           : `**${sessionInfo?.model ?? 'unknown'}**`;
         return { handled: true, response: `⚠️ Model ${reasoningModelName} does not support reasoning effort.\nSupported models include Opus and other reasoning-capable models.` };
       }
-      await setChannelPrefs(channelId, { reasoningEffort: level });
       return {
         handled: true,
         action: 'set_reasoning',
         payload: level,
+      };
+    }
+
+    case 'context-tier':
+    case 'contexttier': {
+      const prefs = await getChannelPrefs(channelId);
+      if (prefs?.provider) {
+        return { handled: true, response: '⚠️ Context tiers apply only to GitHub Copilot models, not BYOK provider models.' };
+      }
+      const tier = parsed.args ? normalizeContextTier(parsed.args) : null;
+      if (!parsed.args) {
+        const current = effectivePrefs?.contextTier ?? prefs?.contextTier ?? getDefaultContextTier();
+        return { handled: true, response: `📏 Current context tier: **${formatContextTierLabel(current)}**\nUsage: \`/context-tier <default|long>\`` };
+      }
+      if (!tier || !VALID_CONTEXT_TIERS.has(tier)) {
+        return { handled: true, response: '⚠️ Invalid context tier. Valid values: `default`, `long`.' };
+      }
+      return {
+        handled: true,
+        action: 'set_context_tier',
+        payload: tier,
       };
     }
 
@@ -835,6 +905,12 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
         const current = effectivePrefs?.reasoningEffort ?? currentModelInfo.defaultReasoningEffort ?? 'default';
         lines.push(`• Reasoning effort: 🧠 **${current}** (supports: ${currentModelInfo.supportedReasoningEfforts.join(', ')})`);
       }
+      if (prefs?.provider) {
+        lines.push('• Context tier: not applicable (BYOK provider)');
+      } else {
+        const contextTier = effectivePrefs?.contextTier ?? prefs?.contextTier ?? getDefaultContextTier();
+        lines.push(`• Context tier: 📏 **${formatContextTierLabel(contextTier)}**`);
+      }
       if (contextUsage) {
         lines.push(`• Context: ${formatContextUsage(contextUsage)}`);
       }
@@ -850,7 +926,11 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
       if (!contextUsage) {
         return { handled: true, response: '📊 Context usage not available yet. Send a message first.' };
       }
-      return { handled: true, response: `📊 **Context:** ${formatContextUsage(contextUsage)}` };
+      const prefs = await getChannelPrefs(channelId);
+      const tier = prefs?.provider
+        ? 'not applicable (BYOK provider)'
+        : formatContextTierLabel(effectivePrefs?.contextTier ?? prefs?.contextTier ?? getDefaultContextTier());
+      return { handled: true, response: `📊 **Context:** ${formatContextUsage(contextUsage)}\n• Context tier: ${tier}` };
     }
 
     case 'approve':
@@ -952,6 +1032,8 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
         '`/status` — Show session info',
         '`/config` — Show effective channel configuration',
         '`/context` — Show context window usage',
+        '`/context-tier <default|long>` — Set context tier (`max` also accepted)',
+        '`/reasoning <level>` — Set reasoning effort (low/medium/high/xhigh)',
         '`/verbose` — Toggle tool call visibility',
         '`/autopilot` — Toggle autopilot mode',
         '`/yolo` — Toggle auto-approve permissions',
@@ -980,6 +1062,7 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
           '`/agents` — List available agent definitions',
           '`/reasoning <level>` — Set reasoning effort (low/medium/high/xhigh)',
           '`/context` — Show context window usage',
+          '`/context-tier <default|long>` — Set context tier (`max` also accepted)',
           '`/config` — Show effective channel config with source attribution',
           '`/verbose` — Toggle tool call visibility',
           '`/status` — Show session info',
