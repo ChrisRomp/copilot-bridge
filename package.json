@@ -47,7 +47,7 @@
     "@mattermost/client": "^11.9.0",
     "@mattermost/types": "^11.9.0",
     "@slack/bolt": "^4.7.3",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.3",
     "cron": "^4.4.0",
     "cronstrue": "^3.24.0",
     "follow-redirects": "^1.16.0",
