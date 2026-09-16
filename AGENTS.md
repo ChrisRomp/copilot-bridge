@@ -32,6 +32,7 @@ scripts/restart-gateway.sh
 - Update `@mattermost/client` and `@mattermost/types` together: the client declares an exact peer version for its types.
 - Keep TypeScript on 5.9 until Mattermost's TypeScript peer range supports newer majors; do not bypass the peer constraint with `--force` or `--legacy-peer-deps`.
 - npm 12 requires install-script approvals. Review changed native/build scripts and update the version-pinned `allowScripts` entries with `npm install-scripts approve <package>` before rebuilding.
+- Use the public npm registry when refreshing lockfile metadata. Some mirrors omit SHA-512 integrity values and synthesize install scripts; preserve authoritative integrity hashes and platform selectors. `better-sqlite3` 13.0.3 bundles prebuilt binaries and has no install script to approve.
 
 ## Internal Architecture
 
