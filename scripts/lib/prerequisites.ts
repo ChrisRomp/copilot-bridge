@@ -9,13 +9,12 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CheckResult } from './output.js';
 
-export function checkNodeVersion(): CheckResult {
-  const version = process.version; // e.g., "v22.0.0"
-  const major = parseInt(version.slice(1).split('.')[0], 10);
-  if (major >= 20) {
+export function checkNodeVersion(version = process.version): CheckResult {
+  const [major, minor] = version.slice(1).split('.').map(Number);
+  if (major > 22 || (major === 22 && minor >= 12)) {
     return { status: 'pass', label: `Node.js ${version}` };
   }
-  return { status: 'fail', label: `Node.js ${version}`, detail: 'requires v20 or higher' };
+  return { status: 'fail', label: `Node.js ${version}`, detail: 'requires v22.12.0 or higher' };
 }
 
 function tryCommand(cmd: string): string | null {

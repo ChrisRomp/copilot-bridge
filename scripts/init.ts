@@ -49,7 +49,7 @@ async function main() {
   const nodeCheck = checkNodeVersion();
   printCheck(nodeCheck);
   if (nodeCheck.status === 'fail') {
-    fail('Node.js 20+ is required. Please upgrade and re-run.');
+    fail('Node.js 22.12.0+ is required. Please upgrade and re-run.');
     process.exit(1);
   }
 
