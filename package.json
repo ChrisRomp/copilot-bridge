@@ -27,7 +27,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -42,23 +42,27 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@github/copilot": "1.0.80",
-    "@github/copilot-sdk": "^1.0.11",
+    "@github/copilot": "1.0.83",
+    "@github/copilot-sdk": "^1.0.13",
     "@mattermost/client": "^11.9.0",
     "@mattermost/types": "^11.9.0",
-    "@slack/bolt": "^4.7.3",
-    "better-sqlite3": "^12.11.1",
+    "@slack/bolt": "^5.1.0",
+    "better-sqlite3": "^13.0.3",
     "cron": "^4.4.0",
-    "cronstrue": "^3.24.0",
+    "cronstrue": "^3.25.0",
     "follow-redirects": "^1.16.0",
     "luxon": "^3.7.2",
     "tsx": "^4.23.13",
     "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12",
-    "@types/ws": "^8.5.14",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "koffi@3.2.1": true
   }
 }

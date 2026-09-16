@@ -1,5 +1,80 @@
-import { describe, it, expect } from 'vitest';
-import { chunkMessage } from './adapter.js';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { App } from '@slack/bolt';
+import { SlackAdapter, chunkMessage } from './adapter.js';
+
+describe('SlackAdapter with the installed Bolt SDK', () => {
+  const fetchMock = vi.fn<typeof fetch>();
+  let adapter: SlackAdapter;
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(async () => Response.json({
+      ok: true,
+      user_id: 'U_TEST',
+      user: 'test-bot',
+      bot_id: 'B_TEST',
+      team_id: 'T_TEST',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(App.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(App.prototype, 'stop').mockResolvedValue(undefined);
+    adapter = new SlackAdapter({
+      platformName: 'slack',
+      botToken: 'xoxb-test',
+      appToken: 'xapp-test',
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await adapter.disconnect();
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('constructs a Socket Mode app and authenticates through the SDK transport', async () => {
+    await adapter.connect();
+
+    expect(adapter.getBotUserId()).toBe('U_TEST');
+    expect(App.prototype.start).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://slack.com/api/auth.test',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('sends threaded messages through the SDK transport', async () => {
+    await adapter.connect();
+    fetchMock.mockResolvedValueOnce(Response.json({ ok: true, ts: '123.456' }));
+
+    await expect(adapter.sendMessage('C_TEST', 'Hello', {
+      threadRootId: '123.000',
+    })).resolves.toBe('123.456');
+
+    const [url, options] = fetchMock.mock.lastCall!;
+    expect(url).toBe('https://slack.com/api/chat.postMessage');
+    const body = new URLSearchParams(String(options?.body));
+    expect(body.get('channel')).toBe('C_TEST');
+    expect(body.get('text')).toBe('Hello');
+    expect(body.get('thread_ts')).toBe('123.000');
+  });
+
+  it('preserves handling of SDK platform errors', async () => {
+    await adapter.connect();
+    fetchMock.mockResolvedValueOnce(Response.json({ ok: false, error: 'msg_too_old' }));
+    await expect(adapter.updateMessage('C_TEST', '123.456', 'Updated')).resolves.toBeUndefined();
+
+    fetchMock.mockResolvedValueOnce(Response.json({ ok: false, error: 'message_not_found' }));
+    await expect(adapter.deleteMessage('C_TEST', '123.456')).resolves.toBeUndefined();
+
+    fetchMock.mockResolvedValueOnce(Response.json({ ok: false, error: 'channel_not_found' }));
+    await expect(adapter.updateMessage('C_TEST', '123.456', 'Updated')).rejects.toMatchObject({
+      data: { error: 'channel_not_found' },
+    });
+  });
+});
 
 describe('chunkMessage', () => {
   it('returns single chunk for short messages', () => {

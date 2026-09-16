@@ -25,6 +25,15 @@ scripts/restart-gateway.sh
 
 > **⚠️ NEVER use `launchctl unload && launchctl load`** — `unload` kills the bridge process (including your session), so the `load` half never executes and the service stays down.
 
+### Dependency Updates
+
+- Node.js 22.12.0+ is required by the Copilot SDK. Keep the package engine, setup checks, and setup documentation aligned.
+- Dependabot batches npm minor/patch version updates and security updates in separate groups; major upgrades remain separate for compatibility review.
+- Update `@mattermost/client` and `@mattermost/types` together: the client declares an exact peer version for its types.
+- Keep TypeScript on 5.9 until Mattermost's TypeScript peer range supports newer majors; do not bypass the peer constraint with `--force` or `--legacy-peer-deps`.
+- npm 12 requires install-script approvals. Review changed native/build scripts and update the version-pinned `allowScripts` entries with `npm install-scripts approve <package>` before rebuilding.
+- Use the public npm registry when refreshing lockfile metadata. Some mirrors omit SHA-512 integrity values and synthesize install scripts; preserve authoritative integrity hashes and platform selectors. `better-sqlite3` 13.0.3 bundles prebuilt binaries and has no install script to approve.
+
 ## Internal Architecture
 
 ### Message Flow
@@ -145,4 +154,3 @@ Use the repo's YAML issue templates (`.github/ISSUE_TEMPLATE/`) when creating is
 - **`feature_request.yml`** — for enhancements. Required fields: Summary, Motivation. Include Proposed Solution and Alternatives Considered when known.
 
 Always set `Reported By: Agent (automated)` when filing programmatically. Reference related issues with `#N`. Keep issue bodies factual — describe observed behavior, not speculative fixes.
-

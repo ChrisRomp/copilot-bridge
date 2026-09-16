@@ -3,11 +3,25 @@ import { checkNodeVersion, checkCopilotCLI, checkGitHubAuth } from './prerequisi
 
 describe('prerequisites', () => {
   describe('checkNodeVersion', () => {
-    it('passes for current Node version (20+)', () => {
+    it('passes for the current supported Node version', () => {
       const result = checkNodeVersion();
-      // Test is running on Node 20+, so this should pass
       expect(result.status).toBe('pass');
       expect(result.label).toMatch(/Node\.js v\d+/);
+    });
+
+    it.each(['v22.12.0', 'v22.20.0', 'v24.0.0', 'v26.0.0'])('accepts %s', (version) => {
+      expect(checkNodeVersion(version)).toEqual({
+        status: 'pass',
+        label: `Node.js ${version}`,
+      });
+    });
+
+    it.each(['v18.20.0', 'v20.19.0', 'v22.0.0', 'v22.11.99'])('rejects %s', (version) => {
+      expect(checkNodeVersion(version)).toEqual({
+        status: 'fail',
+        label: `Node.js ${version}`,
+        detail: 'requires v22.12.0 or higher',
+      });
     });
   });
 

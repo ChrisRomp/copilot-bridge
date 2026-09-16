@@ -14,3 +14,18 @@ updates:
    directory: "/"
    schedule:
      interval: weekly
+   groups:
+     compatible-npm-updates:
+       applies-to: version-updates
+       patterns:
+         - "*"
+       update-types:
+         - "minor"
+         - "patch"
+     npm-security-updates:
+       applies-to: security-updates
+       patterns:
+         - "*"
+       update-types:
+         - "minor"
+         - "patch"
