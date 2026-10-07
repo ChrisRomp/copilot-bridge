@@ -20,6 +20,23 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name }}
 
+      - name: Verify release version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+          const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+          if (process.env.RELEASE_TAG !== `v${version}`) {
+            throw new Error(`Release tag ${process.env.RELEASE_TAG} does not match package version ${version}`);
+          }
+          if (lock.version !== version || lock.packages[''].version !== version) {
+            throw new Error(`Lockfile versions do not match package version ${version}`);
+          }
+          NODE
+
       - name: Use Node.js 24
         uses: actions/setup-node@v4
         with:
