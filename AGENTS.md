@@ -34,6 +34,12 @@ scripts/restart-gateway.sh
 - npm 12 requires install-script approvals. Review changed native/build scripts and update the version-pinned `allowScripts` entries with `npm install-scripts approve <package>` before rebuilding.
 - Use the public npm registry when refreshing lockfile metadata. Some mirrors omit SHA-512 integrity values and synthesize install scripts; preserve authoritative integrity hashes and platform selectors. `better-sqlite3` 13.0.3 bundles prebuilt binaries and has no install script to approve.
 
+### Releases
+
+- Bump `package.json` and `package-lock.json` together with `npm version <version> --no-git-tag-version`, then merge through a PR before tagging.
+- Stable releases use `v<version>` tags and publish via `.github/workflows/publish.yml` when the GitHub release is published. The workflow rejects tag or lockfile versions that do not match `package.json`.
+- Wait for PR and main CI/security checks before publishing a release.
+
 ## Internal Architecture
 
 ### Message Flow
