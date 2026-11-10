@@ -94,6 +94,8 @@ Bridge permission preferences are `interactive` (manual), `assisted`, and legacy
 
 In assisted mode, unresolved requests use the SDK assessment after bridge rules. Unapproved requests prompt interactively but deny without prompting during autopilot or quiet scheduled tasks. Native `permission.completed` events, not judge recommendations, establish final outcomes for decision notices. Scheduled/inter-agent prompts must carry automation/agent `source` provenance.
 
+Permission policy/persistence notices use `bridge.permission_policy_notice`, not synthetic `assistant.message` events: they must not alter stream content or channel busy/idle state. Permission-sync failures during resume preserve the stored session mapping; only confirmed missing sessions trigger replacement.
+
 Unattended Assisted Autopilot can settle requests without invoking the host callback. `permission-policy.ts` projects supported channel rules into SDK session policy; the state store remains the durable source. Do not write channel grants into the operator's project-scoped `permissions-config.json` or silently broaden unsupported rules. Report enforcement differences and synchronize additions, removals, lifecycle changes, and config reloads before subsequent execution.
 
 The bridge owns an initially empty `configure.rules` slot in its private SDK client's new/cold-resumed sessions. It restores only that slot when leaving assisted; unknown resident sessions must not be overwritten. Native remembered approvals and managed policy are separate. Do not replace native path/URL managers without a known baseline. `permission-patterns.ts` shares shell-wrapper exclusions between config, bridge checks, and native-rule translation.

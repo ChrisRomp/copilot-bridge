@@ -167,6 +167,17 @@ describe('SessionManager message provenance', () => {
     });
   });
 
+  it('does not replace the conversation when reattachment fails to synchronize permissions', async () => {
+    original.send.mockRejectedValue(new Error('Connection closed'));
+    vi.mocked(manager['attachSession']).mockRejectedValue(new Error('Could not synchronize permissions: policy unavailable'));
+    const newSession = vi.spyOn(manager, 'newSession');
+
+    await expect(manager.sendMessage('channel', 'Check build', attachments, undefined, scheduledOptions))
+      .rejects.toThrow('Could not synchronize permissions');
+    expect(newSession).not.toHaveBeenCalled();
+    expect(original.send).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['agent-alice', 'automation-memory'] as const)(
     'forwards %s through the production sendAndWaitForIdle helper', async source => {
       const session = fakeSession('ephemeral');

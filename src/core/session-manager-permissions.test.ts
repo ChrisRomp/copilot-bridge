@@ -3,9 +3,10 @@ import { CopilotSession, type PermissionRequest } from '@github/copilot-sdk';
 import { CopilotBridge } from './bridge.js';
 import { SessionManager } from './session-manager.js';
 import { evaluateConfigPermissions } from '../config.js';
-import { addPermissionRule, checkPermission, setChannelPrefs, listPermissionRulesForScope, getPermissionRules } from '../state/store.js';
+import { addPermissionRule, checkPermission, setChannelPrefs, listPermissionRulesForScope, getPermissionRules, getChannelSession, clearChannelSession } from '../state/store.js';
 import { enterQuietMode } from './quiet-mode.js';
 import { buildRuntimePermissionPolicy } from './permission-policy.js';
+import { formatEvent } from './stream-formatter.js';
 
 vi.mock('./workspace-manager.js', () => ({
   getWorkspacePath: vi.fn().mockResolvedValue('/tmp/permission-test'),
@@ -29,6 +30,8 @@ vi.mock('../state/store.js', async importOriginal => ({
   setChannelPrefs: vi.fn().mockResolvedValue(undefined),
   listPermissionRulesForScope: vi.fn().mockResolvedValue([]),
   getPermissionRules: vi.fn().mockResolvedValue([]),
+  getChannelSession: vi.fn().mockResolvedValue('session-1'),
+  clearChannelSession: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('./permission-policy.js', () => ({
   buildRuntimePermissionPolicy: vi.fn().mockReturnValue({
@@ -96,6 +99,7 @@ describe('SessionManager assisted permissions', () => {
       vi.mocked(buildRuntimePermissionPolicy).mockReturnValue(structuredClone(projection));
       vi.mocked(listPermissionRulesForScope).mockResolvedValue([]);
       vi.mocked(getPermissionRules).mockResolvedValue([]);
+      vi.mocked(getChannelSession).mockResolvedValue('session-1');
       vi.mocked(setChannelPrefs).mockImplementation(async (_channel, update) => {
         if (update.permissionMode === 'interactive' || update.permissionMode === 'assisted' || update.permissionMode === 'autopilot') {
           mode = update.permissionMode;
@@ -242,6 +246,115 @@ describe('SessionManager assisted permissions', () => {
       expect(manager['permissionRecoveryRequired'].has('channel-1')).toBe(false);
       expect(mode).toBe('interactive');
     });
+
+    it('sends policy warnings separately from assistant content when enabling or restoring assisted mode', async () => {
+      const events = vi.fn();
+      manager.onSessionEvent(events);
+      vi.mocked(buildRuntimePermissionPolicy).mockReturnValue({
+        ...projection, warnings: ['Untranslated rule'],
+      });
+
+      await manager.setPermissionMode('channel-1', 'assisted');
+      await manager.refreshPermissions('channel-1');
+      expect(events).toHaveBeenCalledTimes(1);
+      manager['yoloPreviousState'].set('channel-1', 'assisted');
+      await manager.setPermissionMode('channel-1', 'autopilot');
+      await manager.revertYoloIfNeeded('channel-1');
+
+      expect(events).toHaveBeenCalledTimes(2);
+      for (const [sessionId, channelId, event] of events.mock.calls) {
+        expect([sessionId, channelId]).toEqual(['session-1', 'channel-1']);
+        expect(event).toEqual({
+          type: 'bridge.permission_policy_notice',
+          data: { content: expect.stringContaining('Some bridge permission rules could not be translated') },
+        });
+        expect(formatEvent(event)).toBeNull();
+      }
+    });
+
+    it('keeps quiet-task policy notices out of chat', async () => {
+      const events = vi.fn();
+      manager.onSessionEvent(events);
+      vi.mocked(buildRuntimePermissionPolicy).mockReturnValue({
+        ...projection, warnings: ['Untranslated rule'],
+      });
+      const exitQuiet = enterQuietMode('channel-1');
+      try {
+        await manager.setPermissionMode('channel-1', 'assisted');
+        expect(events).not.toHaveBeenCalled();
+      } finally {
+        exitQuiet();
+      }
+    });
+
+    it.each(['ensure', 'reload', 'rpc-retry', 'rpc-retry-no-create'] as const)(
+      '%s preserves history when permission sync fails after a successful cold resume',
+      async operation => {
+        vi.mocked(bridge.getSession).mockReturnValue(undefined);
+        manager['channelSessions'].clear();
+        mode = 'assisted';
+        // Even a missing-session error from the configuration RPC must not be
+        // treated as evidence that the earlier resume found no conversation.
+        vi.mocked(bridge.configurePermissions).mockRejectedValue(new Error('Session not found during configure'));
+        const attach = vi.fn<typeof manager['attachSession']>().mockImplementation(async (channelId, sessionId) => {
+          await manager['initializeRuntimePermissions'](channelId, sessionId, 'assisted');
+        });
+        manager['attachSession'] = attach;
+        const create = vi.fn<typeof manager['createNewSession']>().mockResolvedValue('replacement');
+        manager['createNewSession'] = create;
+        const newSession = vi.spyOn(manager, 'newSession').mockResolvedValue('replacement');
+
+        const attempt = operation === 'ensure'
+          ? manager.ensureSession('channel-1')
+          : operation === 'reload'
+            ? manager.reloadSession('channel-1')
+            : (() => {
+              vi.spyOn(manager, 'ensureSession').mockResolvedValue({ sessionId: 'session-1', isNew: false });
+              return manager['withSessionRetry']('channel-1', async () => {
+                throw new Error('Session not found');
+              }, operation !== 'rpc-retry-no-create');
+            })();
+
+        await expect(attempt).rejects.toMatchObject({
+          name: 'PermissionSynchronizationError',
+          cause: expect.objectContaining({ message: 'Session not found during configure' }),
+        });
+        expect(attach).toHaveBeenCalledWith('channel-1', 'session-1');
+        expect(bridge.destroySession).toHaveBeenCalledWith('session-1');
+        expect(clearChannelSession).not.toHaveBeenCalled();
+        expect(create).not.toHaveBeenCalled();
+        expect(newSession).not.toHaveBeenCalled();
+      },
+    );
+
+    it('can retry the same stored session after assisted capabilities recover', async () => {
+      vi.mocked(bridge.getSession).mockReturnValue(undefined);
+      manager['channelSessions'].clear();
+      mode = 'assisted';
+      vi.mocked(bridge.getPermissionCapabilities).mockResolvedValueOnce({ assistedApproval: false, bypassPermissions: true });
+      manager['attachSession'] = vi.fn<typeof manager['attachSession']>().mockImplementation(async (channelId, sessionId) => {
+        await manager['initializeRuntimePermissions'](channelId, sessionId, 'assisted');
+      });
+      await expect(manager.ensureSession('channel-1')).rejects.toThrow('unavailable');
+      await expect(manager.ensureSession('channel-1')).resolves.toEqual({ sessionId: 'session-1', isNew: false });
+      expect(clearChannelSession).not.toHaveBeenCalled();
+      expect(nativeMode).toBe('assisted');
+    });
+
+    it.each(['ensure', 'reload'] as const)('%s still replaces a genuinely missing stored session', async operation => {
+      vi.mocked(bridge.getSession).mockReturnValue(undefined);
+      manager['channelSessions'].clear();
+      manager['attachSession'] = vi.fn<typeof manager['attachSession']>().mockRejectedValue(new Error('Session not found'));
+      manager['createNewSession'] = vi.fn<typeof manager['createNewSession']>().mockResolvedValue('replacement');
+
+      if (operation === 'ensure') {
+        await expect(manager.ensureSession('channel-1')).resolves.toEqual({ sessionId: 'replacement', isNew: true });
+      } else {
+        await expect(manager.reloadSession('channel-1')).resolves.toBe('replacement');
+      }
+      expect(clearChannelSession).toHaveBeenCalledWith('channel-1');
+      expect(manager['createNewSession']).toHaveBeenCalledWith('channel-1');
+    });
   });
 
   it('approves judge-approved requests with assisted attribution and no chat prompt', async () => {
@@ -343,7 +456,7 @@ describe('SessionManager assisted permissions', () => {
     await manager.resolvePermission('channel-1', true, true);
     expect(await request).toMatchObject({ result: { kind: 'reject', feedback: expect.stringContaining('storage offline') } });
     expect(events).toHaveBeenCalledWith('session-1', 'channel-1', {
-      type: 'assistant.message', data: { content: expect.stringContaining('could not save and synchronize') },
+      type: 'bridge.permission_policy_notice', data: { content: expect.stringContaining('could not save and synchronize') },
     });
   });
 

@@ -126,8 +126,16 @@ async function withWorkspaceEnv<T>(workingDirectory: string, fn: () => Promise<T
   }
 }
 
+class PermissionSynchronizationError extends Error {
+  constructor(sessionId: string, cause: unknown) {
+    super(`Could not synchronize permissions for session ${sessionId}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = 'PermissionSynchronizationError';
+  }
+}
+
 /** Detect "Session not found" errors from the SDK backend. */
 export function isSessionNotFoundError(err: any): boolean {
+  if (err instanceof PermissionSynchronizationError) return false;
   const msg = String(err?.message ?? err).toLowerCase();
   return msg.includes('session not found') || msg.includes('session_not_found');
 }
@@ -851,7 +859,11 @@ export class SessionManager {
         await this.attachSession(channelId, storedSessionId);
         return { sessionId: storedSessionId, isNew: false };
       } catch (err) {
-      log.warn(`Failed to resume session ${storedSessionId} for channel ${channelId}, creating new:`, err);
+        if (!isSessionNotFoundError(err)) {
+          log.warn(`Failed to resume session ${storedSessionId}; preserving channel history:`, err);
+          throw err;
+        }
+        log.warn(`Failed to resume missing session ${storedSessionId} for channel ${channelId}, creating new:`, err);
         try { await clearChannelSession(channelId); } catch (e) { log.warn('Failed to clear channel session during recovery:', e); }
       }
     }
@@ -919,6 +931,10 @@ export class SessionManager {
       log.info(`Reloaded session ${existingId} for channel ${channelId}`);
       return existingId;
     } catch (err: any) {
+      if (!isSessionNotFoundError(err)) {
+        log.warn(`Failed to reload session ${existingId}; preserving channel history:`, err);
+        throw err;
+      }
       // Session no longer exists server-side (e.g., workspace was deleted and re-created)
       log.warn(`Stale session ${existingId} for channel ${channelId}: ${err?.message ?? err}. Creating new session.`);
       this.channelSessions.delete(channelId);
@@ -1074,6 +1090,7 @@ export class SessionManager {
         }
       } catch (retryErr: any) {
         log.warn(`Re-attach failed:`, retryErr?.message ?? retryErr);
+        if (!isSessionNotFoundError(retryErr)) throw retryErr;
       }
 
       // Last resort: create a new session (handles fallback via createNewSession)
@@ -1125,7 +1142,7 @@ export class SessionManager {
   /**
    * Wrap an RPC call with session re-attach recovery.
    * If the call fails with "Session not found", re-attaches the session and retries.
-   * If re-attach also fails, creates a new session and retries once more
+   * If re-attach confirms the session is missing, creates a new session and retries once more
    * (unless createOnFail is false, in which case the error propagates).
    */
   private async withSessionRetry<T>(channelId: string, fn: (sessionId: string) => Promise<T>, createOnFail = true): Promise<T> {
@@ -1143,6 +1160,7 @@ export class SessionManager {
         await this.attachSession(channelId, sessionId);
       } catch (attachErr: any) {
         log.warn(`Re-attach failed for ${sessionId}:`, attachErr?.message ?? attachErr);
+        if (!isSessionNotFoundError(attachErr)) throw attachErr;
         if (!createOnFail) {
           // Clear stale session so ensureSession() creates fresh on next call
           this.channelSessions.delete(channelId);
@@ -1481,7 +1499,7 @@ export class SessionManager {
           for (const warning of policy.warnings) log.warn(`Assisted policy on ${channelId}: ${warning}`);
           if (!isQuiet(channelId)) {
             this.eventHandler?.(sessionId, channelId, {
-              type: 'assistant.message',
+              type: 'bridge.permission_policy_notice',
               data: { content: formatPermissionPolicyWarnings(policy.warnings) },
             });
           }
@@ -1510,7 +1528,7 @@ export class SessionManager {
       await this.synchronizeSessionPermissions(channelId, sessionId, mode);
     } catch (error) {
       await this.safeDestroySession(sessionId);
-      throw error;
+      throw new PermissionSynchronizationError(sessionId, error);
     }
   }
 
@@ -1761,7 +1779,7 @@ export class SessionManager {
         persistenceError = err instanceof Error ? err.message : String(err);
         log.error('Could not persist and synchronize permission rule:', err);
         this.eventHandler?.(pending.sessionId, channelId, {
-          type: 'assistant.message',
+          type: 'bridge.permission_policy_notice',
           data: { content: `Permission denied: could not save and synchronize the remembered rule. ${persistenceError}` },
         });
       }

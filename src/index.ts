@@ -2183,14 +2183,15 @@ async function handleSessionEvent(
     return;
   }
 
-  if (event.type === 'bridge.permission_auto_decision') {
+  if (event.type === 'bridge.permission_auto_decision' || event.type === 'bridge.permission_policy_notice') {
     if (!isQuiet(channelId)) {
       const streamKey = activeStreams.get(channelId);
       const threadRootId = (streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined)
         ?? channelThreadRoots.get(channelId);
-      await adapter.sendMessage(channelId,
-        formatPermissionAutoDecision(event.data.approved, event.data.summary, event.data.reason),
-        { threadRootId });
+      const content = event.type === 'bridge.permission_policy_notice'
+        ? event.data.content
+        : formatPermissionAutoDecision(event.data.approved, event.data.summary, event.data.reason);
+      await adapter.sendMessage(channelId, content, { threadRootId });
     }
     return;
   }
