@@ -691,12 +691,28 @@ async function main(): Promise<void> {
 
         // Enter quiet mode — suppresses all streaming until NO_REPLY determination
         const clearQuiet = enterQuietMode(channelId);
+        const finishUnattended = sessionManager.beginUnattendedExecution(channelId);
+        let executionStopped = false;
         try {
           await sessionManager.sendMessage(channelId, prompt, undefined, undefined, { source: `automation-sched-${taskId}` });
           // Hold the lock until the response is fully streamed
           await waitForChannelIdle(channelId);
+          if (isBusy(channelId)) {
+            await sessionManager.abortSession(channelId);
+            executionStopped = true;
+            throw new Error('Scheduled task did not become idle before the execution timeout.');
+          }
+          executionStopped = true;
         } catch (err: any) {
           log.error(`Scheduled job sendMessage failed for ${channelId.slice(0, 8)}...:`, err);
+          if (!executionStopped) {
+            try {
+              await sessionManager.abortSession(channelId);
+              executionStopped = true;
+            } catch (abortError) {
+              log.error('Could not confirm scheduled execution stopped; retaining unattended permissions:', abortError);
+            }
+          }
           markIdleImmediate(channelId);
           const failedStream = activeStreams.get(channelId);
           if (failedStream) {
@@ -707,6 +723,7 @@ async function main(): Promise<void> {
           throw err;
         } finally {
           clearQuiet();
+          if (executionStopped) finishUnattended();
         }
       });
       channelLocks.set(channelId, task.catch((err) => { log.debug("Channel lock task failed:", err); }));
@@ -1397,22 +1414,22 @@ async function handleInboundMessage(
         break;
       }
       case 'approve':
-        if (!await sessionManager.resolvePermission(msg.channelId, true)) {
+        if (await sessionManager.resolvePermission(msg.channelId, true) === 'missing') {
           await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
         }
         break;
       case 'deny':
-        if (!await sessionManager.resolvePermission(msg.channelId, false)) {
+        if (await sessionManager.resolvePermission(msg.channelId, false) === 'missing') {
           await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
         }
         break;
       case 'remember':
-        if (!await sessionManager.resolvePermission(msg.channelId, true, true)) {
+        if (await sessionManager.resolvePermission(msg.channelId, true, true) === 'missing') {
           await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
         }
         break;
       case 'remember_deny':
-        if (!await sessionManager.resolvePermission(msg.channelId, false, true)) {
+        if (await sessionManager.resolvePermission(msg.channelId, false, true) === 'missing') {
           await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
         }
         break;
@@ -1850,10 +1867,8 @@ async function handleInboundMessage(
             break;
           }
 
-          // Save yolo state before changing it
           if (enableYolo) {
-            await sessionManager.saveYoloPreviousState(msg.channelId);
-            await sessionManager.setPermissionMode(msg.channelId, 'autopilot');
+            await sessionManager.setPermissionMode(msg.channelId, 'autopilot', { temporary: true });
           }
 
           const modeLabel = interactive ? 'interactive' : enableYolo ? 'autopilot + yolo' : 'autopilot';
@@ -2062,21 +2077,21 @@ async function handleReaction(
   const { adapter } = resolved;
 
   if (reaction.emoji === 'thumbsup' || reaction.emoji === '+1') {
-    if (await sessionManager.resolvePermission(reaction.channelId, true)) {
+    if (await sessionManager.resolvePermission(reaction.channelId, true) === 'applied') {
       await adapter.sendMessage(reaction.channelId, '✅ Approved via reaction.');
     }
   } else if (reaction.emoji === 'thumbsdown' || reaction.emoji === '-1') {
-    if (await sessionManager.resolvePermission(reaction.channelId, false)) {
+    if (await sessionManager.resolvePermission(reaction.channelId, false) === 'applied') {
       await adapter.sendMessage(reaction.channelId, '❌ Denied via reaction.');
     }
   } else if (reaction.emoji === 'floppy_disk') {
     const isHook = sessionManager.isHookPermission(reaction.channelId);
-    if (await sessionManager.resolvePermission(reaction.channelId, true, !isHook)) {
+    if (await sessionManager.resolvePermission(reaction.channelId, true, !isHook) === 'applied') {
       await adapter.sendMessage(reaction.channelId, isHook ? '✅ Approved via reaction.' : '💾 Approved + remembered via reaction.');
     }
   } else if (reaction.emoji === 'no_entry_sign') {
     const isHook = sessionManager.isHookPermission(reaction.channelId);
-    if (await sessionManager.resolvePermission(reaction.channelId, false, !isHook)) {
+    if (await sessionManager.resolvePermission(reaction.channelId, false, !isHook) === 'applied') {
       await adapter.sendMessage(reaction.channelId, isHook ? '❌ Denied via reaction.' : '🚫 Denied + remembered via reaction.');
     }
   }
@@ -2090,6 +2105,8 @@ async function handleSessionEvent(
   event: any,
   sessionManager: SessionManager,
 ): Promise<void> {
+  if (event.type === 'bridge.permission_policy_error'
+      && !sessionManager.isCurrentPermissionAttachment(channelId, event.data.attachmentGeneration)) return;
   // Reset loop detector when the session changes (e.g., model fallback creates new session)
   const prevSession = lastSessionIds.get(channelId);
   if (prevSession && prevSession !== sessionId) {
@@ -2170,6 +2187,7 @@ async function handleSessionEvent(
   const verbose = prefs?.verbose ?? channelConfig.verbose;
 
   if (event.type === 'bridge.permission_policy_error') {
+    if (!sessionManager.isCurrentPermissionAttachment(channelId, event.data.attachmentGeneration)) return;
     const streamKey = activeStreams.get(channelId);
     const threadRootId = (streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined)
       ?? channelThreadRoots.get(channelId);
@@ -2178,13 +2196,14 @@ async function handleSessionEvent(
       activeStreams.delete(channelId);
     }
     await finalizeActivityFeed(channelId, adapter);
+    if (!sessionManager.isCurrentPermissionAttachment(channelId, event.data.attachmentGeneration)) return;
     markIdleImmediate(channelId);
     await adapter.sendMessage(channelId, event.data.message, { threadRootId });
     return;
   }
 
   if (event.type === 'bridge.permission_auto_decision' || event.type === 'bridge.permission_policy_notice') {
-    const content = formatPermissionNotice(event, verbose, isQuiet(channelId));
+    const content = formatPermissionNotice(event, verbose, isQuiet(channelId) || sessionManager.isUnattendedExecution(channelId));
     if (content !== null) {
       const streamKey = activeStreams.get(channelId);
       const threadRootId = (streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined)
@@ -2198,7 +2217,7 @@ async function handleSessionEvent(
   // During quiet mode, auto-deny permissions and suppress input requests —
   // quiet tasks should be non-interactive
   if (event.type === 'bridge.permission_request') {
-    if (isQuiet(channelId)) {
+    if (isQuiet(channelId) || sessionManager.isUnattendedExecution(channelId)) {
       log.info(`Auto-denying permission during quiet mode on ${channelId.slice(0, 8)}...`);
       await sessionManager.resolvePermission(channelId, false);
       return;
@@ -2218,7 +2237,7 @@ async function handleSessionEvent(
   }
 
   if (event.type === 'bridge.user_input_request') {
-    if (isQuiet(channelId)) {
+    if (isQuiet(channelId) || sessionManager.isUnattendedExecution(channelId)) {
       log.info(`Suppressing user input request during quiet mode on ${channelId.slice(0, 8)}...`);
       sessionManager.resolveUserInput(channelId, '');
       return;

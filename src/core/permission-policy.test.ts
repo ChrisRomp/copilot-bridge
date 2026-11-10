@@ -184,10 +184,30 @@ describe('remembered shell rules', () => {
       config: { allow: ['shell(git status)'] },
       storedRules: [stored('shell', 'git', 'deny'), stored('shell', 'touch', 'deny')],
     });
+
     expect(result.config.rules).toEqual({
       approved: [shell('git status:*')], denied: [shell('touch')],
     });
     hasWarning(result, 'config approval has priority');
+  });
+
+  it('does not export a blanket stored deny over an untranslatable earlier allow', () => {
+    const result = project({
+      config: { allow: ['shell(/usr/bin/printf)'] },
+      storedRules: [stored('shell', '*', 'deny')],
+    });
+    expect(result.config.rules).toEqual({ approved: [], denied: [] });
+    hasWarning(result, 'config approval has priority');
+  });
+
+  it('withholds stored denies overlapping admin grants without granting anything new', () => {
+    const result = project({
+      isAdmin: true,
+      storedRules: [stored('shell', 'touch', 'deny'), stored('shell', 'echo', 'deny')],
+    });
+    expect(result.config.rules).toEqual({ approved: [], denied: [shell('echo')] });
+    expect(project({ isAdmin: true, storedRules: [stored('shell', '*', 'deny')] }).config.rules?.denied).toEqual([]);
+    hasWarning(result, 'earlier admin grant');
   });
 
   it('keeps projected config denies authoritative over stored approvals', () => {

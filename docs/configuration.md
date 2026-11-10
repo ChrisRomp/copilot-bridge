@@ -280,7 +280,7 @@ Judge approvals and unattended denials produce short chat notices only in verbos
 
 Native rule-settled actions do not emit the permission events used for judge notices; this is not a complete audit feed of every policy decision. Provenance tags identify the sender type, not an independent authorization boundary.
 
-Mode and policy are reapplied on session creation/resume and relevant changes. Permission synchronization failures are surfaced, not silently treated as a successful mode change. `/implement yolo` temporarily switches permissions and restores the previous mode, including assisted.
+Mode and policy are reapplied on session creation/resume and relevant changes. Permission synchronization failures are surfaced, not silently treated as a successful mode change. `/implement yolo` temporarily switches permissions in memory while keeping the previous mode persisted, so a restart never retains the temporary elevation. Scheduled execution stays unattended until completion or confirmed abort, independently of quiet output's timeout.
 
 ## Inter-Agent Communication
 

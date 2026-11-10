@@ -585,6 +585,8 @@ export class SessionManager {
   // create/cold resume. Native remembered approvals and managed policy are separate.
   private runtimePermissionStates = new Map<string, { signature: string; projected: boolean; warnings: string[] }>();
   private permissionUpdates = new Map<string, Promise<unknown>>();
+  private permissionAttachmentGenerations = new Map<string, number>();
+  private unattendedExecutions = new Map<string, symbol>();
   // Handler for send_file tool (set by index.ts, calls adapter.sendFile)
   private sendFileHandler: ((channelId: string, filePath: string, message?: string) => Promise<string>) | null = null;
   private getAdapterForChannel: ((channelId: string) => ChannelAdapter | null | Promise<ChannelAdapter | null>) | null = null;
@@ -875,6 +877,7 @@ export class SessionManager {
 
   /** Create a brand new session for a channel (used by /new command). */
   async newSession(channelId: string): Promise<string> {
+    this.advancePermissionAttachment(channelId);
     // Clean up existing session
     const existingId = this.channelSessions.get(channelId);
     if (existingId) {
@@ -902,6 +905,7 @@ export class SessionManager {
 
   /** Reload the current session — detach and re-attach to pick up AGENTS.md / config changes. */
   async reloadSession(channelId: string): Promise<string> {
+    this.advancePermissionAttachment(channelId);
     const existingId = this.channelSessions.get(channelId) ?? await getChannelSession(channelId) ?? undefined;
     if (!existingId) {
       // No session to reload — just create one
@@ -953,6 +957,7 @@ export class SessionManager {
 
   /** Resume a specific past session by ID. */
   async resumeToSession(channelId: string, targetSessionId: string): Promise<string> {
+    this.advancePermissionAttachment(channelId);
     // If already attached to this session, just reload it
     const existingId = this.channelSessions.get(channelId);
     if (existingId === targetSessionId) {
@@ -979,6 +984,7 @@ export class SessionManager {
     // If target session is active on another channel, disconnect it first
     const otherChannel = this.sessionChannels.get(targetSessionId);
     if (otherChannel) {
+      this.advancePermissionAttachment(otherChannel);
       const unsub = this.sessionUnsubscribes.get(targetSessionId);
       if (unsub) { unsub(); this.sessionUnsubscribes.delete(targetSessionId); }
       await this.safeDestroySession(targetSessionId);
@@ -1410,7 +1416,7 @@ export class SessionManager {
       verbose: storedPrefs?.verbose ?? configChannel.verbose,
       triggerMode: configChannel.triggerMode,
       threadedReplies: storedPrefs?.threadedReplies ?? configChannel.threadedReplies,
-      permissionMode: storedPrefs?.permissionMode ?? configChannel.permissionMode,
+      permissionMode: this.yoloPreviousState.has(channelId) ? 'autopilot' : storedPrefs?.permissionMode ?? configChannel.permissionMode,
       reasoningEffort: storedPrefs?.reasoningEffort ?? (configChannel as any).reasoningEffort ?? null,
       contextTier: storedPrefs?.contextTier ?? configChannel.contextTier ?? getConfig().defaults.contextTier ?? null,
       disabledSkills: storedPrefs?.disabledSkills,
@@ -1457,10 +1463,24 @@ export class SessionManager {
     }
   }
 
+  private advancePermissionAttachment(channelId: string): void {
+    this.permissionAttachmentGenerations.set(channelId, (this.permissionAttachmentGenerations.get(channelId) ?? 0) + 1);
+  }
+
+  isCurrentPermissionAttachment(channelId: string, generation: number): boolean {
+    return (this.permissionAttachmentGenerations.get(channelId) ?? 0) === generation;
+  }
+
   private async synchronizeSessionPermissions(channelId: string, sessionId: string, mode: string): Promise<void> {
     if (!isBridgePermissionMode(mode)) throw new Error(`Unknown bridge permission mode: ${mode}`);
     const state = this.runtimePermissionStates.get(sessionId);
     if (!state) throw new Error('Cannot replace permission policy in an unowned session. Use /new first.');
+    const generation = this.permissionAttachmentGenerations.get(channelId) ?? 0;
+    const assertCurrent = () => {
+      if (!this.isCurrentPermissionAttachment(channelId, generation) || this.runtimePermissionStates.get(sessionId) !== state) {
+        throw new Error('Session attachment changed while synchronizing permissions; retry the operation.');
+      }
+    };
     const nativeMode = mode === 'assisted' ? 'assisted' : 'manual';
     const actualMode = await this.bridge.getPermissionMode(sessionId);
 
@@ -1484,6 +1504,7 @@ export class SessionManager {
         isAdmin: isBotAdmin(channelConfig.platform, botName),
       });
       const signature = JSON.stringify(policy.config);
+      assertCurrent();
       if (!state.projected || state.signature !== signature) {
         // Mark before the RPC so a partially failed update is also restored.
         state.projected = true;
@@ -1491,7 +1512,9 @@ export class SessionManager {
         const applied = await this.bridge.configurePermissions(sessionId, policy.config);
         if (!applied.success) throw new Error('Copilot did not apply the channel permission rules.');
       }
+      assertCurrent();
       if (actualMode !== nativeMode) await this.bridge.setPermissionMode(sessionId, nativeMode);
+      assertCurrent();
       state.signature = signature;
       if (JSON.stringify(state.warnings) !== JSON.stringify(policy.warnings)) {
         state.warnings = policy.warnings;
@@ -1506,7 +1529,9 @@ export class SessionManager {
         }
       }
     } else {
+      assertCurrent();
       if (actualMode !== 'manual') await this.bridge.setPermissionMode(sessionId, 'manual');
+      assertCurrent();
       if (state.projected) {
         // Restore only the bridge-owned configured rule slot. Never reset
         // session/location approvals or replace an unknown path/URL manager.
@@ -1516,6 +1541,7 @@ export class SessionManager {
         });
         if (!restored.success) throw new Error('Copilot did not remove the assisted channel policy.');
       }
+      assertCurrent();
       state.projected = false;
       state.signature = '';
       state.warnings = [];
@@ -1523,16 +1549,25 @@ export class SessionManager {
   }
 
   private async initializeRuntimePermissions(channelId: string, sessionId: string, mode: string): Promise<void> {
+    const generation = this.permissionAttachmentGenerations.get(channelId) ?? 0;
     this.runtimePermissionStates.set(sessionId, { signature: '', projected: false, warnings: [] });
     try {
       await this.synchronizeSessionPermissions(channelId, sessionId, mode);
     } catch (error) {
-      await this.safeDestroySession(sessionId);
+      if (this.isCurrentPermissionAttachment(channelId, generation)) await this.safeDestroySession(sessionId);
       throw new PermissionSynchronizationError(sessionId, error);
     }
   }
 
-  private async invalidatePermissionSession(channelId: string, sessionId: string, recoveryMessage?: string): Promise<void> {
+  private async invalidatePermissionSession(
+    channelId: string,
+    sessionId: string,
+    recoveryMessage?: string,
+    generation = this.permissionAttachmentGenerations.get(channelId) ?? 0,
+  ): Promise<void> {
+    const isCurrent = () => this.isCurrentPermissionAttachment(channelId, generation)
+      && this.channelSessions.get(channelId) === sessionId;
+    if (!isCurrent()) return;
     let abortConfirmed = false;
     try {
       await this.bridge.abortSession(sessionId);
@@ -1540,7 +1575,9 @@ export class SessionManager {
     } catch (error) {
       log.error(`Could not confirm abort after permission failure on ${channelId}:`, error);
     }
+    if (!isCurrent()) return;
     await this.safeDestroySession(sessionId);
+    if (!isCurrent()) return;
     this.sessionUnsubscribes.get(sessionId)?.();
     this.sessionUnsubscribes.delete(sessionId);
     if (this.channelSessions.get(channelId) === sessionId) this.channelSessions.delete(channelId);
@@ -1549,36 +1586,55 @@ export class SessionManager {
     this.eventHandler?.(sessionId, channelId, {
       type: 'bridge.permission_policy_error',
       data: {
+        attachmentGeneration: generation,
         message: `Permission synchronization failed. ${abortConfirmed ? 'The task was stopped.' : 'Stopping the task could not be confirmed.'} The session was disconnected. ${recoveryMessage ?? 'Policy must be reapplied before sending further messages.'}`,
       },
     });
   }
 
   /** Apply native policy and mode before persisting a preference or reporting success. */
-  async setPermissionMode(channelId: string, mode: BridgePermissionMode): Promise<void> {
+  async setPermissionMode(channelId: string, mode: BridgePermissionMode, options?: { temporary?: boolean }): Promise<void> {
     if (!isBridgePermissionMode(mode)) throw new Error('Invalid permission mode.');
+    if (options?.temporary && mode !== 'autopilot') throw new Error('Only yolo can be enabled temporarily.');
     const activeId = this.channelSessions.get(channelId);
-    if (mode !== 'assisted' && (!activeId || !this.bridge.getSession(activeId))) {
+    if (!options?.temporary && mode !== 'assisted' && (!activeId || !this.bridge.getSession(activeId))) {
       await setChannelPrefs(channelId, { permissionMode: mode });
-      if (this.permissionRecoveryRequired.delete(channelId)) this.yoloPreviousState.delete(channelId);
+      this.permissionRecoveryRequired.delete(channelId);
+      this.yoloPreviousState.delete(channelId);
       return;
     }
     await this.ensureSession(channelId);
     await this.withPermissionUpdate(channelId, async () => {
       const sessionId = this.channelSessions.get(channelId);
       if (!sessionId) throw new Error('Session is no longer active.');
+      const generation = this.permissionAttachmentGenerations.get(channelId) ?? 0;
       const previous = (await this.getEffectivePrefs(channelId)).permissionMode;
       const denyPending = mode === 'assisted' && await this.isPermissionUnattended(channelId);
       try {
+        const restoreMode = this.yoloPreviousState.get(channelId) ?? previous;
+        if (options?.temporary) {
+          // Persist the recovery target, never the temporary elevation. A crash
+          // or restart then resumes the original permissions automatically.
+          await setChannelPrefs(channelId, { permissionMode: restoreMode });
+        }
         await this.synchronizeSessionPermissions(channelId, sessionId, mode);
-        await setChannelPrefs(channelId, { permissionMode: mode });
+        if (!this.isCurrentPermissionAttachment(channelId, generation)) {
+          throw new Error('Session attachment changed while applying permission mode; retry the operation.');
+        }
+        if (options?.temporary) {
+          this.yoloPreviousState.set(channelId, restoreMode);
+        } else {
+          await setChannelPrefs(channelId, { permissionMode: mode });
+          this.yoloPreviousState.delete(channelId);
+        }
         if (denyPending) this.clearPendingPermissions(channelId);
       } catch (error) {
+        if (!this.isCurrentPermissionAttachment(channelId, generation)) throw error;
         try {
           await this.synchronizeSessionPermissions(channelId, sessionId, previous);
         } catch (rollbackError) {
           log.error('Could not restore permission mode after a failed change:', rollbackError);
-          await this.invalidatePermissionSession(channelId, sessionId);
+          await this.invalidatePermissionSession(channelId, sessionId, undefined, generation);
           throw new AggregateError([error, rollbackError], 'Permission change and rollback failed; session disconnected.');
         }
         throw error;
@@ -1597,12 +1653,13 @@ export class SessionManager {
     await this.withPermissionUpdate(channelId, async () => {
       const sessionId = this.channelSessions.get(channelId);
       if (!sessionId || !this.bridge.getSession(sessionId)) return;
+      const generation = this.permissionAttachmentGenerations.get(channelId) ?? 0;
       try {
         const prefs = await this.getEffectivePrefs(channelId);
         await this.synchronizeSessionPermissions(channelId, sessionId, prefs.permissionMode);
       } catch (error) {
         log.error(`Permission synchronization failed on ${channelId}:`, error);
-        await this.invalidatePermissionSession(channelId, sessionId);
+        await this.invalidatePermissionSession(channelId, sessionId, undefined, generation);
         throw error;
       }
     });
@@ -1753,9 +1810,9 @@ export class SessionManager {
   }
 
   /** Resolve a pending permission request (first in queue). */
-  async resolvePermission(channelId: string, allow: boolean, remember?: boolean): Promise<boolean> {
+  async resolvePermission(channelId: string, allow: boolean, remember?: boolean): Promise<'applied' | 'failed' | 'missing'> {
     const queue = this.pendingPermissions.get(channelId);
-    if (!queue || queue.length === 0) return false;
+    if (!queue || queue.length === 0) return 'missing';
 
     const pending = queue.shift()!;
 
@@ -1810,7 +1867,7 @@ export class SessionManager {
       });
     }
 
-    return true;
+    return persistenceError ? 'failed' : 'applied';
   }
 
   /** Resolve a pending user input request (first in queue). */
@@ -1868,14 +1925,6 @@ export class SessionManager {
     return pending;
   }
 
-  /** Save previous permission mode before auto-enabling yolo. */
-  async saveYoloPreviousState(channelId: string): Promise<void> {
-    const prefs = await getChannelPrefs(channelId);
-    const channelConfig = await getChannelConfig(channelId);
-    const current = prefs?.permissionMode ?? channelConfig.permissionMode;
-    this.yoloPreviousState.set(channelId, current);
-  }
-
   /** Revert yolo to previous state (called on session.idle after plan implementation). */
   async revertYoloIfNeeded(channelId: string): Promise<boolean> {
     const previous = this.yoloPreviousState.get(channelId);
@@ -1919,12 +1968,26 @@ export class SessionManager {
     return this.channelSessions.get(channelId) ?? await getChannelSession(channelId) ?? undefined;
   }
 
+  /** Execution context, independent of quiet mode's output timeout. */
+  beginUnattendedExecution(channelId: string): () => void {
+    const execution = Symbol();
+    this.unattendedExecutions.set(channelId, execution);
+    return () => {
+      if (this.unattendedExecutions.get(channelId) === execution) this.unattendedExecutions.delete(channelId);
+    };
+  }
+
+  isUnattendedExecution(channelId: string): boolean {
+    return this.unattendedExecutions.has(channelId);
+  }
+
   /** Abort the current turn for a channel's session. */
   async abortSession(channelId: string): Promise<void> {
     const sessionId = this.channelSessions.get(channelId);
     if (sessionId) {
       await this.bridge.abortSession(sessionId);
     }
+    this.unattendedExecutions.delete(channelId);
   }
 
   /** Check if channel has a pending user input request. */
@@ -2152,6 +2215,7 @@ export class SessionManager {
   }
 
   private async createNewSession(channelId: string): Promise<string> {
+    this.advancePermissionAttachment(channelId);
     this.assertPermissionRecoveryComplete(channelId);
     const prefs = await this.getEffectivePrefs(channelId);
     const workingDirectory = await this.resolveWorkingDirectory(channelId);
@@ -2341,6 +2405,7 @@ export class SessionManager {
   }
 
   private async attachSession(channelId: string, sessionId: string): Promise<void> {
+    this.advancePermissionAttachment(channelId);
     this.assertPermissionRecoveryComplete(channelId);
     const prefs = await this.getEffectivePrefs(channelId);
     const resident = this.bridge.getSession(sessionId);
@@ -3359,7 +3424,7 @@ export class SessionManager {
   }
 
   private async isPermissionUnattended(channelId: string): Promise<boolean> {
-    return isQuiet(channelId) || await this.getSessionMode(channelId) === 'autopilot';
+    return this.isUnattendedExecution(channelId) || isQuiet(channelId) || await this.getSessionMode(channelId) === 'autopilot';
   }
 
   private async handlePermissionRequest(
@@ -3592,5 +3657,6 @@ export class SessionManager {
     this.sessionChannels.clear();
     this.runtimePermissionStates.clear();
     this.permissionUpdates.clear();
+    this.unattendedExecutions.clear();
   }
 }

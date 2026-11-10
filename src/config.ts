@@ -5,7 +5,7 @@ import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgent
 import type { SDKProviderConfig } from './core/bridge.js';
 import { getDynamicChannel } from './state/store.js';
 import { createLogger } from './logger.js';
-import { SHELL_WRAPPERS } from './core/permission-patterns.js';
+import { SHELL_WRAPPERS, ADMIN_SHELL_ALLOW } from './core/permission-patterns.js';
 
 const log = createLogger('config');
 
@@ -984,8 +984,7 @@ export function evaluateConfigPermissions(
 
   // Admin bots get additional shell commands for workspace/config management
   if (isAdmin && kind === 'shell' && shellCmd) {
-    const adminShellAllow = ['cp', 'mkdir', 'curl', 'launchctl', 'mv', 'touch', 'chmod'];
-    if (adminShellAllow.includes(shellCmd)) {
+    if (ADMIN_SHELL_ALLOW.has(shellCmd)) {
       return 'allow';
     }
   }

@@ -1,7 +1,7 @@
 import type { PermissionsConfig } from '../types.js';
 import type { StoredPermissionRule } from '../state/types.js';
 import type { SDKPermissionConfig } from './bridge.js';
-import { SHELL_WRAPPERS } from './permission-patterns.js';
+import { SHELL_WRAPPERS, ADMIN_SHELL_ALLOW } from './permission-patterns.js';
 
 type RuntimeRules = NonNullable<SDKPermissionConfig['rules']>;
 type RuntimeRule = RuntimeRules['approved'][number];
@@ -107,15 +107,18 @@ export function buildRuntimePermissionPolicy(input: RuntimePermissionPolicyInput
     !(unprojectedDenyKinds.has('mcp') && !RESERVED_KINDS.has(rule.kind));
 
   for (const spec of input.config?.allow ?? []) {
+    const scope = parse(spec);
+    if (scope) configAllows.push(scope);
     const rule = mapConfig(spec);
     if (!rule) {
       warn(`Config allow ${JSON.stringify(spec)} was not projected because its native meaning is not verified.`);
       continue;
     }
-    // Keep even withheld config allows for precedence against stored denies.
-    configAllows.push(rule);
     if (canApprove(rule)) add(approved, rule);
     else warn(`Config allow ${JSON.stringify(spec)} was withheld because an overlapping config deny could not be projected.`);
+  }
+  if (input.isAdmin) {
+    for (const command of ADMIN_SHELL_ALLOW) configAllows.push({ kind: 'shell', argument: command });
   }
 
   const byTool = new Map<string, StoredPermissionRule[]>();
@@ -131,7 +134,7 @@ export function buildRuntimePermissionPolicy(input: RuntimePermissionPolicyInput
     } else if (configAllows.some(allow => overlaps(allow, rule))) {
       // Config approval wins before SQLite is queried. Native deny-wins cannot
       // express an exception to a broader remembered deny, so do not invert it.
-      warn(`${label} was not projected because config approval has priority over the overlapping stored deny.`);
+      warn(`${label} was not projected because config approval has priority or an earlier admin grant overlaps the stored deny.`);
     } else {
       add(denied, rule);
     }
