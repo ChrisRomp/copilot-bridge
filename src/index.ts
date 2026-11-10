@@ -2,7 +2,7 @@ import { loadConfig, getConfig, isConfiguredChannel, registerDynamicChannel, mar
 import { CopilotBridge } from './core/bridge.js';
 import { SessionManager, BRIDGE_CUSTOM_TOOLS, parseEnvFile } from './core/session-manager.js';
 import { formatContextTierLabel, handleCommand, parseCommand } from './core/command-handler.js';
-import { formatEvent, formatPermissionRequest, formatPermissionAutoDecision, formatUserInputRequest } from './core/stream-formatter.js';
+import { formatEvent, formatPermissionRequest, formatPermissionNotice, formatUserInputRequest } from './core/stream-formatter.js';
 import { ASSISTED_AUTOPILOT_NOTICE } from './core/assisted-permissions.js';
 import { WorkspaceWatcher, initWorkspace, getWorkspacePath } from './core/workspace-manager.js';
 import { MattermostAdapter } from './channels/mattermost/adapter.js';
@@ -2184,13 +2184,11 @@ async function handleSessionEvent(
   }
 
   if (event.type === 'bridge.permission_auto_decision' || event.type === 'bridge.permission_policy_notice') {
-    if (!isQuiet(channelId)) {
+    const content = formatPermissionNotice(event, verbose, isQuiet(channelId));
+    if (content !== null) {
       const streamKey = activeStreams.get(channelId);
       const threadRootId = (streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined)
         ?? channelThreadRoots.get(channelId);
-      const content = event.type === 'bridge.permission_policy_notice'
-        ? event.data.content
-        : formatPermissionAutoDecision(event.data.approved, event.data.summary, event.data.reason);
       await adapter.sendMessage(channelId, content, { threadRootId });
     }
     return;

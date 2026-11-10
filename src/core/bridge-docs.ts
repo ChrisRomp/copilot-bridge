@@ -295,7 +295,7 @@ For requests delivered to the bridge's permission handler, permissions are resol
 
 Autopilot controls the autonomous loop; it does not change permission mode. In assisted autopilot, Copilot may settle permissions without invoking the bridge. Supported remembered rules are synchronized into each SDK session, not the shared project-scoped \`permissions-config.json\`. Translation gaps produce a concise chat notice; individual limitations and affected rules are logged by the bridge. Agents need access to those logs to diagnose the exact gaps; \`/rules\` does not annotate translation status. Bridge-only checks are not universally enforced on runtime-owned decisions. Sync failures are surfaced explicitly.
 
-Assisted prompts include the judge's reason. Final AI approvals and unattended denials produce short chat notices; quiet scheduled tasks log only. Scheduled and inter-agent prompts carry automation/agent provenance. Judge customization and assisted inter-agent sessions are not supported.
+Assisted prompts include the judge's reason. Final AI approvals and unattended denials produce short chat notices only with verbose mode enabled; decisions are always logged, and quiet scheduled tasks never post them. Policy limitation notices and approval prompts remain visible without verbose. Scheduled and inter-agent prompts carry automation/agent provenance. Judge customization and assisted inter-agent sessions are not supported.
 
 ## Config Rules
 

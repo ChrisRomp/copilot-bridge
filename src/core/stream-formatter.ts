@@ -175,6 +175,18 @@ export function formatPermissionRequest(toolName: string, input: unknown, comman
 }
 
 /** A notice, not a permission prompt or a stream-finalization event. */
+export function formatPermissionNotice(
+  event:
+    | { type: 'bridge.permission_auto_decision'; data: { approved: boolean; summary: string; reason?: string } }
+    | { type: 'bridge.permission_policy_notice'; data: { content: string } },
+  verbose: boolean,
+  quiet: boolean,
+): string | null {
+  if (quiet) return null;
+  if (event.type === 'bridge.permission_policy_notice') return event.data.content;
+  return verbose ? formatPermissionAutoDecision(event.data.approved, event.data.summary, event.data.reason) : null;
+}
+
 export function formatPermissionAutoDecision(approved: boolean, summary: string, reason?: string): string {
   const label = approved ? 'Auto-approved' : 'Denied';
   const subject = safePermissionText(summary, 180) || 'Permission request';

@@ -1,5 +1,23 @@
 import { describe, it, expect } from 'vitest';
-import { formatEvent, formatPermissionRequest, formatPermissionAutoDecision, formatPermissionPolicyWarnings } from './stream-formatter.js';
+import { formatEvent, formatPermissionRequest, formatPermissionNotice, formatPermissionAutoDecision, formatPermissionPolicyWarnings } from './stream-formatter.js';
+
+describe('permission notice visibility', () => {
+  it.each([true, false])('only shows automatic decisions in verbose mode (approved=%s)', approved => {
+    const event = {
+      type: 'bridge.permission_auto_decision' as const,
+      data: { approved, summary: 'shell: echo hello', reason: 'Human confirmation required' },
+    };
+    expect(formatPermissionNotice(event, false, false)).toBeNull();
+    expect(formatPermissionNotice(event, true, false)).toContain(approved ? 'Auto-approved:' : 'Denied:');
+    expect(formatPermissionNotice(event, true, true)).toBeNull();
+  });
+
+  it.each([false, true])('keeps policy warnings visible regardless of verbose=%s, except in quiet tasks', verbose => {
+    const event = { type: 'bridge.permission_policy_notice' as const, data: { content: 'Some rules remain bridge-only.' } };
+    expect(formatPermissionNotice(event, verbose, false)).toBe(event.data.content);
+    expect(formatPermissionNotice(event, verbose, true)).toBeNull();
+  });
+});
 
 describe('formatPermissionPolicyWarnings', () => {
   it('omits notices when there are no policy limitations', () => {
