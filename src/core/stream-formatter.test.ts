@@ -2,38 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { formatEvent, formatPermissionRequest, formatPermissionAutoDecision, formatPermissionPolicyWarnings } from './stream-formatter.js';
 
 describe('formatPermissionPolicyWarnings', () => {
-  it('omits empty reports and uses the requested header for real limitations', () => {
+  it('omits notices when there are no policy limitations', () => {
     expect(formatPermissionPolicyWarnings([])).toBe('');
-    expect(formatPermissionPolicyWarnings(['Shell policy is not synchronized']))
-      .toBe('Assisted permission policy limitations:\n- Shell policy is not synchronized');
   });
 
-  it('neutralizes mentions, markup, backticks and injected lines in warning details', () => {
-    const result = formatPermissionPolicyWarnings(['<@U123> <!here> @channel `run` **bold**\n- injected']);
-    expect(result.split('\n')).toHaveLength(2);
-    expect(result).not.toContain('<@');
-    expect(result).not.toContain('<!');
-    expect(result).not.toContain('@channel');
-    expect(result).toContain('\\`run\\`');
-    expect(result).toContain('\\*\\*bold\\*\\*');
-  });
-
-  it('bounds visible entries and each escaped detail, indicating the omitted count', () => {
-    const warnings = Array.from({ length: 8 }, () => '<'.repeat(2000));
+  it.each([1, 6, 8])('summarizes %i limitations without enumerating or truncating them', count => {
+    const warnings = Array.from({ length: count }, (_, index) => `Private rule ${index + 1}: <@U123> @channel\n- details`);
     const result = formatPermissionPolicyWarnings(warnings);
-    const lines = result.split('\n');
-    expect(lines).toHaveLength(7);
-    expect(lines.slice(1, 6).every(line => line.length <= 242)).toBe(true);
-    expect(lines[6]).toBe('- … 3 more limitations not shown.');
-    expect(result.length).toBeLessThan(1300);
-    expect(result).not.toMatch(/&(?:l|lt)…/);
-    expect(warnings).toHaveLength(8);
-  });
-
-  it('uses a visible fallback for control-only details and singular overflow wording', () => {
-    const result = formatPermissionPolicyWarnings(Array.from({ length: 6 }, () => '\u001b\u202e'));
-    expect(result).toContain('- Details unavailable.');
-    expect(result).toContain('- … 1 more limitation not shown.');
+    expect(result).toBe('Some bridge permission rules could not be translated for assisted mode. This may cause extra prompts, or leave those rules unenforced during unattended autopilot.');
+    expect(warnings).toHaveLength(count);
   });
 });
 

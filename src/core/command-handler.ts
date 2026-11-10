@@ -962,13 +962,29 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
       if (!arg) {
         const prefs = await getChannelPrefs(channelId);
         const current = effectivePrefs?.permissionMode ?? prefs?.permissionMode ?? getDefaultPermissionMode();
-        return { handled: true, response: `🛡️ Permission mode: **${formatPermissionModeLabel(current)}**` };
+        return {
+          handled: true,
+          response: [
+            `🛡️ Permission mode: **${formatPermissionModeLabel(current)}**`,
+            '',
+            '**Available modes:**',
+            '- `/permissions manual` — Ask when no rule already allows or denies the action.',
+            '- `/permissions assisted` — Uses AI to reduce approval prompts; ask if not approved, or deny when unattended.',
+            '- `/permissions yolo` — Auto-approve after bridge hardcoded safety checks.',
+            '',
+            'Permission mode is independent of `/autopilot`.',
+          ].join('\n'),
+        };
       }
       let mode: BridgePermissionMode;
       switch (arg) {
+        case 'ask':
         case 'manual':
         case 'interactive': mode = 'interactive'; break;
+        case 'assist':
+        case 'ai':
         case 'assisted': mode = 'assisted'; break;
+        case 'allow-all':
         case 'yolo':
         case 'autopilot': mode = 'autopilot'; break;
         default:
@@ -1071,7 +1087,7 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
         '`/reasoning <level>` — Set reasoning effort (low/medium/high/xhigh)',
         '`/verbose` — Toggle tool call visibility',
         '`/autopilot` — Toggle autonomous session mode (independent of permissions)',
-        '`/permissions [manual|assisted|yolo]` — Show or set permission mode',
+        '`/permissions [manual|assisted|yolo]` — Show current/available modes or switch mode',
         '`/assisted [on|off]` — Toggle safety-reviewed permissions',
         '`/yolo [on|off]` — Toggle auto-approve permissions',
         '`/schedule list` — List scheduled tasks',
@@ -1109,7 +1125,7 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
           '`/always approve` / `/always deny` — Approve or deny + save rule',
           '`/rules` — Show all permission rules',
           '`/rules clear [spec]` — Clear rules (all or specific)',
-          '`/permissions [manual|assisted|yolo]` — Show or set permission mode (`interactive`/`autopilot` are aliases for manual/yolo)',
+          '`/permissions [manual|assisted|yolo]` — Show current/available modes or switch mode (`interactive`/`autopilot` are aliases for manual/yolo)',
           '`/assisted [on|off]` — Toggle safety-reviewed permissions; off returns to manual',
           '`/yolo [on|off]` — Toggle bridge auto-approval; off returns to manual',
           '`/autopilot` — Toggle autopilot session mode (independent of permission mode)',

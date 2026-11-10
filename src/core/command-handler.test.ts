@@ -338,10 +338,18 @@ describe('permission mode commands', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
   it.each([
+    ['ask', 'interactive'],
+    ['ASK', 'interactive'],
     ['manual', 'interactive'],
     ['interactive', 'interactive'],
+    ['assist', 'assisted'],
+    ['ASSIST', 'assisted'],
+    ['ai', 'assisted'],
+    ['AI', 'assisted'],
     ['assisted', 'assisted'],
     ['yolo', 'autopilot'],
+    ['allow-all', 'autopilot'],
+    ['ALLOW-ALL', 'autopilot'],
     ['autopilot', 'autopilot'],
     ['ASSISTED', 'assisted'],
   ])('/permissions %s requests %s without persisting or announcing success', async (arg, mode) => {
@@ -350,7 +358,7 @@ describe('permission mode commands', () => {
     expect(store.setChannelPrefs).not.toHaveBeenCalled();
   });
 
-  it.each(['invalid', 'allow-all', 'assisted on', 'manual yolo'])('rejects invalid permission argument %s', async arg => {
+  it.each(['invalid', 'allow-all on', 'ask yolo', 'assist on', 'ai off', 'assisted on', 'manual yolo'])('rejects invalid permission argument %s', async arg => {
     const result = await handleCommand('ch-perms', `/permissions ${arg}`);
     expect(result.response).toContain('Usage:');
     expect(result.action).toBeUndefined();
@@ -361,11 +369,20 @@ describe('permission mode commands', () => {
     ['interactive', 'manual'],
     ['assisted', 'assisted'],
     ['autopilot', 'yolo'],
-  ])('shows the effective %s mode as %s', async (mode, label) => {
+  ])('shows the effective %s mode as %s alongside all available modes', async (mode, label) => {
     vi.mocked(store.getChannelPrefs).mockResolvedValue({ permissionMode: 'autopilot' });
     const result = await handleCommand('ch-perms', '/permissions', undefined, { verbose: false, permissionMode: mode });
     expect(result.response).toContain(`Permission mode: **${label}**`);
+    expect(result.response).toMatch(/`\/permissions manual`[^\n]+Ask/);
+    expect(result.response).toContain('`/permissions assisted` — Uses AI to reduce approval prompts; ask if not approved, or deny when unattended.');
+    expect(result.response).toMatch(/`\/permissions yolo`[^\n]+Auto-approve[^\n]+hardcoded safety checks/);
+    expect(result.response).toContain('independent of `/autopilot`');
+    expect(result.response).not.toContain('/permissions ask');
+    expect(result.response).not.toContain('/permissions allow-all');
+    expect(result.response).not.toContain('`/permissions assist`');
+    expect(result.response).not.toContain('`/permissions ai`');
     expect(result.action).toBeUndefined();
+    expect(store.setChannelPrefs).not.toHaveBeenCalled();
   });
 
   it('uses saved preference, then configured default when querying permissions', async () => {

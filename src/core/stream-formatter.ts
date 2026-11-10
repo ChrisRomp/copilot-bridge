@@ -186,17 +186,10 @@ export function formatPermissionAutoDecision(approved: boolean, summary: string,
   return `🛡️ ${label}: ${subject}${rationale}`;
 }
 
-/** Summarize policy gaps without letting tool/config-authored details control chat markup. */
+/** Keep chat concise; SessionManager logs the individual policy gaps. */
 export function formatPermissionPolicyWarnings(warnings: string[]): string {
   if (warnings.length === 0) return '';
-  const maxVisible = 5;
-  const entries = warnings.slice(0, maxVisible)
-    .map(warning => `- ${safePermissionText(warning, 240) || 'Details unavailable.'}`);
-  const remaining = warnings.length - entries.length;
-  if (remaining > 0) {
-    entries.push(`- … ${remaining} more ${remaining === 1 ? 'limitation' : 'limitations'} not shown.`);
-  }
-  return ['Assisted permission policy limitations:', ...entries].join('\n');
+  return 'Some bridge permission rules could not be translated for assisted mode. This may cause extra prompts, or leave those rules unenforced during unattended autopilot.';
 }
 
 /** Keep model/tool-authored notice text bounded and inert in chat Markdown. */

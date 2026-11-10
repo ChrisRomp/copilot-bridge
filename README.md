@@ -84,7 +84,7 @@ See the [Setup Guide — Running as a Service](docs/setup.md#running-as-a-servic
 | `/always deny` | | Deny + persist the permission rule |
 | `/rules` | `/rule` | List saved permission rules |
 | `/rules clear [spec]` | | Clear rules (all, or by spec) |
-| `/permissions [manual\|assisted\|yolo]` | | Show or change permission mode |
+| `/permissions [manual\|assisted\|yolo]` | | Show current and available modes, or switch mode |
 | `/assisted [on\|off]` | | Toggle AI-assisted permission review |
 | `/yolo` | | Toggle auto-approve permissions |
 | `/autopilot` | `/auto` | Toggle autonomous loop without changing permission mode |

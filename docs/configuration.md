@@ -210,7 +210,9 @@ Fallback values for any setting not specified per-channel:
 
 ## Permissions
 
-`defaults.permissionMode` accepts `"interactive"` (manual, the default), `"assisted"`, or `"autopilot"` (the legacy configuration name for **yolo**, not the autonomous session mode). `/permissions manual|assisted|yolo` overrides it per channel. `/assisted [on|off]` switches between assisted and manual; `/yolo` switches between yolo and manual.
+`defaults.permissionMode` accepts `"interactive"` (manual, the default), `"assisted"`, or `"autopilot"` (the legacy configuration name for **yolo**, not the autonomous session mode). `/permissions` shows the current mode and describes all three available modes with commands to select them. `/permissions manual|assisted|yolo` overrides it per channel. `/assisted [on|off]` switches between assisted and manual; `/yolo` switches between yolo and manual.
+
+`/permissions ask` is an alias for `manual`; `/permissions assist` and `/permissions ai` are aliases for `assisted`; `/permissions allow-all` is an alias for `yolo`. Aliases retain the same bridge safety checks and do not change the SDK's autonomous session mode.
 
 Config-level permission rules use Copilot CLI-compatible syntax:
 
@@ -272,7 +274,7 @@ Assisted mode uses the SDK's default safety-review model and instructions. Judge
 
 Copilot can settle unattended permissions without calling the bridge. The bridge keeps remembered rules in its state store and synchronizes supported rules into the individual SDK session. It does **not** export them to the operator's `permissions-config.json`: that file stores project-scoped approvals, not denies, and could share grants between channels using the same workspace. Rule translation limitations are reported rather than silently broadening approvals. Bridge-only predicates are not guaranteed to run on runtime-settled requests.
 
-Supported projections include simple shell identifiers, validated config command prefixes, and MCP server/tool rules. Remembered blanket shell allows, wrapper approvals, overlapping rules whose precedence cannot be preserved, and unsupported patterns are withheld with a warning. Native path/URL managers are left unchanged: path eligibility is not the same as the bridge's path-scoped write approval. Built-in shell tools also reuse the bridge hard-deny predicates through a pre-tool hook, including command arguments rewritten by existing hooks.
+Supported projections include simple shell identifiers, validated config command prefixes, and MCP server/tool rules. Remembered blanket shell allows, wrapper approvals, overlapping rules whose precedence cannot be preserved, and unsupported patterns are withheld with a concise chat notice. Individual limitations and affected rules remain in the bridge logs for diagnosis; `/rules` lists saved rules but does not mark translation gaps. Native path/URL managers are left unchanged: path eligibility is not the same as the bridge's path-scoped write approval. Built-in shell tools also reuse the bridge hard-deny predicates through a pre-tool hook, including command arguments rewritten by existing hooks.
 
 Judge approvals and unattended denials produce short chat notices based on final permission decisions, without interrupting the response stream. Quiet scheduled tasks log decisions instead. Scheduled prompts are tagged as automation and inter-agent messages as agent-originated input, not human authorization. Inter-agent sessions retain their existing noninteractive rule handling; they do not enable assisted mode.
 
