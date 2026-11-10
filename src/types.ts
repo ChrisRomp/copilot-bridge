@@ -99,6 +99,13 @@ export interface MemoryConfig {
   consolidation?: MemoryConsolidationConfig;
 }
 
+/** Bridge permission preference; legacy "autopilot" means YOLO, not session mode. */
+export type BridgePermissionMode = 'interactive' | 'assisted' | 'autopilot';
+
+export function isBridgePermissionMode(value: unknown): value is BridgePermissionMode {
+  return value === 'interactive' || value === 'assisted' || value === 'autopilot';
+}
+
 export interface AppConfig {
   platforms: Record<string, PlatformConfig>;
   channels: ChannelConfig[];
@@ -109,7 +116,7 @@ export interface AppConfig {
     triggerMode: 'mention' | 'all';
     threadedReplies: boolean;
     verbose: boolean;
-    permissionMode: 'interactive' | 'autopilot';
+    permissionMode: BridgePermissionMode;
     fallbackModels?: string[];
     allowWorkspaceHooks?: boolean;
   };
@@ -246,7 +253,7 @@ export interface ChannelSessionState {
   verbose: boolean;
   triggerMode: 'mention' | 'all';
   threadedReplies: boolean;
-  permissionMode: 'interactive' | 'autopilot';
+  permissionMode: BridgePermissionMode;
   createdAt: string;
 }
 
@@ -269,12 +276,12 @@ export interface PendingPermission {
   serverName?: string; // MCP server name (for server-level /remember)
   fromHook?: boolean; // true when triggered by a hook "ask" decision (never remember)
   hookReason?: string; // reason from hook for display in permission prompt
+  assistedReason?: string; // safety assessment rationale for display in permission prompt
   toolInput: unknown;
   commands: string[]; // extracted individual commands
-  resolve: (result:
-    | { kind: 'approve-once' }
-    | { kind: 'reject'; feedback?: string }
-    | { kind: 'user-not-available' }
+  resolve: (
+    result: { kind: 'approve-once' } | { kind: 'reject'; feedback?: string } | { kind: 'user-not-available' },
+    source?: 'human_response' | 'host_policy',
   ) => void;
   createdAt: number;
 }

@@ -1,6 +1,7 @@
 import {
   CopilotClient,
   CopilotSession,
+  RuntimeConnection,
   approveAll,
   type SessionConfig,
   type ResumeSessionConfig,
@@ -17,14 +18,21 @@ import {
   type TelemetryConfig,
   type ProviderConfig,
   type ContextTier,
+  type PermissionMode,
 } from '@github/copilot-sdk';
+import { fileURLToPath } from 'node:url';
 import type { SessionHooks } from './hooks-loader.js';
 import type { BridgeProviderConfig } from '../types.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('bridge');
 
 // Re-export SDK ProviderConfig under the old name for backward compat
 export type SDKProviderConfig = ProviderConfig;
 export type SDKReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 export type SDKContextTier = ContextTier;
+export type SDKPermissionMode = PermissionMode;
+export type SDKPermissionConfig = Parameters<CopilotSession['rpc']['permissions']['configure']>[0];
 type RuntimeSetModelOptions = {
   reasoningEffort?: SDKReasoningEffort | 'none';
   contextTier?: SDKContextTier;
@@ -45,7 +53,13 @@ export class CopilotBridge {
   onLifecycleEvent?: SessionLifecycleHandler;
 
   constructor(options?: { telemetry?: TelemetryConfig; env?: NodeJS.ProcessEnv }) {
+    const env = options?.env ?? process.env;
     this.client = new CopilotClient({
+      // The CLI host provides extension SDK resolution and process launching;
+      // the SDK-only runtime requires those host services to be supplied separately.
+      connection: RuntimeConnection.forStdio({
+        path: env.COPILOT_CLI_PATH || fileURLToPath(import.meta.resolve('@github/copilot/npm-loader.js')),
+      }),
       telemetry: options?.telemetry,
       env: options?.env,
     });
@@ -79,6 +93,7 @@ export class CopilotBridge {
     configDir?: string;
     reasoningEffort?: SDKReasoningEffort;
     contextTier?: SDKContextTier;
+    permissionMode?: SDKPermissionMode;
     agent?: string;
     mcpServers?: Record<string, MCPServerConfig>;
     skillDirectories?: string[];
@@ -102,6 +117,7 @@ export class CopilotBridge {
       configDirectory: opts.configDir,
       reasoningEffort: opts.reasoningEffort,
       contextTier: opts.contextTier,
+      permissionMode: opts.permissionMode ?? 'manual',
       agent: opts.agent,
       mcpServers: opts.mcpServers,
       skillDirectories: opts.skillDirectories,
@@ -113,10 +129,12 @@ export class CopilotBridge {
       systemMessage: opts.systemMessage,
       customAgents: opts.customAgents,
       enableConfigDiscovery: opts.enableConfigDiscovery,
+      requestExtensions: opts.enableConfigDiscovery === true,
       tools: opts.tools,
       hooks: opts.hooks,
       ...(opts.infiniteSessions ? { infiniteSessions: { enabled: true } } : { infiniteSessions: { enabled: false } }),
     });
+    await this.verifyInitialPermissionMode(session, opts.permissionMode ?? 'manual', true);
     this.sessions.set(session.sessionId, session);
     return session;
   }
@@ -134,6 +152,7 @@ export class CopilotBridge {
       provider?: SDKProviderConfig;
       reasoningEffort?: SDKReasoningEffort;
       contextTier?: SDKContextTier;
+      permissionMode?: SDKPermissionMode;
       agent?: string;
       mcpServers?: Record<string, MCPServerConfig>;
       skillDirectories?: string[];
@@ -146,7 +165,12 @@ export class CopilotBridge {
   ): Promise<CopilotSession> {
     await this.start();
     const existing = this.sessions.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      // On refusal, keep the already-active session for the caller's rollback;
+      // unlike a new attachment, it may still be serving the previous mode.
+      await this.setPermissionMode(sessionId, opts?.permissionMode ?? 'manual');
+      return existing;
+    }
 
     const session = await this.client.resumeSession(sessionId, {
       clientName: 'copilot-bridge',
@@ -156,11 +180,13 @@ export class CopilotBridge {
       systemMessage: opts?.systemMessage,
       customAgents: opts?.customAgents,
       enableConfigDiscovery: opts?.enableConfigDiscovery,
+      requestExtensions: opts?.enableConfigDiscovery === true,
       configDirectory: opts?.configDir,
       workingDirectory: opts?.workingDirectory,
       provider: opts?.provider,
       reasoningEffort: opts?.reasoningEffort,
       contextTier: opts?.contextTier,
+      permissionMode: opts?.permissionMode ?? 'manual',
       agent: opts?.agent,
       mcpServers: opts?.mcpServers,
       skillDirectories: opts?.skillDirectories,
@@ -170,8 +196,37 @@ export class CopilotBridge {
       hooks: opts?.hooks,
       ...(opts?.infiniteSessions ? { infiniteSessions: { enabled: true } } : { infiniteSessions: { enabled: false } }),
     });
+    await this.verifyInitialPermissionMode(session, opts?.permissionMode ?? 'manual', false);
     this.sessions.set(session.sessionId, session);
     return session;
+  }
+
+  private assertPermissionMode(
+    id: string,
+    mode: SDKPermissionMode,
+    result: CopilotSession['permissionModeResult'],
+  ): void {
+    if (!result?.success || result.mode !== mode) {
+      throw new Error(`Session ${id} could not apply permission mode "${mode}" (reported: ${result?.mode ?? 'unconfirmed'})`);
+    }
+  }
+
+  private async verifyInitialPermissionMode(session: CopilotSession, mode: SDKPermissionMode, isNew: boolean): Promise<void> {
+    try {
+      this.assertPermissionMode(session.sessionId, mode, session.permissionModeResult);
+    } catch (error) {
+      // Do not register a session with an unconfirmed permission mode. Preserve
+      // resumed history, but remove a newly created session that cannot be used.
+      try { await session.disconnect(); } catch (cleanupError) {
+        log.warn(`Failed to disconnect session ${session.sessionId} after permission mode failure: ${cleanupError}`);
+      }
+      if (isNew) {
+        try { await this.client.deleteSession(session.sessionId); } catch (cleanupError) {
+          log.warn(`Failed to delete session ${session.sessionId} after permission mode failure: ${cleanupError}`);
+        }
+      }
+      throw error;
+    }
   }
 
   async listSessions(filter?: SessionListFilter): Promise<SessionMetadata[]> {
@@ -246,6 +301,30 @@ export class CopilotBridge {
   }
 
   // Session RPC proxies (accessed via private API)
+  async getPermissionMode(id: string): Promise<SDKPermissionMode> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`Session ${id} not active`);
+    return (await session.rpc.permissions.getMode()).mode;
+  }
+
+  async setPermissionMode(id: string, mode: SDKPermissionMode): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`Session ${id} not active`);
+    this.assertPermissionMode(id, mode, await session.rpc.permissions.setMode({ mode }));
+  }
+
+  async getPermissionCapabilities(id: string): ReturnType<CopilotSession['rpc']['permissions']['getCapabilities']> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`Session ${id} not active`);
+    return session.rpc.permissions.getCapabilities();
+  }
+
+  async configurePermissions(id: string, config: SDKPermissionConfig): ReturnType<CopilotSession['rpc']['permissions']['configure']> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`Session ${id} not active`);
+    return session.rpc.permissions.configure(config);
+  }
+
   async getSessionMode(id: string): Promise<'interactive' | 'plan' | 'autopilot'> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Session ${id} not active`);

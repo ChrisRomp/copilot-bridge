@@ -5,11 +5,13 @@ import type { AppConfig, ChannelConfig, BotConfig, PermissionsConfig, InterAgent
 import type { SDKProviderConfig } from './core/bridge.js';
 import { getDynamicChannel } from './state/store.js';
 import { createLogger } from './logger.js';
+import { SHELL_WRAPPERS } from './core/permission-patterns.js';
 
 const log = createLogger('config');
 
 const VALID_ACCESS_MODES = ['allowlist', 'blocklist', 'open'];
 const VALID_CONTEXT_TIERS = ['default', 'long_context'];
+const VALID_PERMISSION_MODES = ['interactive', 'assisted', 'autopilot'];
 
 /** Validate an access config block. Throws on invalid input. Normalizes entries in-place. */
 function validateAccessConfig(platformName: string, label: string, access: any): void {
@@ -282,6 +284,9 @@ function validateAndNormalize(raw: any): AppConfig {
   };
   if (defaults.contextTier !== undefined && !VALID_CONTEXT_TIERS.includes(defaults.contextTier)) {
     throw new Error(`defaults.contextTier must be one of: ${VALID_CONTEXT_TIERS.join(', ')}`);
+  }
+  if (!VALID_PERMISSION_MODES.includes(defaults.permissionMode)) {
+    throw new Error(`defaults.permissionMode must be one of: ${VALID_PERMISSION_MODES.join(', ')}`);
   }
 
   return {
@@ -778,8 +783,6 @@ function parsePermissionSpec(spec: string): { kind: string; tool?: string } {
   if (!match) return { kind: spec };
   return { kind: match[1].trim(), tool: match[2]?.trim() };
 }
-
-const SHELL_WRAPPERS = new Set(['bash', 'sh', 'zsh', 'dash', 'fish', 'env', 'sudo', 'nohup', 'xargs', 'exec', 'eval']);
 
 /** Strip shell wrappers, absolute paths, and subshell flags to find the real command. */
 function unwrapShellCommand(cmd: string): string {

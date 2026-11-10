@@ -10,7 +10,7 @@ This guide walks you through installing and configuring copilot-bridge from scra
 | **GitHub Copilot CLI** | Pinned in `package.json` | Installed automatically via `npm install` as the bridge's direct `@github/copilot` dependency |
 | **Chat platform** | — | At least one: **Mattermost** 7+ or **Slack** workspace with admin access to create apps/bots |
 
-The SDK installs its own platform-specific runtime through `@github/copilot-sdk-*` packages, separately from the `copilot` CLI.
+The SDK also installs a platform-specific runtime through `@github/copilot-sdk-*` packages. The bridge explicitly uses its pinned `@github/copilot` CLI as the headless SDK host because that host supplies extension discovery and launch services. A `COPILOT_CLI_PATH` environment override is still honored.
 
 > [!TIP]
 > **Need a Mattermost server?** See [mattermost.com/install](https://mattermost.com/install/) for all options, including:
@@ -420,7 +420,7 @@ The `AGENTS.md` and `MEMORY.md` files are generated from the templates in the re
 
 - **Customize your bot**: Edit `~/.copilot-bridge/workspaces/<botname>/AGENTS.md` to define the bot's personality and capabilities
 - **Add MCP servers**: Configure external tools in `~/.copilot/mcp-config.json` (user-level, shared with Copilot CLI)
-- **Set up permissions**: Use the `/autopilot` command in chat, or configure `permissions` in `config.json`
+- **Set up permissions**: Use `/permissions manual|assisted|yolo` in chat, or configure `permissions` and `defaults.permissionMode` in `config.json`. `/autopilot` controls the autonomous loop independently.
 - **Explore commands**: Type `/help` in chat to see all available slash commands
 
 See the [full configuration reference](configuration.md) and [architecture overview](architecture.md) for deeper details.

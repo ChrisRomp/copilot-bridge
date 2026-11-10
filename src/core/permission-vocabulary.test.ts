@@ -33,6 +33,10 @@ describe('permission vocabulary (hook → SDK resolution)', () => {
     // Stub CopilotBridge minimally — we don't need real SDK calls
     const stubBridge = {} as CopilotBridge;
     manager = new SessionManager(stubBridge);
+    vi.spyOn(manager, 'getEffectivePrefs').mockResolvedValue({
+      model: 'gpt-5.5', verbose: false, threadedReplies: false,
+      permissionMode: 'interactive', triggerMode: 'all', contextTier: 'default',
+    });
   });
 
   it('approve-once from resolvePermission maps to hook allow', async () => {

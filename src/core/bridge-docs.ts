@@ -73,7 +73,7 @@ copilot-bridge connects GitHub Copilot CLI sessions to messaging platforms (Matt
 - **Multi-bot support** — multiple bot identities, each with its own workspace, AGENTS.md, and MCP servers
 - **Streaming responses** — edit-in-place messages with throttled updates
 - **Slash commands** — \`/model\`, \`/new\`, \`/status\`, \`/context\`, etc. (use \`fetch_copilot_bridge_documentation({ topic: "commands" })\` for full list)
-- **Permission system** — interactive prompts, autopilot mode, persistent rules
+- **Permission system** — manual, assisted safety review, or yolo; persistent channel rules
 - **MCP servers** — auto-loads from plugins, user config, and workspace config
 - **Skills** — skill directories discovered from standard Copilot locations
 - **Hooks** — preToolUse/postToolUse shell hooks for custom logic
@@ -132,6 +132,8 @@ Commands are intercepted by the bridge before reaching the Copilot session. The 
 | \`/approve\` | Approve pending permission request |
 | \`/deny\` | Deny pending permission request |
 | \`/yolo\` | Toggle auto-approve all permissions |
+| \`/permissions [mode]\` | Show or choose manual, assisted, or yolo |
+| \`/assisted [on/off]\` | Toggle AI safety review |
 | \`/autopilot\`, \`/auto\` | Toggle autonomous mode |
 | \`/plan [on|off|show|summary|clear]\` | Toggle plan mode. On entry, surfaces existing plan if found |
 | \`/implement [yolo|interactive]\` | Start implementing the current plan. Default: autopilot. \`yolo\`: autopilot + auto-approve. \`interactive\`: step-by-step |
@@ -193,7 +195,7 @@ ${editNote}
 |-------|---------|-------------|
 | \`model\` | \`"claude-sonnet-4.6"\` | Default model |
 | \`verbose\` | \`false\` | Show tool call details |
-| \`permissionMode\` | \`"interactive"\` | Permission handling mode |
+| \`permissionMode\` | \`"interactive"\` | \`interactive\` (manual), \`assisted\`, or legacy \`autopilot\` (yolo) |
 | \`fallbackModels\` | \`[]\` | Model fallback chain |
 
 ## Channel Entries
@@ -281,14 +283,19 @@ Priority: explicit \`env\` in config > \`.env\` values.
 function topicPermissions(): string {
   return `# Permission System
 
-The bridge controls which tools agents can use. Permissions are resolved in order:
+For requests delivered to the bridge's permission handler, permissions are resolved in order:
 
-1. **Hardcoded safety denies** (cannot override)
-2. **Autopilot/yolo mode** (auto-approve if enabled)
-3. **Config deny rules** (from \`permissions.deny\`)
-4. **Config allow rules** (from \`permissions.allow\`)
-5. **SQLite stored rules** (from \`/always approve\` or \`/always deny\`)
-6. **Interactive prompt** (asks user in chat)
+1. **Hardcoded safety denies**
+2. **Bridge custom tools**
+3. **Yolo mode** (auto-approve remaining requests)
+4. **Config rules** (deny before allow, then workspace/path grants)
+5. **Stored rules** (from \`/always approve\` or \`/always deny\`)
+6. **Assisted safety review** (eligible judge approvals run automatically)
+7. **Interactive prompt**, or denial without prompting during assisted autopilot/quiet scheduled work
+
+Autopilot controls the autonomous loop; it does not change permission mode. In assisted autopilot, Copilot may settle permissions without invoking the bridge. Supported remembered rules are synchronized into each SDK session, not the shared project-scoped \`permissions-config.json\`. Unsupported translations are disclosed; bridge-only checks are not universally enforced on runtime-owned decisions. Sync failures are surfaced explicitly.
+
+Assisted prompts include the judge's reason. Final AI approvals and unattended denials produce short chat notices; quiet scheduled tasks log only. Scheduled and inter-agent prompts carry automation/agent provenance. Judge customization and assisted inter-agent sessions are not supported.
 
 ## Config Rules
 
@@ -322,7 +329,9 @@ The bridge controls which tools agents can use. Permissions are resolved in orde
 | \`/approve\` | Approve current pending request |
 | \`/deny\` | Deny current pending request |
 | \`/yolo\` | Toggle auto-approve all |
-| \`/autopilot\` | Toggle autonomous mode (auto-approve + continues without user input) |
+| \`/permissions [mode]\` | Show or choose manual, assisted, or yolo |
+| \`/assisted [on/off]\` | Toggle assisted/manual permissions |
+| \`/autopilot\` | Toggle the autonomous loop; permissions are independent |
 | \`/always approve <pattern>\` | Persist an allow rule |
 | \`/always deny <pattern>\` | Persist a deny rule |
 | \`/rules\` | View all stored rules |
@@ -800,7 +809,7 @@ ${logNote}
 - Use \`/mcp\` to see loaded servers and their source
 
 ### Permission prompt not appearing
-- Check if \`/yolo\` or \`/autopilot\` is enabled (\`/status\` shows this)
+- Check the permission mode in \`/status\`: yolo auto-approves; assisted auto-approves eligible requests and denies unresolved requests during autopilot without prompting
 - Check \`permissions\` config for matching allow rules
 - Stored rules from \`/always approve\` may be auto-allowing
 

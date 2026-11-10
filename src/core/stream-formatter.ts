@@ -108,7 +108,7 @@ export function formatEvent(event: any): FormattedEvent | null {
 /**
  * Format a permission request for display in chat.
  */
-export function formatPermissionRequest(toolName: string, input: unknown, commands: string[], serverName?: string, hookReason?: string, fromHook?: boolean): string {
+export function formatPermissionRequest(toolName: string, input: unknown, commands: string[], serverName?: string, hookReason?: string, fromHook?: boolean, assistedReason?: string): string {
   const lines = ['🔐 **Permission Required**', ''];
   if (hookReason) {
     lines.push(hookReason);
@@ -155,6 +155,10 @@ export function formatPermissionRequest(toolName: string, input: unknown, comman
     }
   }
 
+  const safeAssistedReason = assistedReason ? safePermissionText(assistedReason, 500) : '';
+  if (!fromHook && safeAssistedReason) {
+    lines.push('', `🛡️ Safety review: ${safeAssistedReason}`);
+  }
   lines.push('');
   if (fromHook) {
     lines.push('Reply `/approve` or `/deny`');
@@ -168,6 +172,50 @@ export function formatPermissionRequest(toolName: string, input: unknown, comman
   }
 
   return lines.join('\n');
+}
+
+/** A notice, not a permission prompt or a stream-finalization event. */
+export function formatPermissionAutoDecision(approved: boolean, summary: string, reason?: string): string {
+  const label = approved ? 'Auto-approved' : 'Denied';
+  const subject = safePermissionText(summary, 180) || 'Permission request';
+  const safeReason = (reason ? safePermissionText(reason, 360) : '') ||
+    'Human approval is unavailable in unattended mode.';
+  const rationale = !approved
+    ? ` — ${safeReason}`
+    : '';
+  return `🛡️ ${label}: ${subject}${rationale}`;
+}
+
+/** Summarize policy gaps without letting tool/config-authored details control chat markup. */
+export function formatPermissionPolicyWarnings(warnings: string[]): string {
+  if (warnings.length === 0) return '';
+  const maxVisible = 5;
+  const entries = warnings.slice(0, maxVisible)
+    .map(warning => `- ${safePermissionText(warning, 240) || 'Details unavailable.'}`);
+  const remaining = warnings.length - entries.length;
+  if (remaining > 0) {
+    entries.push(`- … ${remaining} more ${remaining === 1 ? 'limitation' : 'limitations'} not shown.`);
+  }
+  return ['Assisted permission policy limitations:', ...entries].join('\n');
+}
+
+/** Keep model/tool-authored notice text bounded and inert in chat Markdown. */
+function safePermissionText(value: string, limit: number): string {
+  const plain = value.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  // Limit after escaping, without splitting an escape or an HTML entity.
+  let escaped = '';
+  for (const char of plain) {
+    const token = char === '@' ? '@\u200b'
+      : char === '&' ? '&amp;'
+      : char === '<' ? '&lt;'
+      : char === '>' ? '&gt;'
+      : /[\\`*_{}\[\]()#+.!|~-]/.test(char) ? `\\${char}`
+      : char;
+    if (escaped.length + token.length > limit - 1) return `${escaped}…`;
+    escaped += token;
+  }
+  return escaped;
 }
 
 /**

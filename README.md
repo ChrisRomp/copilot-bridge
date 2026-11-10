@@ -30,7 +30,7 @@ More screenshots [here](docs/screenshots.md).
 - **MCP & skills** — Auto-loads MCP servers and skill directories from Copilot config
 - **Fuzzy model matching** — `/model opus` resolves to `claude-opus-4.6` (mobile-friendly)
 - **Bring Your Own Key (BYOK)** — Connect your own providers (Ollama, Azure, Anthropic) alongside Copilot models
-- **Interactive permissions** — Approve/deny tool use via chat, or `/autopilot` for full autonomous mode
+- **Assisted permissions** — Choose manual approval, AI safety review, or yolo independently of the autonomous `/autopilot` loop
 - **Model fallback** — Automatic fallback to alternative models on capacity/availability errors
 - **Loop detection** — Detects and breaks tool call loops with user notification
 - **Session management** — `/reload` to refresh config, `/resume` to switch between sessions (prefix matching supported)
@@ -84,8 +84,10 @@ See the [Setup Guide — Running as a Service](docs/setup.md#running-as-a-servic
 | `/always deny` | | Deny + persist the permission rule |
 | `/rules` | `/rule` | List saved permission rules |
 | `/rules clear [spec]` | | Clear rules (all, or by spec) |
+| `/permissions [manual\|assisted\|yolo]` | | Show or change permission mode |
+| `/assisted [on\|off]` | | Toggle AI-assisted permission review |
 | `/yolo` | | Toggle auto-approve permissions |
-| `/autopilot` | | Toggle autopilot mode (autonomous loop, implies yolo) |
+| `/autopilot` | `/auto` | Toggle autonomous loop without changing permission mode |
 | **Planning** | | |
 | `/plan` | | Toggle plan mode (structured planning before implementation) |
 | `/plan show` | | Display the current plan |

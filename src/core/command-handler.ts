@@ -1,7 +1,7 @@
 import { setChannelPrefs, getChannelPrefs, getGlobalSetting, setGlobalSetting, getDynamicChannel } from '../state/store.js';
 import { discoverAgentDefinitions, discoverAgentNames } from './inter-agent.js';
 import { isBotAdminAny, getConfig, getChannelBotConfig, getChannelBotName } from '../config.js';
-import type { BridgeProviderConfig } from '../types.js';
+import type { BridgePermissionMode, BridgeProviderConfig } from '../types.js';
 
 const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 const TRUTHY = new Set(['on', 'true', 'yes', '1', 'enable', 'enabled']);
@@ -68,11 +68,23 @@ function getDefaultContextTier(): 'default' | 'long_context' {
   }
 }
 
+function getDefaultPermissionMode(): BridgePermissionMode {
+  try {
+    return getConfig().defaults.permissionMode;
+  } catch {
+    return 'interactive';
+  }
+}
+
+function formatPermissionModeLabel(mode: string): string {
+  return mode === 'autopilot' ? 'yolo' : mode === 'interactive' ? 'manual' : mode;
+}
+
 export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'reload_session' | 'reload_config' | 'reload_mcp' | 'reload_skills' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'remember' | 'remember_deny' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'set_context_tier' | 'stop_session' | 'schedule' | 'skills' | 'skill_toggle' | 'mcp' | 'plan' | 'implement' | 'provider_test';
+           'approve' | 'deny' | 'toggle_autopilot' | 'set_permission_mode' | 'remember' | 'remember_deny' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'set_context_tier' | 'stop_session' | 'schedule' | 'skills' | 'skill_toggle' | 'mcp' | 'plan' | 'implement' | 'provider_test';
   payload?: any;
 }
 
@@ -522,10 +534,12 @@ export async function resolveEffectiveConfig(
   verboseResolved.value = verboseResolved.value === 'true' ? 'On' : verboseResolved.value === 'false' ? 'Off' : verboseResolved.value;
   fields.push({ setting: 'verbose', ...verboseResolved });
 
-  // Permission mode
-  fields.push({ setting: 'permissionMode', ...resolve('permissionMode',
+  // Display the permission preference independently of the session's autopilot mode.
+  const permissionResolved = resolve('permissionMode',
     null, null, defaults.permissionMode,
-    prefs?.permissionMode, null) });
+    prefs?.permissionMode, null);
+  permissionResolved.value = formatPermissionModeLabel(permissionResolved.value);
+  fields.push({ setting: 'permissionMode', ...permissionResolved });
 
   // Reasoning effort
   fields.push({ setting: 'reasoningEffort', ...resolve('reasoningEffort',
@@ -895,7 +909,7 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
         `• Model: **${providerDisplay}${modelDisplay}**`,
         `• Agent: ${sessionInfo.agent ? `**${sessionInfo.agent}**` : 'Default (Copilot)'}`,
         `• Mode: ${modeDisplay}`,
-        `• Yolo: ${(effectivePrefs?.permissionMode ?? prefs?.permissionMode) === 'autopilot' ? '🤠 On' : '🛡️ Off'}`,
+        `• Permission mode: **${formatPermissionModeLabel(effectivePrefs?.permissionMode ?? prefs?.permissionMode ?? getDefaultPermissionMode())}**`,
         `• Workspace: \`${channelMeta?.workingDirectory ?? 'unknown'}\``,
         `• Bot: ${channelMeta?.bot ? `@${channelMeta.bot}` : 'default'}`,
         `• Verbose: ${(effectivePrefs?.verbose ?? prefs?.verbose) ? '🔊 On' : '🔇 Off'}`,
@@ -943,17 +957,38 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
     case 'autopilot':
       return { handled: true, action: 'toggle_autopilot' };
 
+    case 'permissions': {
+      const arg = parsed.args.trim().toLowerCase();
+      if (!arg) {
+        const prefs = await getChannelPrefs(channelId);
+        const current = effectivePrefs?.permissionMode ?? prefs?.permissionMode ?? getDefaultPermissionMode();
+        return { handled: true, response: `🛡️ Permission mode: **${formatPermissionModeLabel(current)}**` };
+      }
+      let mode: BridgePermissionMode;
+      switch (arg) {
+        case 'manual':
+        case 'interactive': mode = 'interactive'; break;
+        case 'assisted': mode = 'assisted'; break;
+        case 'yolo':
+        case 'autopilot': mode = 'autopilot'; break;
+        default:
+          return { handled: true, response: '⚠️ Usage: `/permissions [manual|assisted|yolo]` (aliases: `interactive`, `autopilot`)' };
+      }
+      return { handled: true, action: 'set_permission_mode', payload: mode };
+    }
+
+    case 'assisted':
     case 'yolo': {
+      const arg = parsed.args.trim().toLowerCase();
+      if (arg && arg !== 'on' && arg !== 'off') {
+        return { handled: true, response: `⚠️ Usage: \`/${parsed.command} [on|off]\`` };
+      }
       const prefs = await getChannelPrefs(channelId);
-      const current = effectivePrefs?.permissionMode ?? prefs?.permissionMode ?? 'interactive';
-      const newMode = current === 'autopilot' ? 'interactive' : 'autopilot';
-      await setChannelPrefs(channelId, { permissionMode: newMode });
-      return {
-        handled: true,
-        response: newMode === 'autopilot'
-          ? '🤠 **Yolo enabled** — all permissions auto-approved.'
-          : '🛡️ **Yolo disabled** — permissions will require approval.',
-      };
+      const current = effectivePrefs?.permissionMode ?? prefs?.permissionMode ?? getDefaultPermissionMode();
+      const enabledMode: BridgePermissionMode = parsed.command === 'assisted' ? 'assisted' : 'autopilot';
+      const enable = arg === 'on' || (!arg && current !== enabledMode);
+      // The orchestrator applies native policy/mode before persisting and announcing success.
+      return { handled: true, action: 'set_permission_mode', payload: enable ? enabledMode : 'interactive' };
     }
 
     case 'always': {
@@ -1035,8 +1070,10 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
         '`/context-tier <default|long>` — Set context tier (`max` also accepted)',
         '`/reasoning <level>` — Set reasoning effort (low/medium/high/xhigh)',
         '`/verbose` — Toggle tool call visibility',
-        '`/autopilot` — Toggle autopilot mode',
-        '`/yolo` — Toggle auto-approve permissions',
+        '`/autopilot` — Toggle autonomous session mode (independent of permissions)',
+        '`/permissions [manual|assisted|yolo]` — Show or set permission mode',
+        '`/assisted [on|off]` — Toggle safety-reviewed permissions',
+        '`/yolo [on|off]` — Toggle auto-approve permissions',
         '`/schedule list` — List scheduled tasks',
         '`/skills` — Show available skills and MCP tools',
         '`/plan` — Toggle plan mode',
@@ -1072,8 +1109,10 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
           '`/always approve` / `/always deny` — Approve or deny + save rule',
           '`/rules` — Show all permission rules',
           '`/rules clear [spec]` — Clear rules (all or specific)',
-          '`/yolo` — Toggle auto-approve permissions (no SDK mode change)',
-          '`/autopilot` — Toggle autopilot mode (autonomous agentic loop)',
+          '`/permissions [manual|assisted|yolo]` — Show or set permission mode (`interactive`/`autopilot` are aliases for manual/yolo)',
+          '`/assisted [on|off]` — Toggle safety-reviewed permissions; off returns to manual',
+          '`/yolo [on|off]` — Toggle bridge auto-approval; off returns to manual',
+          '`/autopilot` — Toggle autopilot session mode (independent of permission mode)',
           '',
           '**Scheduling**',
           '`/schedule list` — List scheduled tasks (aliases: `/schedules`, `/tasks`)',
