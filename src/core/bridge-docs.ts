@@ -690,6 +690,7 @@ Providers are configured under the \`"providers"\` key in \`config.json\`:
 
 - Switching between Copilot and BYOK (or between BYOK providers) creates a fresh session
 - Switching models within the same provider reuses the existing session
+- Copilot Fusion (\`/fusion\`, \`/model auto\`) routes only among Copilot models, so selecting it from a BYOK model is a provider switch; the BYOK model stays selected if Fusion selection fails
 - BYOK models are excluded from automatic fallback chains (only Copilot models auto-fallback)
 - Provider config changes apply on \`/reload config\` — no bridge restart needed
 ${adminNote}
