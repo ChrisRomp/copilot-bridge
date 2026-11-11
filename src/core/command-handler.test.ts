@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { handleCommand, parseCommand, resolveEffectiveConfig, formatConfigTable, type ModelInfo, type ConfigField } from './command-handler.js';
+import { handleCommand, parseCommand, resolveEffectiveConfig, formatConfigTable, formatRoutedModel, type ModelInfo, type ConfigField } from './command-handler.js';
+import type { FusionView } from './fusion.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -18,6 +19,88 @@ const mockConfig = {
     permissionMode: 'interactive' as const,
   },
 };
+
+describe('Fusion commands and policy-aware model display', () => {
+  const view: FusionView = {
+    metadata: { defaultTier: 's', tiers: [
+      { id: 's', fusionTier: 'standard', displayName: 'Standard', description: '', type: 'auto', status: { enabled: true } },
+      { id: 'h', fusionTier: 'high', displayName: 'High', description: '', type: 'fusion', status: { enabled: true } },
+      { id: 'm', fusionTier: 'max', displayName: 'Max', description: '', type: 'fusion', status: { enabled: false, message: 'Disabled by policy' } },
+      { id: 'fast', displayName: 'Fast', description: '', type: 'auto', status: { enabled: true, pickerVisible: false } },
+    ] },
+    state: { modelId: 'auto', autoTier: 's', pendingAutoTier: 'h' },
+    actualModel: 'model-a',
+    role: 'solver',
+  };
+  const models: ModelInfo[] = [{ id: 'auto', name: 'Auto' }, { id: 'model-a', name: 'Model A' }, { id: 'model-private', name: 'Model (Internal Preview)' }];
+  const session = { sessionId: 'fusion-session', model: 'auto', agent: null };
+  beforeEach(() => {
+    vi.spyOn(config, 'getConfig').mockReturnValue(mockConfig);
+    vi.spyOn(store, 'getChannelPrefs').mockResolvedValue(null);
+    vi.spyOn(store, 'setChannelPrefs').mockResolvedValue(undefined);
+    vi.spyOn(store, 'getGlobalSetting').mockResolvedValue(null);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(['/fusion', '/model fusion', '/model auto', '/models AUTO'])('%s selects saved/default Fusion', async command => {
+    expect(await handleCommand('ch', command)).toEqual({ handled: true, action: 'select_fusion', payload: undefined });
+    expect(store.setChannelPrefs).not.toHaveBeenCalled();
+  });
+
+  it.each(['standard', 'high', 'max', 'default'])('accepts %s through every public command form', async tier => {
+    for (const command of ['/fusion', '/model fusion', '/model auto']) {
+      expect((await handleCommand('ch', `${command} ${tier}`)).payload).toBe(tier);
+    }
+  });
+
+  it.each(['/fusion fastest', '/model fusion high extra', '/model auto fast'])('rejects unsupported syntax: %s', async command => {
+    const result = await handleCommand('ch', command);
+    expect(result.action).toBeUndefined();
+    expect(result.response).toContain('Usage:');
+  });
+
+  it('leaves /auto as autopilot and qualified BYOK names as model selections', async () => {
+    expect((await handleCommand('ch', '/auto')).action).toBe('toggle_autopilot');
+    const result = await handleCommand('ch', '/model local:auto', undefined, undefined, undefined, [
+      { id: 'local:auto', name: 'Local Auto' },
+    ], undefined, undefined, { local: { baseUrl: 'http://localhost', models: [{ id: 'auto' }] } });
+    expect(result).toMatchObject({ action: 'switch_model', payload: { provider: 'local', modelId: 'auto' } });
+  });
+
+  it('lists permitted and policy-blocked tiers, but not hidden Fast', async () => {
+    const result = await handleCommand('ch', '/model', session, undefined, undefined, models, undefined, undefined, undefined, view);
+    expect(result.response).toContain('/fusion standard');
+    expect(result.response).toContain('/fusion high');
+    expect(result.response).toContain('unavailable: Disabled by policy');
+    expect(result.response).not.toContain('Fast');
+    expect(result.response).toContain('Current: Copilot Fusion (Standard)');
+    expect(result.response).toContain('Pending tier: High');
+  });
+
+  it('shows Fusion plus effective tier on /status, without confusing pending or execution model', async () => {
+    const result = await handleCommand('ch', '/status', session, undefined, undefined, models, undefined, {
+      currentTokens: 500, tokenLimit: 1000,
+    }, undefined, view);
+    expect(result.response).toContain('Model: **Copilot Fusion (Standard)**');
+    expect(result.response).toContain('Pending tier: **High**');
+    expect(result.response).toContain('Using: **Model A**');
+    expect(result.response).not.toContain('50%');
+  });
+
+  it('redacts private and unknown routed models in streamer mode', async () => {
+    vi.mocked(store.getGlobalSetting).mockResolvedValue('1');
+    expect(await formatRoutedModel('model-private', models)).toBe('Hidden Model');
+    expect(await formatRoutedModel('not-in-catalog', models)).toBe('Hidden Model');
+    expect(await formatRoutedModel('model-a', models)).toBe('Model A');
+  });
+
+  it.each(['/reasoning high', '/reasoning', '/context-tier long'])('keeps %s distinct from Fusion tiers', async command => {
+    const result = await handleCommand('ch', command, session);
+    expect(result.action).toBeUndefined();
+    expect(result.response).toContain('Fusion manages');
+    expect(store.setChannelPrefs).not.toHaveBeenCalled();
+  });
+});
 
 // --- parseCommand ---
 

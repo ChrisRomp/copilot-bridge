@@ -32,11 +32,15 @@ import { isQuiet } from './quiet-mode.js';
 import { buildRuntimePermissionPolicy } from './permission-policy.js';
 import { formatPermissionPolicyWarnings } from './stream-formatter.js';
 import { SHELL_WRAPPERS } from './permission-patterns.js';
+import { FusionManager } from './fusion-manager.js';
+import { FusionSelectionError, isFusionModel, isFusionPolicyFailure, resolveFusionTier, type FusionView, type FusionSelectionResult, type FusionNoticeContext } from './fusion.js';
+import { isSessionNotFoundError, PermissionSynchronizationError } from './session-errors.js';
+export { isSessionNotFoundError } from './session-errors.js';
 import { isBridgePermissionMode, type BridgePermissionMode } from '../types.js';
 import type { SystemMessageCustomizeConfig } from '@github/copilot-sdk';
 import type {
   ChannelAdapter, InboundMessage, PendingPermission, PendingUserInput, PendingPlanExit,
-  MemoryConfig,
+  MemoryConfig, FusionPreference,
 } from '../types.js';
 
 const log = createLogger('session');
@@ -124,20 +128,6 @@ async function withWorkspaceEnv<T>(workingDirectory: string, fn: () => Promise<T
     }
     release!();
   }
-}
-
-class PermissionSynchronizationError extends Error {
-  constructor(sessionId: string, cause: unknown) {
-    super(`Could not synchronize permissions for session ${sessionId}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
-    this.name = 'PermissionSynchronizationError';
-  }
-}
-
-/** Detect "Session not found" errors from the SDK backend. */
-export function isSessionNotFoundError(err: any): boolean {
-  if (err instanceof PermissionSynchronizationError) return false;
-  const msg = String(err?.message ?? err).toLowerCase();
-  return msg.includes('session not found') || msg.includes('session_not_found');
 }
 
 /**
@@ -553,6 +543,7 @@ export function loadLocalInstructions(workingDirectory?: string): string | undef
 
 export class SessionManager {
   private bridge: CopilotBridge;
+  private fusion: FusionManager;
   private channelSessions = new Map<string, string>(); // channelId → sessionId
   private sessionChannels = new Map<string, string>(); // sessionId → channelId (reverse)
   private sessionUnsubscribes = new Map<string, () => void>(); // sessionId → unsubscribe fn
@@ -594,12 +585,27 @@ export class SessionManager {
 
   constructor(bridge: CopilotBridge) {
     this.bridge = bridge;
+    this.fusion = new FusionManager(bridge, channelId => this.getEffectivePrefs(channelId), (sessionId, channelId, content, context) => {
+      log.info(`Fusion: ${content}`);
+      this.eventHandler?.(sessionId, channelId, {
+        type: 'bridge.fusion_notice',
+        data: { content, ...context },
+      });
+    }, channelId => this.getFusionNoticeContext(channelId));
     this.mcpServers = loadMcpServers();
     ensureWorkspacesDir();
   }
 
+  private getFusionNoticeContext(channelId: string): FusionNoticeContext {
+    return {
+      attachmentGeneration: this.permissionAttachmentGenerations.get(channelId) ?? 0,
+      suppressOutput: isQuiet(channelId) || this.isUnattendedExecution(channelId),
+    };
+  }
+
   /** Best-effort session destroy with logging. */
   private async safeDestroySession(sessionId: string): Promise<void> {
+    this.fusion.detach(sessionId);
     this.runtimePermissionStates.delete(sessionId);
     try {
       await this.bridge.destroySession(sessionId);
@@ -838,7 +844,7 @@ export class SessionManager {
   }
 
   /** Get or create a session for a channel. */
-  async ensureSession(channelId: string): Promise<{ sessionId: string; isNew: boolean }> {
+  async ensureSession(channelId: string, deferFusion = false): Promise<{ sessionId: string; isNew: boolean }> {
     this.assertPermissionRecoveryComplete(channelId);
     // Check in-memory cache first
     const cachedSessionId = this.channelSessions.get(channelId);
@@ -850,7 +856,7 @@ export class SessionManager {
     const storedSessionId = await getChannelSession(channelId);
     if (storedSessionId) {
       try {
-        await this.attachSession(channelId, storedSessionId);
+        await this.attachSession(channelId, storedSessionId, deferFusion);
         return { sessionId: storedSessionId, isNew: false };
       } catch (err) {
         if (!isSessionNotFoundError(err)) {
@@ -863,19 +869,25 @@ export class SessionManager {
     }
 
     // Create new session
-    const sessionId = await this.createNewSession(channelId);
+    const sessionId = await this.createNewSession(channelId, deferFusion);
     return { sessionId, isNew: true };
   }
 
   /** Create a brand new session for a channel (used by /new command). */
-  async newSession(channelId: string): Promise<string> {
+  async newSession(channelId: string, deferFusion = false): Promise<string> {
     this.advancePermissionAttachment(channelId);
-    // Clean up existing session
+    await this.releaseChannelSession(channelId);
+    return this.createNewSession(channelId, deferFusion);
+  }
+
+  /** Detach, destroy and forget the channel's current session without creating a replacement. */
+  private async releaseChannelSession(channelId: string): Promise<void> {
     const existingId = this.channelSessions.get(channelId);
     if (existingId) {
       const unsub = this.sessionUnsubscribes.get(existingId);
       if (unsub) { unsub(); this.sessionUnsubscribes.delete(existingId); }
       try {
+        this.fusion.detach(existingId);
         await this.bridge.destroySession(existingId);
       } catch (err) { log.debug(`destroySession(${existingId.slice(0, 8)}) failed (best-effort):`, err); }
       this.runtimePermissionStates.delete(existingId);
@@ -892,7 +904,6 @@ export class SessionManager {
       if (debounceTimer) { clearTimeout(debounceTimer); this.planChangedDebounce.delete(channelId); }
     }
     await clearChannelSession(channelId);
-    return this.createNewSession(channelId);
   }
 
   /** Reload the current session — detach and re-attach to pick up AGENTS.md / config changes. */
@@ -1021,17 +1032,24 @@ export class SessionManager {
     const sendOpts = { prompt: text, attachments, ...options };
 
     try {
+      await this.fusion.prepare(channelId, true);
       const messageId = await session.send(sendOpts);
       return messageId;
     } catch (err: any) {
       const msg = String(err?.message ?? err);
       log.error(`Send failed for session ${sessionId}:`, msg);
+      if (err instanceof FusionSelectionError) throw err;
+      const current = await this.getEffectivePrefs(channelId);
+      if (isFusionModel(current.model, current.provider) && isFusionPolicyFailure(err)) {
+        throw new FusionSelectionError(`Fusion routing could not proceed: ${msg}`, { cause: err });
+      }
 
       // If this is a model-specific error, switch the model before creating
       // a new session so the fallback model is used for both creation and send
       if (isModelError(err)) {
         log.info(`Model error detected — switching to fallback model for channel ${channelId}...`);
         const prefs = await this.getEffectivePrefs(channelId);
+        const originalPrefs = await getChannelPrefs(channelId);
         const configChannel = await getChannelConfig(channelId);
         const configFallbacks = configChannel.fallbackModels ?? getConfig().defaults.fallbackModels;
 
@@ -1053,6 +1071,7 @@ export class SessionManager {
             const newSessionId = await this.newSession(channelId);
             const newSession = this.bridge.getSession(newSessionId);
             if (!newSession) continue;
+            await this.fusion.prepare(channelId, true);
             const messageId = await newSession.send(sendOpts);
 
             log.info(`Model fallback on send: "${prefs.model}" → "${fallbackModel}" for channel ${channelId}`);
@@ -1064,6 +1083,35 @@ export class SessionManager {
             });
             return messageId;
           } catch (fallbackErr: any) {
+            const failedSelection = await this.getEffectivePrefs(channelId);
+            const fusionError = fallbackErr instanceof FusionSelectionError ? fallbackErr
+              : isFusionModel(failedSelection.model, failedSelection.provider) && isFusionPolicyFailure(fallbackErr)
+                ? new FusionSelectionError(`Fusion routing could not proceed: ${fallbackErr?.message ?? fallbackErr}`, { cause: fallbackErr })
+                : undefined;
+            if (fusionError) {
+              this.advancePermissionAttachment(channelId);
+              const recoveryErrors: unknown[] = [];
+              try { await this.releaseChannelSession(channelId); }
+              catch (error) {
+                log.error('Could not release the failed fallback session:', error);
+                recoveryErrors.push(error);
+              }
+              try {
+                await setChannelPrefs(channelId, {
+                  model: originalPrefs?.model ?? null, provider: originalPrefs?.provider ?? null,
+                  fusionTier: originalPrefs?.fusionTier ?? null, fusionTransition: originalPrefs?.fusionTransition ?? null,
+                });
+              } catch (error) {
+                log.error('Could not restore preferences after Fusion fallback failed:', error);
+                recoveryErrors.push(error);
+              }
+              if (recoveryErrors.length) {
+                throw new FusionSelectionError('Fusion fallback failed and its previous selection could not be fully restored.', {
+                  cause: new AggregateError([fusionError, ...recoveryErrors]),
+                });
+              }
+              throw fusionError;
+            }
             log.warn(`Fallback model "${fallbackModel}" also failed on send: ${fallbackErr?.message ?? fallbackErr}`);
             lastError = fallbackErr;
           }
@@ -1084,6 +1132,7 @@ export class SessionManager {
         const reconnected = this.bridge.getSession(sessionId);
         if (reconnected) {
           log.info(`Re-attached session ${sessionId} successfully`);
+          await this.fusion.prepare(channelId, true);
           return reconnected.send(sendOpts);
         }
       } catch (retryErr: any) {
@@ -1096,6 +1145,7 @@ export class SessionManager {
       const newSessionId = await this.newSession(channelId);
       const newSession = this.bridge.getSession(newSessionId);
       if (!newSession) throw new Error(`New session ${newSessionId} not found`);
+      await this.fusion.prepare(channelId, true);
       return newSession.send(sendOpts);
     }
   }
@@ -1112,6 +1162,7 @@ export class SessionManager {
     if (!session) throw new Error(`Session ${sessionId} not found`);
 
     await this.refreshPermissions(channelId);
+    await this.fusion.prepare(channelId, true);
     log.info(`Mid-turn send (immediate) for channel ${channelId.slice(0, 8)}...: "${text.slice(0, 100)}"`);
     return session.send({ prompt: text, mode: 'immediate' });
   }
@@ -1143,8 +1194,8 @@ export class SessionManager {
    * If re-attach confirms the session is missing, creates a new session and retries once more
    * (unless createOnFail is false, in which case the error propagates).
    */
-  private async withSessionRetry<T>(channelId: string, fn: (sessionId: string) => Promise<T>, createOnFail = true): Promise<T> {
-    const { sessionId } = await this.ensureSession(channelId);
+  private async withSessionRetry<T>(channelId: string, fn: (sessionId: string) => Promise<T>, createOnFail = true, deferFusion = false): Promise<T> {
+    const { sessionId } = await this.ensureSession(channelId, deferFusion);
     try {
       return await fn(sessionId);
     } catch (err: any) {
@@ -1155,7 +1206,7 @@ export class SessionManager {
         const unsub = this.sessionUnsubscribes.get(sessionId);
         if (unsub) { unsub(); this.sessionUnsubscribes.delete(sessionId); }
         await this.safeDestroySession(sessionId);
-        await this.attachSession(channelId, sessionId);
+        await this.attachSession(channelId, sessionId, deferFusion);
       } catch (attachErr: any) {
         log.warn(`Re-attach failed for ${sessionId}:`, attachErr?.message ?? attachErr);
         if (!isSessionNotFoundError(attachErr)) throw attachErr;
@@ -1168,7 +1219,7 @@ export class SessionManager {
         }
         // Last resort: new session
         log.info(`Creating new session for channel ${channelId} after RPC failure...`);
-        const newSessionId = await this.newSession(channelId);
+        const newSessionId = await this.newSession(channelId, deferFusion);
         return await fn(newSessionId);
       }
       // Re-attach succeeded — retry fn; let non-session errors propagate
@@ -1249,6 +1300,14 @@ export class SessionManager {
 
   /** Switch the model for a channel's session. */
   async switchModel(channelId: string, model: string, provider?: string | null): Promise<void> {
+    if (isFusionModel(model, provider)) {
+      await this.selectFusion(channelId);
+      return;
+    }
+    return this.fusion.fixedSelection(channelId, () => this.switchFixedModel(channelId, model, provider));
+  }
+
+  private async switchFixedModel(channelId: string, model: string, provider?: string | null): Promise<void> {
     const currentPrefs = await this.getEffectivePrefs(channelId);
     const currentProvider = currentPrefs.provider ?? null;
     const newProvider = provider ?? null;
@@ -1262,7 +1321,8 @@ export class SessionManager {
       const prevModel = currentPrefs.model;
       await setChannelPrefs(channelId, { model, provider: newProvider });
       try {
-        await this.newSession(channelId);
+        // Creation may fall back to auto while fixedSelection holds the Fusion lock.
+        await this.newSession(channelId, true);
       } catch (err) {
         log.warn(`Provider switch failed, reverting prefs:`, err);
         try { await setChannelPrefs(channelId, { model: prevModel, provider: currentProvider }); } catch (e) { log.warn('Failed to revert prefs after provider switch failure:', e); }
@@ -1274,7 +1334,7 @@ export class SessionManager {
       const prevModel = currentPrefs.model;
       await setChannelPrefs(channelId, { model, provider: newProvider });
       try {
-        await this.newSession(channelId);
+        await this.newSession(channelId, true);
       } catch (err) {
         log.warn(`wireApi switch failed, reverting prefs:`, err);
         try { await setChannelPrefs(channelId, { model: prevModel, provider: currentProvider }); } catch (e) { log.warn('Failed to revert prefs after wireApi switch failure:', e); }
@@ -1297,12 +1357,15 @@ export class SessionManager {
           log.debug('listModels for reasoning-effort switch validation failed:', err);
         }
       }
+      // This runs inside FusionManager.fixedSelection, which holds the
+      // channel's Fusion lock. Deferring Fusion on retry/re-attach avoids
+      // re-entering that lock and keeps fixed-model selection a recovery path
+      // from a blocked saved Fusion tier.
       await this.withSessionRetry(channelId, (sid) =>
         this.bridge.switchSessionModel(sid, model, {
           reasoningEffort,
           contextTier: newProvider ? null : currentPrefs.contextTier,
-        })
-      );
+        }), true, true);
       try { await setChannelPrefs(channelId, {
         model,
         provider: newProvider,
@@ -1310,6 +1373,12 @@ export class SessionManager {
       }); }
       catch (e) { log.warn('Model switched but failed to persist preference:', e); }
     }
+
+    // A pending Fusion transition belongs to the Fusion selection being left.
+    // Keeping it would make a later /fusion misreport an unconfirmed change.
+    try {
+      if ((await getChannelPrefs(channelId))?.fusionTransition) await setChannelPrefs(channelId, { fusionTransition: null });
+    } catch (e) { log.warn('Failed to clear Fusion transition after fixed-model switch:', e); }
 
     // Clear stale context window tokens so /context falls back to tokenLimit during transition
     this.contextWindowTokens.delete(channelId);
@@ -1322,6 +1391,42 @@ export class SessionManager {
         await this.cacheContextWindowTokens(channelId, model, models);
       }
     }).catch((err) => { log.debug("listModels (context cache) failed:", err); });
+  }
+
+  async getFusionView(channelId: string): Promise<FusionView> {
+    return this.fusion.view(channelId);
+  }
+
+  async selectFusion(channelId: string, preference?: FusionPreference): Promise<FusionSelectionResult> {
+    const prefs = await this.getEffectivePrefs(channelId);
+    const select = () => this.withSessionRetry(channelId, async sessionId => {
+      if (preference !== undefined) {
+        resolveFusionTier(await this.bridge.getFusionMetadata(sessionId, true), preference);
+      }
+      return this.fusion.select(channelId, preference);
+    }, true, true);
+    if (prefs.provider) {
+      if (preference !== undefined) {
+        resolveFusionTier(await this.bridge.getFusionMetadata(undefined, true), preference);
+      }
+      // Like any BYOK → Copilot model switch, this needs a fresh session.
+      // On failure, drop the new Copilot session too so the restored BYOK
+      // preference cannot keep using it.
+      await setChannelPrefs(channelId, { model: 'auto', provider: null });
+      try {
+        await this.newSession(channelId, true);
+        return await select();
+      } catch (error) {
+        log.warn('Provider switch to Fusion failed, reverting prefs:', error);
+        this.advancePermissionAttachment(channelId);
+        try { await this.releaseChannelSession(channelId); }
+        catch (e) { log.warn('Failed to release Copilot session after Fusion switch failure:', e); }
+        try { await setChannelPrefs(channelId, { model: prefs.model, provider: prefs.provider }); }
+        catch (e) { log.warn('Failed to revert prefs after Fusion switch failure:', e); }
+        throw error;
+      }
+    }
+    return select();
   }
 
   /** Check if two models on the same provider have different wireApi settings. */
@@ -1369,6 +1474,7 @@ export class SessionManager {
    */
   async setReasoningEffort(channelId: string, effort: string): Promise<void> {
     const prefs = await this.getEffectivePrefs(channelId);
+    if (isFusionModel(prefs.model, prefs.provider)) throw new FusionSelectionError('Fusion manages reasoning effort. Use /fusion standard, high, or max to change its routing tier.');
     const model = prefs.model;
     await this.withSessionRetry(channelId, (sid) =>
       this.bridge.switchSessionModel(sid, model, {
@@ -1382,6 +1488,7 @@ export class SessionManager {
 
   async setContextTier(channelId: string, contextTier: 'default' | 'long_context'): Promise<void> {
     const prefs = await this.getEffectivePrefs(channelId);
+    if (isFusionModel(prefs.model, prefs.provider)) throw new FusionSelectionError('Fusion manages model context. Select a fixed model before changing /context-tier.');
     const model = prefs.model;
     await this.withSessionRetry(channelId, (sid) =>
       this.bridge.switchSessionModel(sid, model, { reasoningEffort: prefs.reasoningEffort, contextTier })
@@ -1402,7 +1509,8 @@ export class SessionManager {
     const configChannel = await getChannelConfig(channelId);
     const storedPrefs = await getChannelPrefs(channelId);
     return {
-      model: storedPrefs?.model ?? configChannel.model ?? 'claude-sonnet-4.6',
+      model: isFusionModel(storedPrefs?.model ?? configChannel.model, storedPrefs?.provider)
+        ? 'auto' : storedPrefs?.model ?? configChannel.model ?? 'claude-sonnet-4.6',
       provider: storedPrefs?.provider ?? null,
       agent: storedPrefs?.agent !== undefined ? storedPrefs.agent : configChannel.agent,
       verbose: storedPrefs?.verbose ?? configChannel.verbose,
@@ -1411,6 +1519,8 @@ export class SessionManager {
       permissionMode: this.yoloPreviousState.has(channelId) ? 'autopilot' : storedPrefs?.permissionMode ?? configChannel.permissionMode,
       reasoningEffort: storedPrefs?.reasoningEffort ?? (configChannel as any).reasoningEffort ?? null,
       contextTier: storedPrefs?.contextTier ?? configChannel.contextTier ?? getConfig().defaults.contextTier ?? null,
+      fusionTier: storedPrefs?.fusionTier ?? configChannel.fusionTier ?? getConfig().defaults.fusionTier ?? 'default',
+      fusionTransition: storedPrefs?.fusionTransition ?? null,
       disabledSkills: storedPrefs?.disabledSkills,
     };
   }
@@ -2217,7 +2327,7 @@ export class SessionManager {
     });
   }
 
-  private async createNewSession(channelId: string): Promise<string> {
+  private async createNewSession(channelId: string, deferFusion = false): Promise<string> {
     this.advancePermissionAttachment(channelId);
     this.assertPermissionRecoveryComplete(channelId);
     const prefs = await this.getEffectivePrefs(channelId);
@@ -2272,8 +2382,8 @@ export class SessionManager {
           provider: sdkProvider || undefined,
           workingDirectory,
           configDir: defaultConfigDir,
-          reasoningEffort: reasoningEffort ?? undefined,
-          contextTier: contextTier ?? undefined,
+          reasoningEffort: isFusionModel(model, providerName) ? undefined : reasoningEffort ?? undefined,
+          contextTier: isFusionModel(model, providerName) ? undefined : contextTier ?? undefined,
           agent: prefs.agent ?? undefined,
           enableConfigDiscovery: true,
           mcpServers: resolvedMcpServers,
@@ -2305,6 +2415,7 @@ export class SessionManager {
         configFallbacks,
         createWithModel,
         byokPrefixes,
+        sdkProvider ? providerName : undefined,
       );
       session = result.result;
       usedModel = result.usedModel;
@@ -2327,8 +2438,8 @@ export class SessionManager {
               provider: sdkProvider || undefined,
               workingDirectory,
               configDir: defaultConfigDir,
-              reasoningEffort: reasoningEffort ?? undefined,
-              contextTier: contextTier ?? undefined,
+              reasoningEffort: isFusionModel(model, providerName) ? undefined : reasoningEffort ?? undefined,
+              contextTier: isFusionModel(model, providerName) ? undefined : contextTier ?? undefined,
               enableConfigDiscovery: true,
               mcpServers: resolvedMcpServers,
               skillDirectories: skillDirectories.length > 0 ? skillDirectories : undefined,
@@ -2345,7 +2456,7 @@ export class SessionManager {
           );
         };
         const result = await tryWithFallback(
-          prefs.model, availableModels, configFallbacks, createWithModelNoAgent, byokPrefixes,
+          prefs.model, availableModels, configFallbacks, createWithModelNoAgent, byokPrefixes, sdkProvider ? providerName : undefined,
         );
         session = result.result;
         usedModel = result.usedModel;
@@ -2402,12 +2513,13 @@ export class SessionManager {
     await setChannelSession(channelId, sessionId);
 
     this.attachSessionEvents(session, channelId);
+    if (!deferFusion) await this.fusion.prepare(channelId);
 
     log.info(`Created session ${sessionId} for channel ${channelId} (model: ${usedModel})`);
     return sessionId;
   }
 
-  private async attachSession(channelId: string, sessionId: string): Promise<void> {
+  private async attachSession(channelId: string, sessionId: string, deferFusion = false): Promise<void> {
     this.advancePermissionAttachment(channelId);
     this.assertPermissionRecoveryComplete(channelId);
     const prefs = await this.getEffectivePrefs(channelId);
@@ -2450,8 +2562,8 @@ export class SessionManager {
         configDir: defaultConfigDir,
         workingDirectory,
         provider: sdkProvider || undefined,
-        reasoningEffort: reasoningEffort ?? undefined,
-        contextTier: contextTier ?? undefined,
+        reasoningEffort: isFusionModel(prefs.model, providerName) ? undefined : reasoningEffort ?? undefined,
+        contextTier: isFusionModel(prefs.model, providerName) ? undefined : contextTier ?? undefined,
         agent: prefs.agent ?? undefined,
         enableConfigDiscovery: true,
         mcpServers,
@@ -2477,6 +2589,7 @@ export class SessionManager {
     this.channelSessions.set(channelId, sessionId);
     this.sessionChannels.set(sessionId, channelId);
     this.attachSessionEvents(session, channelId);
+    if (!deferFusion) await this.prepareResumedFusion(channelId, sessionId);
 
     // Cache context window tokens for /context display (best-effort, non-blocking)
     const resumeModel = prefs.model;
@@ -2487,6 +2600,26 @@ export class SessionManager {
         await this.cacheContextWindowTokens(channelId, resumeModel, models);
       }
     }).catch((err) => { log.debug("listModels (context cache) failed:", err); });
+  }
+
+  private async prepareResumedFusion(channelId: string, sessionId: string): Promise<void> {
+    try {
+      await this.fusion.prepare(channelId);
+    } catch (error) {
+      if (!isSessionNotFoundError(error)) throw error;
+      log.warn(`Fusion probe failed after resuming ${sessionId}; reattaching the same history:`, error);
+      this.sessionUnsubscribes.get(sessionId)?.();
+      this.sessionUnsubscribes.delete(sessionId);
+      await this.safeDestroySession(sessionId);
+      // Only a missing-history result from resume itself may authorize replacement.
+      await this.attachSession(channelId, sessionId, true);
+      try {
+        await this.fusion.prepare(channelId);
+      } catch (probeError) {
+        if (!isSessionNotFoundError(probeError)) throw probeError;
+        throw new FusionSelectionError(`Fusion probe failed after a successful session resume: ${probeError instanceof Error ? probeError.message : String(probeError)}`, { cause: probeError });
+      }
+    }
   }
 
   /**
@@ -3402,8 +3535,27 @@ export class SessionManager {
   }
 
   private attachSessionEvents(session: CopilotSession, channelId: string): void {
+    this.fusion.attach(channelId, session);
+    const attachmentGeneration = this.permissionAttachmentGenerations.get(channelId) ?? 0;
     const permissions = new AssistedPermissionTracker();
     const unsub = session.on((event: any) => {
+      const noticeContext = { ...this.getFusionNoticeContext(channelId), attachmentGeneration };
+      const routing = this.fusion.process(channelId, session, event);
+      if (routing.error) {
+        log.error(routing.error);
+        this.eventHandler?.(session.sessionId, channelId, {
+          type: 'bridge.fusion_notice',
+          data: { content: routing.error, ...noticeContext },
+        });
+      }
+      if (routing.notice) {
+        log.info(`Fusion is using ${routing.notice.model}${routing.notice.role ? ` for ${routing.notice.role}` : ''}`);
+        this.eventHandler?.(session.sessionId, channelId, {
+          type: 'bridge.fusion_model',
+          data: { ...routing.notice, ...noticeContext },
+        });
+      }
+      if (routing.suppress) return;
       const decision = permissions.process(event);
       if (decision) {
         log.info(`Assisted permission ${decision.approved ? 'approved' : 'denied'} on ${channelId}: ${decision.summary}`);
@@ -3678,6 +3830,7 @@ export class SessionManager {
 
     // Release all sessions (don't destroy — they persist in CLI)
     for (const [channelId, sessionId] of this.channelSessions) {
+      this.fusion.detach(sessionId);
       this.bridge.releaseSession(sessionId);
     }
     this.channelSessions.clear();

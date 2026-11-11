@@ -6,6 +6,7 @@ import type { SDKProviderConfig } from './core/bridge.js';
 import { getDynamicChannel } from './state/store.js';
 import { createLogger } from './logger.js';
 import { SHELL_WRAPPERS, ADMIN_SHELL_ALLOW } from './core/permission-patterns.js';
+import { isFusionPreference } from './core/fusion.js';
 
 const log = createLogger('config');
 
@@ -90,6 +91,9 @@ function validateAndNormalize(raw: any): AppConfig {
     }
     if (ch.contextTier !== undefined && !VALID_CONTEXT_TIERS.includes(ch.contextTier)) {
       throw new Error(`Channel "${ch.id}" contextTier must be one of: ${VALID_CONTEXT_TIERS.join(', ')}`);
+    }
+    if (ch.fusionTier !== undefined && !isFusionPreference(ch.fusionTier)) {
+      throw new Error(`Channel "${ch.id}" fusionTier must be standard, high, max, or default`);
     }
   }
 
@@ -287,6 +291,9 @@ function validateAndNormalize(raw: any): AppConfig {
   }
   if (!VALID_PERMISSION_MODES.includes(defaults.permissionMode)) {
     throw new Error(`defaults.permissionMode must be one of: ${VALID_PERMISSION_MODES.join(', ')}`);
+  }
+  if (defaults.fusionTier !== undefined && !isFusionPreference(defaults.fusionTier)) {
+    throw new Error('defaults.fusionTier must be standard, high, max, or default');
   }
 
   return {
@@ -617,6 +624,7 @@ export async function getChannelConfig(channelId: string): Promise<ChannelConfig
   return {
     ...channel,
     model: channel.model ?? config.defaults.model,
+    fusionTier: channel.fusionTier ?? config.defaults.fusionTier,
     agent: resolvedAgent,
     triggerMode: channel.triggerMode ?? config.defaults.triggerMode,
     threadedReplies: channel.threadedReplies ?? config.defaults.threadedReplies,

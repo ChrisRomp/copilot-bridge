@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SqliteStateStore } from './sqlite-store.js';
+import Database from 'better-sqlite3';
 
 describe('SqliteStateStore', () => {
   let tmpDir: string;
@@ -88,6 +89,37 @@ describe('SqliteStateStore', () => {
   // ---- Preferences CRUD ---------------------------------------------------
 
   describe('preferences', () => {
+    it('round-trips durable Fusion intent and an attempted transition, including clear/default semantics', async () => {
+      const transition = { id: 'request-1', sessionId: 'session-1', requested: 'high' as const, previous: 'standard' as const, attempted: true };
+      await store.setChannelPrefs('ch-fusion', { fusionTier: 'high', fusionTransition: transition, reasoningEffort: 'high' });
+      expect(await store.getChannelPrefs('ch-fusion')).toMatchObject({ fusionTier: 'high', fusionTransition: transition, reasoningEffort: 'high' });
+      await store.setChannelPrefs('ch-fusion', { fusionTier: 'default', fusionTransition: null });
+      expect(await store.getChannelPrefs('ch-fusion')).toMatchObject({ fusionTier: 'default', fusionTransition: null, reasoningEffort: 'high' });
+      await store.setChannelPrefs('ch-fusion', { fusionTier: null });
+      expect((await store.getChannelPrefs('ch-fusion'))?.fusionTier).toBeNull();
+    });
+
+    it.each([null, 'high'] as const)('round-trips the prior Fusion tier override %s separately from accepted intent', async previousOverride => {
+      const transition = {
+        id: 'request-1', sessionId: 'session-1', requested: 'max' as const,
+        previous: 'high' as const, previousOverride, attempted: true,
+      };
+      await store.setChannelPrefs('ch-fusion', { fusionTier: 'max', fusionTransition: transition });
+      expect((await store.getChannelPrefs('ch-fusion'))?.fusionTransition).toEqual(transition);
+    });
+
+    it('migrates existing preference rows without losing fixed-model choices', async () => {
+      await store.setChannelPrefs('existing', { model: 'fixed-model', reasoningEffort: 'high' });
+      await store.close();
+      const db = new Database(path.join(tmpDir, 'test.db'));
+      db.exec('ALTER TABLE channel_prefs DROP COLUMN fusion_tier; ALTER TABLE channel_prefs DROP COLUMN fusion_transition;');
+      db.close();
+      await store.initialize();
+      expect(await store.getChannelPrefs('existing')).toMatchObject({ model: 'fixed-model', reasoningEffort: 'high', fusionTier: null, fusionTransition: null });
+      await store.setChannelPrefs('existing', { fusionTier: 'max' });
+      expect((await store.getChannelPrefs('existing'))?.fusionTier).toBe('max');
+    });
+
     it('get returns null when no prefs set', async () => {
       expect(await store.getChannelPrefs('ch1')).toBeNull();
     });
@@ -104,6 +136,41 @@ describe('SqliteStateStore', () => {
       const prefs = await store.getChannelPrefs('ch1');
       expect(prefs?.model).toBe('gpt-4');
       expect(prefs?.verbose).toBe(true);
+    });
+
+    it('clears only the model override on null while omitted updates preserve it', async () => {
+      await store.setChannelPrefs('ch-model-clear', { model: 'auto', fusionTier: 'high' });
+      await store.setChannelPrefs('ch-model-clear', { verbose: true });
+      expect((await store.getChannelPrefs('ch-model-clear'))?.model).toBe('auto');
+      await store.setChannelPrefs('ch-model-clear', { model: null });
+      expect(await store.getChannelPrefs('ch-model-clear')).toMatchObject({
+        model: undefined, fusionTier: 'high', verbose: true,
+      });
+    });
+
+    it.each(['retired-tier', 'high'])('isolates corrupt Fusion fields independently with stored tier %s', async tier => {
+      await store.setChannelPrefs('corrupt-fusion', { model: 'auto', permissionMode: 'interactive', verbose: true });
+      const db = new Database(path.join(tmpDir, 'test.db'));
+      try {
+        db.prepare('UPDATE channel_prefs SET fusion_tier = ?, fusion_transition = ? WHERE channel_id = ?')
+          .run(tier, '{invalid-json', 'corrupt-fusion');
+        await expect(store.getChannelPrefs('corrupt-fusion')).resolves.toMatchObject({
+          model: 'auto', permissionMode: 'interactive', verbose: true, fusionTier: tier === 'high' ? 'high' : null, fusionTransition: null,
+        });
+        await store.setChannelPrefs('corrupt-fusion', { model: 'fixed', fusionTier: 'default', fusionTransition: null });
+        expect(await store.getChannelPrefs('corrupt-fusion')).toMatchObject({ model: 'fixed', fusionTier: 'default' });
+      } finally {
+        db.close();
+      }
+    });
+
+    it('keeps Fusion write validation strict despite tolerating malformed stored fields', async () => {
+      await store.setChannelPrefs('strict-fusion', { fusionTier: 'high' });
+      // @ts-expect-error Simulate an untyped backend consumer.
+      await expect(store.setChannelPrefs('strict-fusion', { fusionTier: 'retired-tier' })).rejects.toThrow('Invalid Fusion tier');
+      // @ts-expect-error Simulate an incomplete transition from an untyped consumer.
+      await expect(store.setChannelPrefs('strict-fusion', { fusionTransition: { requested: 'high' } })).rejects.toThrow('Invalid stored Fusion transition');
+      expect((await store.getChannelPrefs('strict-fusion'))?.fusionTier).toBe('high');
     });
 
     it('boolean fields round-trip correctly', async () => {

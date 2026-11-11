@@ -1,5 +1,68 @@
 import { describe, it, expect } from 'vitest';
 import { parseModelId, getFallbackChain, isModelError, tryWithFallback, buildFallbackChain } from './model-fallback.js';
+import { FusionSelectionError } from './fusion.js';
+
+describe('Fusion error boundaries', () => {
+  it.each([
+    new FusionSelectionError('Fusion model is unavailable'),
+    new Error('Auto tier is unavailable for this account'),
+    new Error('Fusion tier is not supported by model policy'),
+  ])('does not mistake a tier-policy failure for a fixed-model fallback request', async error => {
+    expect(isModelError(error, true)).toBe(false);
+    const attempts: string[] = [];
+    await expect(tryWithFallback('auto', ['auto', 'fixed-model'], ['fixed-model'], async model => {
+      attempts.push(model);
+      throw error;
+    })).rejects.toBe(error);
+    expect(attempts).toEqual(['auto']);
+  });
+
+  it('keeps fallback for fixed-model capacity errors that mention a tier', async () => {
+    const error = Object.assign(new Error('Service tier unavailable, retry later'), { status: 503 });
+    expect(isModelError(error)).toBe(true);
+    const result = await tryWithFallback('fixed-a', ['fixed-a', 'fixed-b'], ['fixed-b'], async model => {
+      if (model === 'fixed-a') throw error;
+      return model;
+    });
+    expect(result).toMatchObject({ usedModel: 'fixed-b', didFallback: true });
+  });
+
+  it.each([
+    new FusionSelectionError('Fusion discovery failed'),
+    new Error('Auto tier unavailable by model policy'),
+  ])('stops a creation fallback chain when Auto encounters %s', async failure => {
+    const attempts: string[] = [];
+    await expect(tryWithFallback('fixed-a', ['fixed-a', 'auto', 'fixed-b'], ['auto', 'fixed-b'], async model => {
+      attempts.push(model);
+      if (model === 'fixed-a') throw new Error('Model is at capacity');
+      if (model === 'auto') throw failure;
+      return model;
+    })).rejects.toThrow(FusionSelectionError);
+    expect(attempts).toEqual(['fixed-a', 'auto']);
+  });
+
+  it.each(['auto', 'fusion'])('treats BYOK %s as a provider model throughout fallback', async modelName => {
+    const capacity = Object.assign(new Error('Service tier unavailable'), { status: 503 });
+    const primaryAttempts: string[] = [];
+    await expect(tryWithFallback(modelName, [modelName, 'backup'], ['backup'], async model => {
+      primaryAttempts.push(model);
+      if (model === modelName) throw capacity;
+      return model;
+    }, ['local'], 'local')).resolves.toMatchObject({ usedModel: 'backup' });
+    expect(primaryAttempts).toEqual([modelName, 'backup']);
+    const fallbackAttempts: string[] = [];
+    await expect(tryWithFallback('primary', ['primary', modelName, 'backup'], [modelName, 'backup'], async model => {
+      fallbackAttempts.push(model);
+      if (model !== 'backup') throw capacity;
+      return model;
+    }, ['local'], 'local')).resolves.toMatchObject({ usedModel: 'backup' });
+    expect(fallbackAttempts).toEqual(['primary', modelName, 'backup']);
+  });
+
+  it('still recognizes genuine rate limits for the configured inference fallback', () => {
+    expect(isModelError(new Error('Rate limit exceeded'))).toBe(true);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // parseModelId

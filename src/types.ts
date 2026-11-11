@@ -31,6 +31,7 @@ export interface ChannelConfig {
   agent?: string | null;
   model?: string;
   contextTier?: ContextTier;
+  fusionTier?: FusionPreference;
   fallbackModels?: string[];
   triggerMode: 'mention' | 'all';
   threadedReplies: boolean;
@@ -39,6 +40,17 @@ export interface ChannelConfig {
 }
 
 export type ContextTier = 'default' | 'long_context';
+export type FusionTier = 'standard' | 'high' | 'max';
+export type FusionPreference = FusionTier | 'default';
+export interface FusionTransition {
+  id: string;
+  sessionId: string;
+  requested: FusionPreference;
+  previous: FusionPreference;
+  // Null restores config inheritance; omitted on transitions saved by older builds.
+  previousOverride?: FusionPreference | null;
+  attempted: boolean;
+}
 
 // Permission rules config (CLI-compatible syntax)
 // e.g., "shell(ls)", "shell(git status)", "shell", "write", "read", "MCP_SERVER(tool)", "MCP_SERVER"
@@ -112,6 +124,7 @@ export interface AppConfig {
   defaults: {
     model: string;
     contextTier?: ContextTier;
+    fusionTier?: FusionPreference;
     agent: string | null;
     triggerMode: 'mention' | 'all';
     threadedReplies: boolean;

@@ -166,6 +166,8 @@ Switching between models on the **same provider** uses an in-place model swap (n
 
 Switching between **different providers** (e.g., Copilot → Ollama, or Ollama → Azure) creates a fresh session because the underlying endpoint and authentication are different. Conversation history from the previous session is not carried over.
 
+Copilot Fusion (`/fusion`, `/model auto`) routes only among Copilot models and never selects a BYOK model. Selecting it from a BYOK model is a provider switch like any other: it starts a fresh Copilot session, and the BYOK model stays selected if Fusion selection fails.
+
 ## Model Fallback
 
 BYOK models are excluded from automatic fallback chains. If a Copilot model fails, the bridge will only try other Copilot models as fallbacks — not BYOK models.

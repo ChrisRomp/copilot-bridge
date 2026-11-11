@@ -5,13 +5,15 @@
  * {@link StateStore} interface. The data types below are shared across
  * every implementation and the rest of the codebase.
  */
+import type { FusionPreference, FusionTransition } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Data types
 // ---------------------------------------------------------------------------
 
 export interface ChannelPrefs {
-  model?: string;
+  /** Null clears the model override; omission leaves it unchanged on update. */
+  model?: string | null;
   provider?: string | null;
   agent?: string | null;
   verbose?: boolean;
@@ -19,6 +21,8 @@ export interface ChannelPrefs {
   permissionMode?: string;
   reasoningEffort?: string | null;
   contextTier?: 'default' | 'long_context' | null;
+  fusionTier?: FusionPreference | null;
+  fusionTransition?: FusionTransition | null;
   sessionMode?: string;
   disabledSkills?: string[];
 }

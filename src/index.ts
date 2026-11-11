@@ -2,6 +2,8 @@ import { loadConfig, getConfig, isConfiguredChannel, registerDynamicChannel, mar
 import { CopilotBridge } from './core/bridge.js';
 import { SessionManager, BRIDGE_CUSTOM_TOOLS, parseEnvFile } from './core/session-manager.js';
 import { formatContextTierLabel, handleCommand, parseCommand } from './core/command-handler.js';
+import { isFusionPreference, fusionTierLabel } from './core/fusion.js';
+import { sendFusionNotice } from './core/fusion-notice.js';
 import { formatEvent, formatPermissionRequest, formatPermissionNotice, formatUserInputRequest } from './core/stream-formatter.js';
 import { ASSISTED_AUTOPILOT_NOTICE } from './core/assisted-permissions.js';
 import { WorkspaceWatcher, initWorkspace, getWorkspacePath } from './core/workspace-manager.js';
@@ -929,12 +931,14 @@ async function handleMidTurnMessage(
       }
       const mcpInfo = undefined;
       const contextUsage = sessionManager.getContextUsage(msg.channelId);
+      const fusion = ['model', 'models', 'status'].includes(parsed.command)
+        ? await sessionManager.getFusionView(msg.channelId) : undefined;
 
       const cmdResult = await handleCommand(
         msg.channelId, commandText, sessionInfo ?? undefined,
-        { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort, contextTier: effPrefs.contextTier },
+        { model: effPrefs.model, verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort, contextTier: effPrefs.contextTier },
         { workingDirectory: channelConfig.workingDirectory, bot: channelConfig.bot },
-        models, mcpInfo, contextUsage, getConfig().providers,
+        models, mcpInfo, contextUsage, getConfig().providers, fusion,
       );
 
       if (cmdResult.handled) {
@@ -943,7 +947,7 @@ async function handleMidTurnMessage(
           return;
         }
         // Model/agent switch while busy — defer to serialized path
-        if (cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent') {
+        if (cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent' || cmdResult.action === 'select_fusion') {
           throw new Error('slash-command-while-busy');
         }
         if (cmdResult.response) {
@@ -1156,15 +1160,18 @@ async function handleInboundMessage(
 
   // Get cached context usage for /context and /status
   const contextUsage = sessionManager.getContextUsage(msg.channelId);
+  const fusion = parsed && ['model', 'models', 'status'].includes(parsed.command)
+    ? await sessionManager.getFusionView(msg.channelId) : undefined;
 
   const cmdResult = await handleCommand(
     msg.channelId, text, sessionInfo ?? undefined,
-    { verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort, contextTier: effPrefs.contextTier },
+    { model: effPrefs.model, verbose: effPrefs.verbose, permissionMode: effPrefs.permissionMode, reasoningEffort: effPrefs.reasoningEffort, contextTier: effPrefs.contextTier },
     { workingDirectory: channelConfig.workingDirectory, bot: channelConfig.bot },
     models,
     undefined,
     contextUsage,
     getConfig().providers,
+    fusion,
   );
 
   if (cmdResult.handled) {
@@ -1177,6 +1184,21 @@ async function handleInboundMessage(
     }
 
     switch (cmdResult.action) {
+      case 'select_fusion': {
+        const ackId = await adapter.sendMessage(msg.channelId, 'Selecting Copilot Fusion...', { threadRootId: threadRoot });
+        try {
+          if (cmdResult.payload !== undefined && !isFusionPreference(cmdResult.payload)) throw new Error('Invalid Fusion tier.');
+          const result = await sessionManager.selectFusion(msg.channelId, cmdResult.payload);
+          const tier = result.preference === 'default' ? 'provider default' : fusionTierLabel(result.preference);
+          const detail = result.status === 'pending' ? `Tier ${tier} is pending the next successful turn.`
+            : `${tier}${result.status === 'unchanged' ? ' is already active.' : ' is active.'}`;
+          await adapter.updateMessage(msg.channelId, ackId, `**Copilot Fusion selected.** ${detail}`);
+        } catch (error) {
+          log.error('Could not select Fusion:', error);
+          await adapter.updateMessage(msg.channelId, ackId, `Fusion selection failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        break;
+      }
       case 'set_permission_mode':
         await applyPermissionModeCommand(sessionManager, adapter, msg.channelId, cmdResult.payload, threadRoot);
         break;
@@ -2106,6 +2128,8 @@ async function handleSessionEvent(
   event: any,
   sessionManager: SessionManager,
 ): Promise<void> {
+  if ((event.type === 'bridge.fusion_notice' || event.type === 'bridge.fusion_model')
+      && !sessionManager.isCurrentPermissionAttachment(channelId, event.data.attachmentGeneration)) return;
   if (event.type === 'bridge.permission_policy_error'
       && !sessionManager.isCurrentPermissionAttachment(channelId, event.data.attachmentGeneration)) return;
   // Reset loop detector when the session changes (e.g., model fallback creates new session)
@@ -2186,6 +2210,15 @@ async function handleSessionEvent(
     log.warn('Failed to read channel prefs in event handler, using defaults:', err);
   }
   const verbose = prefs?.verbose ?? channelConfig.verbose;
+
+  if (event.type === 'bridge.fusion_notice' || event.type === 'bridge.fusion_model') {
+    await sendFusionNotice(channelId, event, sessionManager, adapter, () => {
+      const streamKey = activeStreams.get(channelId);
+      return (streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined)
+        ?? channelThreadRoots.get(channelId);
+    });
+    return;
+  }
 
   if (event.type === 'bridge.permission_policy_error') {
     if (!sessionManager.isCurrentPermissionAttachment(channelId, event.data.attachmentGeneration)) return;

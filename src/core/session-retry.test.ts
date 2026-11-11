@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { isSessionNotFoundError } from './session-manager.js';
+import { FusionSelectionError } from './fusion.js';
 
 describe('isSessionNotFoundError', () => {
   it('matches SDK "Session not found" messages', () => {
@@ -17,6 +18,7 @@ describe('isSessionNotFoundError', () => {
   });
 
   it('rejects unrelated errors', () => {
+    expect(isSessionNotFoundError(new FusionSelectionError('Fusion sync failed: Session not found'))).toBe(false);
     expect(isSessionNotFoundError(new Error('Network timeout'))).toBe(false);
     expect(isSessionNotFoundError(new Error('Permission denied'))).toBe(false);
     expect(isSessionNotFoundError(new Error('Model is at capacity'))).toBe(false);

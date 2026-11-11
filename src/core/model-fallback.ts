@@ -1,4 +1,5 @@
 import { createLogger } from '../logger.js';
+import { FusionSelectionError, isFusionModel, isFusionPolicyFailure } from './fusion.js';
 
 const log = createLogger('model-fallback');
 
@@ -242,9 +243,12 @@ const MODEL_ERROR_CODES = new Set([429, 503]);
 /**
  * Detect whether an error is model-specific (capacity, not found, rate limit)
  * rather than a general infrastructure or auth error.
+ * Tier/policy failures are excluded only for Fusion so generic fixed-model
+ * capacity text that happens to mention a "tier" still gets fallback.
  */
-export function isModelError(error: any): boolean {
+export function isModelError(error: any, fusion = false): boolean {
   if (!error) return false;
+  if (error instanceof FusionSelectionError || (fusion && isFusionPolicyFailure(error))) return false;
 
   // Check HTTP status codes
   const status = error.status ?? error.statusCode;
@@ -318,13 +322,14 @@ export async function tryWithFallback<T>(
   configFallbacks: string[] | undefined,
   action: (model: string) => Promise<T>,
   byokPrefixes?: string[],
+  provider?: string | null,
 ): Promise<{ result: T; usedModel: string; didFallback: boolean }> {
   // Try primary model first
   try {
     const result = await action(primaryModel);
     return { result, usedModel: primaryModel, didFallback: false };
   } catch (err: any) {
-    if (!isModelError(err)) {
+    if (!isModelError(err, isFusionModel(primaryModel, provider))) {
       throw err; // Not a model error — don't try fallbacks
     }
     log.warn(`Model "${primaryModel}" failed: ${err.message ?? err}. Trying fallbacks...`);
@@ -347,6 +352,10 @@ export async function tryWithFallback<T>(
         log.info(`Fallback to "${fallbackModel}" succeeded`);
         return { result, usedModel: fallbackModel, didFallback: true };
       } catch (fallbackErr: any) {
+        if (fallbackErr instanceof FusionSelectionError) throw fallbackErr;
+        if (isFusionModel(fallbackModel, provider) && isFusionPolicyFailure(fallbackErr)) {
+          throw new FusionSelectionError(`Fusion routing could not proceed: ${fallbackErr?.message ?? fallbackErr}`, { cause: fallbackErr });
+        }
         log.warn(`Fallback model "${fallbackModel}" also failed: ${fallbackErr.message ?? fallbackErr}`);
         lastError = fallbackErr;
       }
