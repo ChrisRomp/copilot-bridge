@@ -246,6 +246,31 @@ describe('reloadConfig', () => {
     expect(getConfig().defaults.triggerMode).toBe('all');
   });
 
+  it('defaults permissionMode to interactive', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig()));
+    expect(loadConfig(configFile).defaults.permissionMode).toBe('interactive');
+  });
+
+  it.each(['interactive', 'assisted', 'autopilot'])('accepts defaults.permissionMode %s', permissionMode => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ defaults: { permissionMode } })));
+    expect(loadConfig(configFile).defaults.permissionMode).toBe(permissionMode);
+  });
+
+  it.each(['manual', 'yolo', 'allow-all', 'ASSISTED', '', null, false, 1, [], {}])('rejects invalid defaults.permissionMode %j', permissionMode => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ defaults: { permissionMode } })));
+    expect(() => loadConfig(configFile)).toThrow('defaults.permissionMode must be one of: interactive, assisted, autopilot');
+  });
+
+  it('preserves assisted permissions when reloading an invalid permission default', () => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ defaults: { permissionMode: 'assisted' } })));
+    loadConfig(configFile);
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ defaults: { permissionMode: 'allow-all' } })));
+    const result = reloadConfig();
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('defaults.permissionMode');
+    expect(getConfig().defaults.permissionMode).toBe('assisted');
+  });
+
   it('rejects invalid JSON and keeps existing config', () => {
     fs.writeFileSync(configFile, JSON.stringify(makeConfig()));
     loadConfig(configFile);

@@ -315,13 +315,119 @@ describe('mode commands', () => {
   it('/yolo toggles permissionMode to autopilot', async () => {
     const result = await handleCommand('ch-mode-yolo', '/yolo', undefined, { verbose: false, permissionMode: 'interactive', reasoningEffort: null });
     expect(result.handled).toBe(true);
-    expect(result.response).toContain('Yolo enabled');
+    expect(result.action).toBe('set_permission_mode');
+    expect(result.payload).toBe('autopilot');
+    expect(result.response).toBeUndefined();
   });
 
   it('/yolo toggles permissionMode back to interactive', async () => {
     const result = await handleCommand('ch-mode-yolo', '/yolo', undefined, { verbose: false, permissionMode: 'autopilot', reasoningEffort: null });
     expect(result.handled).toBe(true);
-    expect(result.response).toContain('Yolo disabled');
+    expect(result.action).toBe('set_permission_mode');
+    expect(result.payload).toBe('interactive');
+    expect(result.response).toBeUndefined();
+  });
+});
+
+describe('permission mode commands', () => {
+  beforeEach(() => {
+    vi.spyOn(config, 'getConfig').mockReturnValue(mockConfig);
+    vi.spyOn(store, 'getChannelPrefs').mockResolvedValue(null);
+    vi.spyOn(store, 'setChannelPrefs').mockResolvedValue(undefined);
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it.each([
+    ['ask', 'interactive'],
+    ['ASK', 'interactive'],
+    ['manual', 'interactive'],
+    ['interactive', 'interactive'],
+    ['assist', 'assisted'],
+    ['ASSIST', 'assisted'],
+    ['ai', 'assisted'],
+    ['AI', 'assisted'],
+    ['assisted', 'assisted'],
+    ['yolo', 'autopilot'],
+    ['allow-all', 'autopilot'],
+    ['ALLOW-ALL', 'autopilot'],
+    ['autopilot', 'autopilot'],
+    ['ASSISTED', 'assisted'],
+  ])('/permissions %s requests %s without persisting or announcing success', async (arg, mode) => {
+    const result = await handleCommand('ch-perms', `/permissions ${arg}`);
+    expect(result).toEqual({ handled: true, action: 'set_permission_mode', payload: mode });
+    expect(store.setChannelPrefs).not.toHaveBeenCalled();
+  });
+
+  it.each(['invalid', 'allow-all on', 'ask yolo', 'assist on', 'ai off', 'assisted on', 'manual yolo'])('rejects invalid permission argument %s', async arg => {
+    const result = await handleCommand('ch-perms', `/permissions ${arg}`);
+    expect(result.response).toContain('Usage:');
+    expect(result.action).toBeUndefined();
+    expect(store.setChannelPrefs).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['interactive', 'manual'],
+    ['assisted', 'assisted'],
+    ['autopilot', 'yolo'],
+  ])('shows the effective %s mode as %s alongside all available modes', async (mode, label) => {
+    vi.mocked(store.getChannelPrefs).mockResolvedValue({ permissionMode: 'autopilot' });
+    const result = await handleCommand('ch-perms', '/permissions', undefined, { verbose: false, permissionMode: mode });
+    expect(result.response).toContain(`Permission mode: **${label}**`);
+    expect(result.response).toMatch(/`\/permissions manual`[^\n]+Ask/);
+    expect(result.response).toContain('`/permissions assisted` — Uses AI to reduce approval prompts; ask if not approved, or deny when unattended.');
+    expect(result.response).toMatch(/`\/permissions yolo`[^\n]+Auto-approve[^\n]+hardcoded safety checks/);
+    expect(result.response).toContain('independent of `/autopilot`');
+    expect(result.response).not.toContain('/permissions ask');
+    expect(result.response).not.toContain('/permissions allow-all');
+    expect(result.response).not.toContain('`/permissions assist`');
+    expect(result.response).not.toContain('`/permissions ai`');
+    expect(result.action).toBeUndefined();
+    expect(store.setChannelPrefs).not.toHaveBeenCalled();
+  });
+
+  it('uses saved preference, then configured default when querying permissions', async () => {
+    vi.mocked(config.getConfig).mockReturnValue({ ...mockConfig, defaults: { ...mockConfig.defaults, permissionMode: 'assisted' } });
+    expect((await handleCommand('ch-perms', '/permissions')).response).toContain('**assisted**');
+    vi.mocked(store.getChannelPrefs).mockResolvedValue({ permissionMode: 'interactive' });
+    expect((await handleCommand('ch-perms', '/permissions')).response).toContain('**manual**');
+  });
+
+  it.each([
+    ['assisted', '', 'interactive', 'assisted'],
+    ['assisted', '', 'assisted', 'interactive'],
+    ['assisted', '', 'autopilot', 'assisted'],
+    ['assisted', 'on', 'assisted', 'assisted'],
+    ['assisted', 'off', 'autopilot', 'interactive'],
+    ['yolo', '', 'assisted', 'autopilot'],
+    ['yolo', '', 'autopilot', 'interactive'],
+    ['yolo', 'on', 'autopilot', 'autopilot'],
+    ['yolo', 'off', 'assisted', 'interactive'],
+  ])('/%s %s changes %s to %s transactionally', async (command, arg, current, desired) => {
+    const result = await handleCommand('ch-perms', `/${command} ${arg}`, undefined, { verbose: false, permissionMode: current });
+    expect(result).toEqual({ handled: true, action: 'set_permission_mode', payload: desired });
+    expect(store.setChannelPrefs).not.toHaveBeenCalled();
+  });
+
+  it('toggles using stored preferences or configured defaults without effective prefs', async () => {
+    vi.mocked(config.getConfig).mockReturnValue({ ...mockConfig, defaults: { ...mockConfig.defaults, permissionMode: 'assisted' } });
+    expect((await handleCommand('ch-perms', '/assisted')).payload).toBe('interactive');
+    vi.mocked(store.getChannelPrefs).mockResolvedValue({ permissionMode: 'autopilot' });
+    expect((await handleCommand('ch-perms', '/yolo')).payload).toBe('interactive');
+    expect(store.setChannelPrefs).not.toHaveBeenCalled();
+  });
+
+  it.each(['assisted', 'yolo'])('rejects invalid /%s toggle arguments', async command => {
+    const result = await handleCommand('ch-perms', `/${command} on off`);
+    expect(result.response).toContain(`/${command} [on|off]`);
+    expect(result.action).toBeUndefined();
+    expect(store.setChannelPrefs).not.toHaveBeenCalled();
+  });
+
+  it.each(['/help', '/help all'])('%s describes the independent permission controls', async command => {
+    const result = await handleCommand('ch-perms', command);
+    expect(result.response).toContain('/permissions [manual|assisted|yolo]');
+    expect(result.response).toContain('/assisted [on|off]');
+    expect(result.response).toContain('independent of permission');
   });
 });
 
@@ -334,7 +440,7 @@ describe('/status command', () => {
       { verbose: false, permissionMode: 'interactive', reasoningEffort: null },
     );
     expect(result.response).toContain('Mode: 🛡️ Interactive');
-    expect(result.response).toContain('Yolo: 🛡️ Off');
+    expect(result.response).toContain('Permission mode: **manual**');
   });
 
   it('shows plan mode when sessionMode is plan', async () => {
@@ -346,7 +452,7 @@ describe('/status command', () => {
       { verbose: false, permissionMode: 'autopilot', reasoningEffort: null },
     );
     expect(result.response).toContain('Mode: 📋 Plan');
-    expect(result.response).toContain('Yolo: 🤠 On');
+    expect(result.response).toContain('Permission mode: **yolo**');
   });
 
   it('shows autopilot mode when sessionMode is autopilot', async () => {
@@ -358,7 +464,17 @@ describe('/status command', () => {
       { verbose: false, permissionMode: 'interactive', reasoningEffort: null },
     );
     expect(result.response).toContain('Mode: 🤖 Autopilot');
-    expect(result.response).toContain('Yolo: 🛡️ Off');
+    expect(result.response).toContain('Permission mode: **manual**');
+  });
+
+  it('shows assisted permissions independently of autopilot session mode', async () => {
+    await store.setChannelPrefs('ch-status-assisted', { sessionMode: 'autopilot' });
+    const result = await handleCommand('ch-status-assisted', '/status',
+      { sessionId: 'abc-123', model: 'claude-sonnet-4.5', agent: null },
+      { verbose: false, permissionMode: 'assisted' },
+    );
+    expect(result.response).toContain('Mode: 🤖 Autopilot');
+    expect(result.response).toContain('Permission mode: **assisted**');
   });
 
   it('shows no active session when no sessionInfo', async () => {
@@ -737,6 +853,27 @@ describe('resolveEffectiveConfig', () => {
     const model = result.fields.find(f => f.setting === 'model');
     expect(model?.source).toBe('defaults');
     expect(model?.value).toBe('claude-sonnet-4.5');
+  });
+
+  it.each([
+    ['interactive', 'manual'],
+    ['assisted', 'assisted'],
+    ['autopilot', 'yolo'],
+  ])('labels permission preference %s as %s independently of session mode', async (mode, label) => {
+    vi.mocked(store.getChannelPrefs).mockResolvedValue({ permissionMode: mode, sessionMode: 'autopilot' });
+    const result = await resolveEffectiveConfig('ch1');
+    expect(result.fields.find(f => f.setting === 'permissionMode')).toEqual({
+      setting: 'permissionMode', value: label, source: 'channel prefs',
+    });
+    expect(result.fields.find(f => f.setting === 'sessionMode')?.value).toBe('autopilot');
+  });
+
+  it('resolves an assisted default in the config table', async () => {
+    vi.mocked(config.getConfig).mockReturnValue({ ...mockConfig, defaults: { ...mockConfig.defaults, permissionMode: 'assisted' } });
+    const result = await resolveEffectiveConfig('ch1');
+    expect(result.fields.find(f => f.setting === 'permissionMode')).toEqual({
+      setting: 'permissionMode', value: 'assisted', source: 'defaults',
+    });
   });
 
   it('session info overrides defaults for model and agent', async () => {

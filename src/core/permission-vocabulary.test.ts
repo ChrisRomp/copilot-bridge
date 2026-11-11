@@ -33,6 +33,10 @@ describe('permission vocabulary (hook → SDK resolution)', () => {
     // Stub CopilotBridge minimally — we don't need real SDK calls
     const stubBridge = {} as CopilotBridge;
     manager = new SessionManager(stubBridge);
+    vi.spyOn(manager, 'getEffectivePrefs').mockResolvedValue({
+      model: 'gpt-5.5', verbose: false, threadedReplies: false,
+      permissionMode: 'interactive', triggerMode: 'all', contextTier: 'default',
+    });
   });
 
   it('approve-once from resolvePermission maps to hook allow', async () => {
@@ -65,7 +69,7 @@ describe('permission vocabulary (hook → SDK resolution)', () => {
 
     // Resolve via the production resolvePermission path (allow=true)
     const resolved = await manager.resolvePermission(channelId, true);
-    expect(resolved).toBe(true);
+    expect(resolved).toBe('applied');
 
     // The hook promise should resolve with the mapped vocabulary
     const result = await hookPromise;
@@ -149,9 +153,9 @@ describe('permission vocabulary (hook → SDK resolution)', () => {
     expect(wrapped).toBeUndefined();
   });
 
-  it('resolvePermission returns false when no pending permissions', async () => {
+  it('resolvePermission distinguishes missing requests from failed decisions', async () => {
     const result = await manager.resolvePermission('nonexistent', true);
-    expect(result).toBe(false);
+    expect(result).toBe('missing');
   });
 });
 

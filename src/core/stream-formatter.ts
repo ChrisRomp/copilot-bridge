@@ -94,7 +94,7 @@ export function formatEvent(event: any): FormattedEvent | null {
       const name = event.data?.agentDisplayName ?? event.data?.agentName ?? 'sub-agent';
       const err = event.data?.error ?? 'unknown error';
       return {
-        type: 'error',
+        type: 'status',
         content: `❌ **${name}** failed: ${err}`,
         verbose: false,
       };
@@ -108,7 +108,7 @@ export function formatEvent(event: any): FormattedEvent | null {
 /**
  * Format a permission request for display in chat.
  */
-export function formatPermissionRequest(toolName: string, input: unknown, commands: string[], serverName?: string, hookReason?: string, fromHook?: boolean): string {
+export function formatPermissionRequest(toolName: string, input: unknown, commands: string[], serverName?: string, hookReason?: string, fromHook?: boolean, assistedReason?: string): string {
   const lines = ['🔐 **Permission Required**', ''];
   if (hookReason) {
     lines.push(hookReason);
@@ -155,6 +155,10 @@ export function formatPermissionRequest(toolName: string, input: unknown, comman
     }
   }
 
+  const safeAssistedReason = assistedReason ? safePermissionText(assistedReason, 500) : '';
+  if (!fromHook && safeAssistedReason) {
+    lines.push('', `🛡️ Safety review: ${safeAssistedReason}`);
+  }
   lines.push('');
   if (fromHook) {
     lines.push('Reply `/approve` or `/deny`');
@@ -168,6 +172,55 @@ export function formatPermissionRequest(toolName: string, input: unknown, comman
   }
 
   return lines.join('\n');
+}
+
+/** A notice, not a permission prompt or a stream-finalization event. */
+export function formatPermissionNotice(
+  event:
+    | { type: 'bridge.permission_auto_decision'; data: { approved: boolean; summary: string; reason?: string } }
+    | { type: 'bridge.permission_policy_notice'; data: { content: string } },
+  verbose: boolean,
+  quiet: boolean,
+): string | null {
+  if (quiet) return null;
+  if (event.type === 'bridge.permission_policy_notice') return event.data.content;
+  return verbose ? formatPermissionAutoDecision(event.data.approved, event.data.summary, event.data.reason) : null;
+}
+
+export function formatPermissionAutoDecision(approved: boolean, summary: string, reason?: string): string {
+  const label = approved ? 'Auto-approved' : 'Denied';
+  const subject = safePermissionText(summary, 180) || 'Permission request';
+  const safeReason = (reason ? safePermissionText(reason, 360) : '') ||
+    'Human approval is unavailable in unattended mode.';
+  const rationale = !approved
+    ? ` — ${safeReason}`
+    : '';
+  return `🛡️ ${label}: ${subject}${rationale}`;
+}
+
+/** Keep chat concise; SessionManager logs the individual policy gaps. */
+export function formatPermissionPolicyWarnings(warnings: string[]): string {
+  if (warnings.length === 0) return '';
+  return 'Some bridge permission rules could not be translated for assisted mode. This may cause extra prompts, or leave those rules unenforced during unattended autopilot.';
+}
+
+/** Keep model/tool-authored notice text bounded and inert in chat Markdown. */
+function safePermissionText(value: string, limit: number): string {
+  const plain = value.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  // Limit after escaping, without splitting an escape or an HTML entity.
+  let escaped = '';
+  for (const char of plain) {
+    const token = char === '@' ? '@\u200b'
+      : char === '&' ? '&amp;'
+      : char === '<' ? '&lt;'
+      : char === '>' ? '&gt;'
+      : /[\\`*_{}\[\]()#+.!|~-]/.test(char) ? `\\${char}`
+      : char;
+    if (escaped.length + token.length > limit - 1) return `${escaped}…`;
+    escaped += token;
+  }
+  return escaped;
 }
 
 /**

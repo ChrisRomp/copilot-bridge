@@ -14,8 +14,8 @@ import {
 const log = createLogger('scheduler');
 
 interface SchedulerDeps {
-  /** Send a prompt to a channel's session (creates/resumes as needed). */
-  sendMessage: (channelId: string, prompt: string) => Promise<string>;
+  /** Send a prompt with its task ID so the receiver can mark automation provenance. */
+  sendMessage: (channelId: string, prompt: string, taskId: string) => Promise<string>;
   /** Post a notification to a channel (no LLM, just a message). */
   postMessage: (channelId: string, text: string) => Promise<void>;
 }
@@ -248,7 +248,7 @@ async function executeJob(taskId: string, isOneOff: boolean): Promise<void> {
   log.info(`Executing job ${taskId}: "${task.prompt.slice(0, 80)}"`);
 
   try {
-    await deps.sendMessage(task.channelId, task.prompt);
+    await deps.sendMessage(task.channelId, task.prompt, task.id);
 
     await insertTaskHistory({
       taskId: task.id, channelId: task.channelId,

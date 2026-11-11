@@ -42,8 +42,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@github/copilot": "1.0.103",
-    "@github/copilot-sdk": "^1.0.13",
+    "@github/copilot": "1.0.109",
+    "@github/copilot-sdk": "^1.0.31",
     "@mattermost/client": "^11.9.0",
     "@mattermost/types": "^11.9.0",
     "@slack/bolt": "^5.1.0",
@@ -63,6 +63,6 @@
   },
   "allowScripts": {
     "esbuild@0.28.2": true,
-    "koffi@3.2.1": true
+    "koffi@3.3.6": true
   }
 }

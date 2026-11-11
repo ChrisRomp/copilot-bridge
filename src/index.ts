@@ -2,7 +2,8 @@ import { loadConfig, getConfig, isConfiguredChannel, registerDynamicChannel, mar
 import { CopilotBridge } from './core/bridge.js';
 import { SessionManager, BRIDGE_CUSTOM_TOOLS, parseEnvFile } from './core/session-manager.js';
 import { formatContextTierLabel, handleCommand, parseCommand } from './core/command-handler.js';
-import { formatEvent, formatPermissionRequest, formatUserInputRequest } from './core/stream-formatter.js';
+import { formatEvent, formatPermissionRequest, formatPermissionNotice, formatUserInputRequest } from './core/stream-formatter.js';
+import { ASSISTED_AUTOPILOT_NOTICE } from './core/assisted-permissions.js';
 import { WorkspaceWatcher, initWorkspace, getWorkspacePath } from './core/workspace-manager.js';
 import { MattermostAdapter } from './channels/mattermost/adapter.js';
 import { StreamingHandler } from './channels/mattermost/streaming.js';
@@ -20,8 +21,41 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 import type { ChannelAdapter, AdapterFactory, InboundMessage, InboundReaction, MessageAttachment, AppConfig, DatabaseConfig } from './types.js';
+import { isBridgePermissionMode } from './types.js';
 
 const log = createLogger('bridge');
+
+async function assistedAutopilotNotice(manager: SessionManager, channelId: string): Promise<string> {
+  const prefs = await manager.getEffectivePrefs(channelId);
+  if (prefs.permissionMode !== 'assisted' || await manager.getSessionMode(channelId) !== 'autopilot') return '';
+  return `\n\n${ASSISTED_AUTOPILOT_NOTICE}`;
+}
+
+async function applyPermissionModeCommand(
+  manager: SessionManager,
+  adapter: ChannelAdapter,
+  channelId: string,
+  mode: unknown,
+  threadRootId?: string,
+): Promise<void> {
+  try {
+    if (!isBridgePermissionMode(mode)) throw new Error('Invalid permission mode.');
+    await manager.setPermissionMode(channelId, mode);
+    const label = mode === 'interactive' ? 'manual' : mode === 'autopilot' ? 'yolo' : 'assisted';
+    const detail = mode === 'assisted'
+      ? 'AI safety review is enabled; unresolved requests prompt interactively or deny unattended.'
+      : mode === 'autopilot'
+        ? 'All requests are approved after bridge hardcoded safety checks.'
+        : 'Unresolved requests require approval.';
+    const notice = await assistedAutopilotNotice(manager, channelId);
+    await adapter.sendMessage(channelId, `**Permission mode: ${label}** — ${detail}${notice}`, { threadRootId });
+  } catch (err) {
+    log.error('Could not change permission mode:', err);
+    await adapter.sendMessage(channelId,
+      `❌ Permission mode was not applied: ${err instanceof Error ? err.message : String(err)}`,
+      { threadRootId });
+  }
+}
 
 // Active streaming responses, keyed by channelId
 const activeStreams = new Map<string, string>(); // channelId → streamKey
@@ -455,6 +489,13 @@ async function main(): Promise<void> {
 
   // Initialize session manager
   const sessionManager = new SessionManager(bridge);
+  configWatcher.onReload((result) => {
+    if (result.success) {
+      sessionManager.refreshAllPermissions().catch(err => {
+        log.error('Could not synchronize reloaded permission policy:', err);
+      });
+    }
+  });
 
   // Initialize workspaces for all configured bots (idempotent)
   for (const [platformName] of Object.entries(config.platforms)) {
@@ -626,7 +667,7 @@ async function main(): Promise<void> {
 
   // Initialize scheduler — rehydrate persisted jobs
   await initScheduler({
-    sendMessage: async (channelId, prompt) => {
+    sendMessage: async (channelId, prompt, taskId) => {
       // Route through channelLocks to serialize with user messages
       const prev = channelLocks.get(channelId) ?? Promise.resolve();
       const task = prev.then(async () => {
@@ -645,17 +686,34 @@ async function main(): Promise<void> {
           });
           eventLocks.set(channelId, evTask.catch((err) => { log.debug("Event lock task failed:", err); }));
           await evTask;
-          markBusy(channelId);
         }
+        markBusy(channelId);
 
         // Enter quiet mode — suppresses all streaming until NO_REPLY determination
         const clearQuiet = enterQuietMode(channelId);
+        const unattended = sessionManager.beginUnattendedExecution(channelId);
+        let executionStopped = false;
         try {
-          await sessionManager.sendMessage(channelId, prompt);
+          await sessionManager.sendMessage(channelId, prompt, undefined, undefined, { source: `automation-sched-${taskId}` });
           // Hold the lock until the response is fully streamed
-          await waitForChannelIdle(channelId);
+          const completion = await waitForChannelIdle(channelId);
+          if (completion !== 'idle') {
+            await sessionManager.abortSession(channelId);
+            executionStopped = true;
+            throw new Error(`Scheduled task ${completion === 'timeout' ? 'timed out' : 'was interrupted'} before confirmed completion.`);
+          }
+          executionStopped = true;
         } catch (err: any) {
           log.error(`Scheduled job sendMessage failed for ${channelId.slice(0, 8)}...:`, err);
+          if (!executionStopped) {
+            try {
+              await sessionManager.abortSession(channelId);
+              executionStopped = true;
+            } catch (abortError) {
+              unattended.retainUntilReplacement();
+              log.error('Could not confirm scheduled execution stopped; retaining unattended permissions:', abortError);
+            }
+          }
           markIdleImmediate(channelId);
           const failedStream = activeStreams.get(channelId);
           if (failedStream) {
@@ -666,6 +724,7 @@ async function main(): Promise<void> {
           throw err;
         } finally {
           clearQuiet();
+          if (executionStopped) unattended.finish();
         }
       });
       channelLocks.set(channelId, task.catch((err) => { log.debug("Channel lock task failed:", err); }));
@@ -855,7 +914,7 @@ async function handleMidTurnMessage(
     // Only commands where handleCommand returns a complete response (no separate action rendering).
     // Commands with complex action handlers (skills, schedule, rules) defer to serialized path.
     const SAFE_MID_TURN = new Set([
-      'context', 'status', 'help', 'verbose', 'yolo',
+      'context', 'status', 'help', 'verbose', 'yolo', 'permissions', 'assisted',
       'model', 'models', 'agents',
       'streamer-mode', 'on-air',
     ]);
@@ -879,6 +938,10 @@ async function handleMidTurnMessage(
       );
 
       if (cmdResult.handled) {
+        if (cmdResult.action === 'set_permission_mode') {
+          await applyPermissionModeCommand(sessionManager, adapter, msg.channelId, cmdResult.payload, threadRoot);
+          return;
+        }
         // Model/agent switch while busy — defer to serialized path
         if (cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent') {
           throw new Error('slash-command-while-busy');
@@ -886,7 +949,7 @@ async function handleMidTurnMessage(
         if (cmdResult.response) {
           await adapter.sendMessage(msg.channelId, cmdResult.response, { threadRootId: threadRoot });
         }
-        // handleCommand already persists some prefs (verbose, yolo, reasoning) via setChannelPrefs
+        // handleCommand persists simple preferences such as verbose.
         return;
       }
     }
@@ -1108,12 +1171,15 @@ async function handleInboundMessage(
     const threadRoot = resolveThreadRoot(msg, threadRequested, channelConfig);
 
     // Send response before action, except for actions that send their own ack after completing
-    const deferResponse = cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent' || cmdResult.action === 'set_reasoning' || cmdResult.action === 'set_context_tier' || cmdResult.action === 'reload_mcp' || cmdResult.action === 'reload_skills';
+    const deferResponse = cmdResult.action === 'switch_model' || cmdResult.action === 'switch_agent' || cmdResult.action === 'set_reasoning' || cmdResult.action === 'set_context_tier' || cmdResult.action === 'reload_mcp' || cmdResult.action === 'reload_skills' || cmdResult.action === 'set_permission_mode';
     if (cmdResult.response && !deferResponse) {
       await adapter.sendMessage(msg.channelId, cmdResult.response, { threadRootId: threadRoot });
     }
 
     switch (cmdResult.action) {
+      case 'set_permission_mode':
+        await applyPermissionModeCommand(sessionManager, adapter, msg.channelId, cmdResult.payload, threadRoot);
+        break;
       case 'new_session': {
         markIdleImmediate(msg.channelId);
         const oldStreamKey = activeStreams.get(msg.channelId);
@@ -1162,6 +1228,13 @@ async function handleInboundMessage(
               for (const r of result.restartNeeded) parts.push(`  ⚠️ ${r}`);
             }
             response = parts.join('\n');
+          }
+        }
+        if (result.success) {
+          try {
+            await sessionManager.refreshAllPermissions();
+          } catch (err) {
+            response += `\n⚠️ Permission synchronization failed: ${err instanceof Error ? err.message : String(err)}`;
           }
         }
         await adapter.sendMessage(msg.channelId, response, { threadRootId: threadRoot });
@@ -1342,22 +1415,22 @@ async function handleInboundMessage(
         break;
       }
       case 'approve':
-        if (!await sessionManager.resolvePermission(msg.channelId, true)) {
+        if (await sessionManager.resolvePermission(msg.channelId, true) === 'missing') {
           await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
         }
         break;
       case 'deny':
-        if (!await sessionManager.resolvePermission(msg.channelId, false)) {
+        if (await sessionManager.resolvePermission(msg.channelId, false) === 'missing') {
           await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
         }
         break;
       case 'remember':
-        if (!await sessionManager.resolvePermission(msg.channelId, true, true)) {
+        if (await sessionManager.resolvePermission(msg.channelId, true, true) === 'missing') {
           await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
         }
         break;
       case 'remember_deny':
-        if (!await sessionManager.resolvePermission(msg.channelId, false, true)) {
+        if (await sessionManager.resolvePermission(msg.channelId, false, true) === 'missing') {
           await adapter.sendMessage(msg.channelId, '⚠️ No pending permission request.', { threadRootId: threadRoot });
         }
         break;
@@ -1367,29 +1440,29 @@ async function handleInboundMessage(
 
           // Hardcoded safety denies
           const hardcoded = getHardcodedRules();
-          sections.push('**🔒 Hardcoded denies (enforced in all modes including autopilot):**');
+          sections.push('**🔒 Bridge hardcoded denies (runtime-assisted enforcement differences are reported when enabling assisted mode):**');
           sections.push(...hardcoded.map(r => `- **${r.action}** \`${r.spec}\``));
           sections.push('- **allow** `read/write in workspace + allowPaths`');
 
           // Config-level rules
           const configRules = getConfigRules();
           if (configRules.length > 0) {
-            sections.push('\n**⚙️ Config — config.json (skipped in autopilot):**');
+            sections.push('\n**⚙️ Config — config.json (skipped in yolo):**');
             sections.push(...configRules.map(r => `- **${r.action}** \`${r.spec}\``));
           } else {
-            sections.push('\n**⚙️ Config — config.json (skipped in autopilot):** _(none)_');
+            sections.push('\n**⚙️ Config — config.json (skipped in yolo):** _(none)_');
           }
 
           // Stored rules (per-channel)
           const stored = await listPermissionRulesForScope(msg.channelId);
           if (stored.length > 0) {
-            sections.push('\n**💾 Stored — this channel (skipped in autopilot):**');
+            sections.push('\n**💾 Stored — this channel (skipped in yolo):**');
             sections.push(...stored.map(r => {
               const spec = r.commandPattern === '*' ? r.tool : `${r.tool}(${r.commandPattern})`;
               return `- **${r.action}** \`${spec}\``;
             }));
           } else {
-            sections.push('\n**💾 Stored — this channel (skipped in autopilot):** _(none)_');
+            sections.push('\n**💾 Stored — this channel (skipped in yolo):** _(none)_');
           }
 
           await adapter.sendMessage(msg.channelId, `📋 **Permission rules:**\n${sections.join('\n')}`, { threadRootId: threadRoot });
@@ -1404,6 +1477,7 @@ async function handleInboundMessage(
           const spec = cmdResult.payload as string | undefined;
           if (!spec) {
             await clearPermissionRules(msg.channelId);
+            await sessionManager.refreshPermissions(msg.channelId);
             await adapter.sendMessage(msg.channelId, '🗑️ All permission rules cleared for this channel.', { threadRootId: threadRoot });
           } else {
             const match = spec.match(/^([^(]+?)(?:\((.+)\))?$/);
@@ -1411,6 +1485,7 @@ async function handleInboundMessage(
             const pattern = match?.[2]?.trim() ?? '*';
             const removed = await removePermissionRule(msg.channelId, tool, pattern);
             if (removed) {
+              await sessionManager.refreshPermissions(msg.channelId);
               await adapter.sendMessage(msg.channelId, `🗑️ Removed rule: \`${spec}\``, { threadRootId: threadRoot });
             } else {
               await adapter.sendMessage(msg.channelId, `⚠️ No matching rule found for \`${spec}\``, { threadRootId: threadRoot });
@@ -1418,7 +1493,7 @@ async function handleInboundMessage(
           }
         } catch (err: any) {
           log.error('Failed to clear permission rules:', err);
-          await adapter.sendMessage(msg.channelId, '❌ Failed to clear permission rules.', { threadRootId: threadRoot });
+          await adapter.sendMessage(msg.channelId, '❌ Could not clear and synchronize permission rules. Check `/rules` and any synchronization error above before continuing.', { threadRootId: threadRoot });
         }
         break;
       }
@@ -1793,15 +1868,14 @@ async function handleInboundMessage(
             break;
           }
 
-          // Save yolo state before changing it
           if (enableYolo) {
-            await sessionManager.saveYoloPreviousState(msg.channelId);
-            await setChannelPrefs(msg.channelId, { permissionMode: 'autopilot' });
+            await sessionManager.setPermissionMode(msg.channelId, 'autopilot', { temporary: true });
           }
 
           const modeLabel = interactive ? 'interactive' : enableYolo ? 'autopilot + yolo' : 'autopilot';
+          const permissionNotice = await assistedAutopilotNotice(sessionManager, msg.channelId);
           await adapter.sendMessage(msg.channelId,
-            `🚀 **Implementing plan** (${modeLabel})`,
+            `🚀 **Implementing plan** (${modeLabel})${permissionNotice}`,
             { threadRootId: threadRoot });
 
           // Clear pending plan exit if one was waiting
@@ -1850,9 +1924,11 @@ async function handleInboundMessage(
           } else {
             await sessionManager.setSessionMode(msg.channelId, 'autopilot');
             const prefs = await sessionManager.getEffectivePrefs(msg.channelId);
-            const yoloWarning = prefs.permissionMode !== 'autopilot'
-              ? '\n\n⚠️ Yolo is off — you\'ll still be prompted for tool permissions. Use `/yolo` to auto-approve.'
-              : '';
+            const yoloWarning = prefs.permissionMode === 'assisted'
+              ? await assistedAutopilotNotice(sessionManager, msg.channelId)
+              : prefs.permissionMode !== 'autopilot'
+                ? '\n\n⚠️ Manual permissions are on — you will still be prompted. Use `/permissions assisted` for unattended safety review or `/yolo` to auto-approve.'
+                : '';
             await adapter.sendMessage(msg.channelId,
               `🤖 **Autopilot enabled** — autonomous agentic loop. Use \`/autopilot\` to toggle off.${yoloWarning}`,
               { threadRootId: threadRoot });
@@ -2002,21 +2078,21 @@ async function handleReaction(
   const { adapter } = resolved;
 
   if (reaction.emoji === 'thumbsup' || reaction.emoji === '+1') {
-    if (await sessionManager.resolvePermission(reaction.channelId, true)) {
+    if (await sessionManager.resolvePermission(reaction.channelId, true) === 'applied') {
       await adapter.sendMessage(reaction.channelId, '✅ Approved via reaction.');
     }
   } else if (reaction.emoji === 'thumbsdown' || reaction.emoji === '-1') {
-    if (await sessionManager.resolvePermission(reaction.channelId, false)) {
+    if (await sessionManager.resolvePermission(reaction.channelId, false) === 'applied') {
       await adapter.sendMessage(reaction.channelId, '❌ Denied via reaction.');
     }
   } else if (reaction.emoji === 'floppy_disk') {
     const isHook = sessionManager.isHookPermission(reaction.channelId);
-    if (await sessionManager.resolvePermission(reaction.channelId, true, !isHook)) {
+    if (await sessionManager.resolvePermission(reaction.channelId, true, !isHook) === 'applied') {
       await adapter.sendMessage(reaction.channelId, isHook ? '✅ Approved via reaction.' : '💾 Approved + remembered via reaction.');
     }
   } else if (reaction.emoji === 'no_entry_sign') {
     const isHook = sessionManager.isHookPermission(reaction.channelId);
-    if (await sessionManager.resolvePermission(reaction.channelId, false, !isHook)) {
+    if (await sessionManager.resolvePermission(reaction.channelId, false, !isHook) === 'applied') {
       await adapter.sendMessage(reaction.channelId, isHook ? '❌ Denied via reaction.' : '🚫 Denied + remembered via reaction.');
     }
   }
@@ -2030,6 +2106,8 @@ async function handleSessionEvent(
   event: any,
   sessionManager: SessionManager,
 ): Promise<void> {
+  if (event.type === 'bridge.permission_policy_error'
+      && !sessionManager.isCurrentPermissionAttachment(channelId, event.data.attachmentGeneration)) return;
   // Reset loop detector when the session changes (e.g., model fallback creates new session)
   const prevSession = lastSessionIds.get(channelId);
   if (prevSession && prevSession !== sessionId) {
@@ -2109,11 +2187,38 @@ async function handleSessionEvent(
   }
   const verbose = prefs?.verbose ?? channelConfig.verbose;
 
+  if (event.type === 'bridge.permission_policy_error') {
+    if (!sessionManager.isCurrentPermissionAttachment(channelId, event.data.attachmentGeneration)) return;
+    const streamKey = activeStreams.get(channelId);
+    const threadRootId = (streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined)
+      ?? channelThreadRoots.get(channelId);
+    if (streamKey) {
+      await streaming.cancelStream(streamKey);
+      activeStreams.delete(channelId);
+    }
+    await finalizeActivityFeed(channelId, adapter);
+    if (!sessionManager.isCurrentPermissionAttachment(channelId, event.data.attachmentGeneration)) return;
+    markIdleImmediate(channelId);
+    await adapter.sendMessage(channelId, event.data.message, { threadRootId });
+    return;
+  }
+
+  if (event.type === 'bridge.permission_auto_decision' || event.type === 'bridge.permission_policy_notice') {
+    const content = formatPermissionNotice(event, verbose, isQuiet(channelId) || sessionManager.isUnattendedExecution(channelId));
+    if (content !== null) {
+      const streamKey = activeStreams.get(channelId);
+      const threadRootId = (streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined)
+        ?? channelThreadRoots.get(channelId);
+      await adapter.sendMessage(channelId, content, { threadRootId });
+    }
+    return;
+  }
+
   // Handle custom bridge events (permissions, user input)
   // During quiet mode, auto-deny permissions and suppress input requests —
   // quiet tasks should be non-interactive
   if (event.type === 'bridge.permission_request') {
-    if (isQuiet(channelId)) {
+    if (isQuiet(channelId) || sessionManager.isUnattendedExecution(channelId)) {
       log.info(`Auto-denying permission during quiet mode on ${channelId.slice(0, 8)}...`);
       await sessionManager.resolvePermission(channelId, false);
       return;
@@ -2126,14 +2231,14 @@ async function handleSessionEvent(
       activeStreams.delete(channelId);
     }
     await finalizeActivityFeed(channelId, adapter);
-    const { toolName, serverName, input, commands, hookReason, fromHook } = event.data;
-    const formatted = formatPermissionRequest(toolName, input, commands, serverName, hookReason, fromHook);
+    const { toolName, serverName, input, commands, hookReason, fromHook, assistedReason } = event.data;
+    const formatted = formatPermissionRequest(toolName, input, commands, serverName, hookReason, fromHook, assistedReason);
     await adapter.sendMessage(channelId, formatted, { threadRootId });
     return;
   }
 
   if (event.type === 'bridge.user_input_request') {
-    if (isQuiet(channelId)) {
+    if (isQuiet(channelId) || sessionManager.isUnattendedExecution(channelId)) {
       log.info(`Suppressing user input request during quiet mode on ${channelId.slice(0, 8)}...`);
       sessionManager.resolveUserInput(channelId, '');
       return;

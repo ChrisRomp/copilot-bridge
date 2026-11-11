@@ -21,9 +21,11 @@ const IDLE_DEBOUNCE_MS = 2_000; // 2 seconds after last session.idle
 const busyChannels = new Set<string>();
 
 interface Waiter {
-  resolve: () => void;
+  resolve: (reason: ChannelIdleReason) => void;
   timer: ReturnType<typeof setTimeout>;
 }
+export type ChannelIdleReason = 'idle' | 'interrupted' | 'timeout';
+const lastReleaseReasons = new Map<string, ChannelIdleReason>();
 
 // Per-channel waiters with their timeout handles
 const idleWaiters = new Map<string, Waiter[]>();
@@ -34,6 +36,7 @@ const idleDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /** Mark a channel as busy (processing a response). */
 export function markBusy(channelId: string): void {
   cancelIdleDebounce(channelId);
+  lastReleaseReasons.delete(channelId);
   busyChannels.add(channelId);
 }
 
@@ -58,13 +61,13 @@ export function cancelIdleDebounce(channelId: string): void {
  * Returns a promise that resolves when the channel becomes idle.
  * Resolves immediately if the channel is not currently busy.
  */
-export function waitForChannelIdle(channelId: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
-  if (!busyChannels.has(channelId)) return Promise.resolve();
-  return new Promise<void>((resolve) => {
+export function waitForChannelIdle(channelId: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<ChannelIdleReason> {
+  if (!busyChannels.has(channelId)) return Promise.resolve(lastReleaseReasons.get(channelId) ?? 'idle');
+  return new Promise<ChannelIdleReason>((resolve) => {
     const waiters = idleWaiters.get(channelId) ?? [];
     const timer = setTimeout(() => {
       log.warn(`Channel ${channelId.slice(0, 8)}... idle waiter timed out after ${timeoutMs}ms`);
-      resolve();
+      resolve('timeout');
       const remaining = idleWaiters.get(channelId);
       if (remaining) {
         const idx = remaining.findIndex(w => w.resolve === resolve);
@@ -79,13 +82,14 @@ export function waitForChannelIdle(channelId: string, timeoutMs = DEFAULT_TIMEOU
 }
 
 /** Internal: truly release the channel and resolve all waiters. */
-function releaseChannel(channelId: string): void {
+function releaseChannel(channelId: string, reason: 'idle' | 'interrupted'): void {
+  lastReleaseReasons.set(channelId, reason);
   busyChannels.delete(channelId);
   const waiters = idleWaiters.get(channelId);
   if (waiters) {
     for (const { resolve, timer } of waiters) {
       clearTimeout(timer);
-      resolve();
+      resolve(reason);
     }
     idleWaiters.delete(channelId);
   }
@@ -102,7 +106,7 @@ export function markIdle(channelId: string): void {
   const timer = setTimeout(() => {
     idleDebounceTimers.delete(channelId);
     log.debug(`Channel ${channelId.slice(0, 8)}... debounce expired, releasing`);
-    releaseChannel(channelId);
+    releaseChannel(channelId, 'idle');
   }, IDLE_DEBOUNCE_MS);
   if (typeof timer === 'object' && 'unref' in timer) timer.unref();
   idleDebounceTimers.set(channelId, timer);
@@ -114,7 +118,7 @@ export function markIdle(channelId: string): void {
  */
 export function markIdleImmediate(channelId: string): void {
   cancelIdleDebounce(channelId);
-  releaseChannel(channelId);
+  releaseChannel(channelId, 'interrupted');
 }
 
 /** Reset all state (for testing). */
@@ -126,4 +130,5 @@ export function _resetForTest(): void {
   busyChannels.clear();
   idleWaiters.clear();
   idleDebounceTimers.clear();
+  lastReleaseReasons.clear();
 }

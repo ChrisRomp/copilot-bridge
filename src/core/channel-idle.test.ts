@@ -66,6 +66,25 @@ describe('markIdle (debounced)', () => {
 });
 
 describe('waitForChannelIdle', () => {
+  it('distinguishes confirmed idle, forced release, and timeout for scheduled execution', async () => {
+    markBusy('completed');
+    const completed = waitForChannelIdle('completed');
+    markIdle('completed');
+    await vi.advanceTimersByTimeAsync(2500);
+    await expect(completed).resolves.toBe('idle');
+
+    markBusy('interrupted');
+    const interrupted = waitForChannelIdle('interrupted');
+    markIdleImmediate('interrupted');
+    await expect(interrupted).resolves.toBe('interrupted');
+    await expect(waitForChannelIdle('interrupted')).resolves.toBe('interrupted');
+
+    markBusy('timed-out');
+    const timedOut = waitForChannelIdle('timed-out', 100);
+    await vi.advanceTimersByTimeAsync(101);
+    await expect(timedOut).resolves.toBe('timeout');
+  });
+
   it('resolves immediately when not busy', async () => {
     await waitForChannelIdle('ch1');
   });

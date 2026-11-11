@@ -210,6 +210,10 @@ Fallback values for any setting not specified per-channel:
 
 ## Permissions
 
+`defaults.permissionMode` accepts `"interactive"` (manual, the default), `"assisted"`, or `"autopilot"` (the legacy configuration name for **yolo**, not the autonomous session mode). `/permissions` shows the current mode and describes all three available modes with commands to select them. `/permissions manual|assisted|yolo` overrides it per channel. `/assisted [on|off]` switches between assisted and manual; `/yolo` switches between yolo and manual.
+
+`/permissions ask` is an alias for `manual`; `/permissions assist` and `/permissions ai` are aliases for `assisted`; `/permissions allow-all` is an alias for `yolo`. Aliases retain the same bridge safety checks and do not change the SDK's autonomous session mode.
+
 Config-level permission rules use Copilot CLI-compatible syntax:
 
 ```json
@@ -250,16 +254,33 @@ Config-level permission rules use Copilot CLI-compatible syntax:
 
 ### Permission resolution order
 
-1. **Hardcoded safety denies** — blocks destructive commands (`rm -rf /`, `mkfs`, fork bombs, etc.) even in autopilot mode. Cannot be overridden.
-2. **Autopilot mode** — if enabled, auto-approves everything else (skip steps 3–5)
-3. **Config deny rules** — checked first among config rules, always wins
-4. **Config allow rules** — if matched, auto-approved
-5. **SQLite stored rules** — from `/always approve` or `/always deny` in chat (MCP rules save at server level)
-6. **Interactive prompt** — asks the user in chat with approve/deny reactions
+For requests delivered to the bridge's permission handler:
+
+1. **Hardcoded safety denies** — blocks destructive commands, including in yolo.
+2. **Bridge custom tools** — trusted bridge tools enforce their own access boundaries.
+3. **Yolo mode** — approves remaining requests, skipping config and stored rules.
+4. **Config rules** — denies before allows, followed by workspace/path grants.
+5. **Stored rules** — from `/always approve` or `/always deny` in chat (MCP rules save at server level).
+6. **Assisted review** — when enabled, an eligible AI judge approval permits the action.
+7. **Unresolved request** — prompts interactively, or denies without prompting in assisted autopilot and quiet scheduled turns.
 
 Use `/yolo` in chat to auto-approve all permissions (hardcoded safety denies still apply). Use `/autopilot` to enable the SDK's autonomous agentic loop — the agent works continuously until the task is done. Use `/plan` to toggle plan mode for structured planning before implementation. These are independent: `/yolo` controls permissions, `/autopilot` and `/plan` control agent behavior.
 
 Use `/always approve` or `/always deny` during a permission prompt to persist the rule. Use `/rules` to see all permission rules (hardcoded, config, and stored).
+
+### Assisted permissions and unattended work
+
+Assisted mode uses the SDK's default safety-review model and instructions. Judge failures, exclusions, sandbox-bypass requests, and requests requiring human approval are not treated as approvals. Interactive permission prompts include the review reason. Assisted autopilot returns a denial instead of stopping for approval, allowing the agent to try alternatives. Manual permissions combined with `/autopilot` retain their existing prompt behavior; autopilot does not implicitly enable yolo.
+
+Copilot can settle unattended permissions without calling the bridge. The bridge keeps remembered rules in its state store and synchronizes supported rules into the individual SDK session. It does **not** export them to the operator's `permissions-config.json`: that file stores project-scoped approvals, not denies, and could share grants between channels using the same workspace. Rule translation limitations are reported rather than silently broadening approvals. Bridge-only predicates are not guaranteed to run on runtime-settled requests.
+
+Supported projections include simple shell identifiers, validated config command prefixes, and MCP server/tool rules. Remembered blanket shell allows, wrapper approvals, overlapping rules whose precedence cannot be preserved, and unsupported patterns are withheld with a concise chat notice. Individual limitations and affected rules remain in the bridge logs for diagnosis; `/rules` lists saved rules but does not mark translation gaps. Native path/URL managers are left unchanged: path eligibility is not the same as the bridge's path-scoped write approval. Built-in shell tools also reuse the bridge hard-deny predicates through a pre-tool hook, including command arguments rewritten by existing hooks.
+
+Judge approvals and unattended denials produce short chat notices only in verbose mode, based on final permission decisions and without interrupting the response stream. Decisions are always logged; quiet scheduled tasks never post these notices, even with verbose enabled. Policy limitation notices and permission prompts do not require verbose mode. Scheduled prompts are tagged as automation and inter-agent messages as agent-originated input, not human authorization. Inter-agent sessions retain their existing noninteractive rule handling; they do not enable assisted mode.
+
+Native rule-settled actions do not emit the permission events used for judge notices; this is not a complete audit feed of every policy decision. Provenance tags identify the sender type, not an independent authorization boundary.
+
+Mode and policy are reapplied on session creation/resume and relevant changes. Permission synchronization failures are surfaced, not silently treated as a successful mode change. `/implement yolo` temporarily switches permissions in memory while keeping the previous mode persisted, so a restart never retains the temporary elevation. Scheduled execution stays unattended until completion or confirmed abort, independently of quiet output's timeout.
 
 ## Inter-Agent Communication
 

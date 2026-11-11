@@ -61,6 +61,7 @@ Both inbound messages and session events are serialized per-channel via separate
 - `/new` destroys the current session and creates a fresh one
 - `/resume` accepts partial session ID prefixes (case-insensitive); reports ambiguity if multiple match
 - MCP servers and skill directories are loaded once at startup and passed to every session
+- `CopilotBridge` uses the pinned `@github/copilot` CLI as the SDK's stdio host (honoring `COPILOT_CLI_PATH` overrides). The SDK-only runtime lacks the CLI's extension launch services; configuration discovery enables extensions on both create and resume.
 
 ### Stream Lifecycle
 
@@ -87,7 +88,23 @@ New platforms implement `ChannelAdapter` (in `src/types.ts`). The Mattermost ada
 
 ### Permission Handling
 
-Permission flow: config rules → SQLite stored rules (from `/remember`) → interactive prompt. MCP permissions are stored at server level (`mcp:serverName` → `*`), not per individual tool. The `PendingPermission` type carries a `serverName` field for MCP tools.
+For bridge-handled permission requests: hard denies → trusted bridge tools → yolo → config rules → stored rules (from `/remember`) → assisted review → prompt or unattended denial. MCP permissions are stored at server level (`mcp:serverName` → `*`), not per individual tool. The `PendingPermission` type carries a `serverName` field for MCP tools.
+
+Bridge permission preferences are `interactive` (manual), `assisted`, and legacy `autopilot` (yolo). They are independent of the SDK session mode controlled by `/autopilot`. `/permissions` and `/assisted` apply mode changes through SessionManager; do not persist a preference directly without synchronizing the SDK. Runtime `allow-all` is not used.
+
+In assisted mode, unresolved requests use the SDK assessment after bridge rules. Unapproved requests prompt interactively but deny without prompting during autopilot or quiet scheduled tasks. Native `permission.completed` events, not judge recommendations, establish final outcomes for decision notices. Scheduled/inter-agent prompts must carry automation/agent `source` provenance.
+
+Permission policy/persistence notices use `bridge.permission_policy_notice`, not synthetic `assistant.message` events: they must not alter stream content or channel busy/idle state. Permission-sync failures during resume preserve the stored session mapping; only confirmed missing sessions trigger replacement.
+
+Automatic permission decision notices are verbose-only and suppressed during quiet tasks; the decisions are still logged. Policy limitation notices and interactive approval prompts are not gated by verbose mode.
+
+Permission refresh failures and queued error notices are fenced by attachment generation so they cannot tear down replacement sessions. Temporary implementation yolo is an in-memory override with the prior mode persisted before elevation. Scheduled execution has separate unattended context; quiet output timeout must not re-enable approval prompts. `resolvePermission` distinguishes applied, failed, and missing requests; only applied outcomes may receive success acknowledgements.
+
+Pre-tool shell hard denies run independently of persisted permission mode, including mode transitions. In-flight permission callbacks re-evaluate after policy revisions without locking across human approval. Invalidate cached policy signatures before mutating native rules, including removal, so ambiguous RPC failures force restoration rather than trusting stale state.
+
+Unattended Assisted Autopilot can settle requests without invoking the host callback. `permission-policy.ts` projects supported channel rules into SDK session policy; the state store remains the durable source. Do not write channel grants into the operator's project-scoped `permissions-config.json` or silently broaden unsupported rules. Report enforcement differences and synchronize additions, removals, lifecycle changes, and config reloads before subsequent execution.
+
+The bridge owns an initially empty `configure.rules` slot in its private SDK client's new/cold-resumed sessions. It restores only that slot when leaving assisted; unknown resident sessions must not be overwritten. Native remembered approvals and managed policy are separate. Do not replace native path/URL managers without a known baseline. `permission-patterns.ts` shares shell-wrapper exclusions between config, bridge checks, and native-rule translation.
 
 If the user sends unrecognized text during a permission prompt (not `/approve`, `/deny`, etc.), the permission is **auto-denied** and the text is processed as a normal message. This prevents lost messages when users ignore a permission prompt.
 
