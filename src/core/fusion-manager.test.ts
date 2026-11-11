@@ -221,6 +221,19 @@ describe('FusionManager', () => {
     expect(prefs.fusionTransition).not.toBeNull();
   });
 
+  it('does not report an explicit fixed-model switch as a Fusion fallback', async () => {
+    let result: ReturnType<typeof controller.process> | undefined;
+    await controller.fixedSelection('ch', async () => {
+      result = controller.process('ch', session, {
+        ...base,
+        id: 'fixed-switch',
+        type: 'session.model_change',
+        data: { previousModel: 'auto', newModel: 'fixed-model', cause: 'user_request' },
+      });
+    });
+    expect(result?.notice).toBeUndefined();
+  });
+
   it('never applies stale async work to a replacement attachment', async () => {
     let resolveCatalog!: (value: FusionMetadata) => void;
     vi.mocked(bridge.getFusionMetadata).mockImplementationOnce(() => new Promise(resolve => { resolveCatalog = resolve; }));

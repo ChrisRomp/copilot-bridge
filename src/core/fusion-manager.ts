@@ -233,7 +233,7 @@ export class FusionManager {
   process(channelId: string, session: CopilotSession, event: SessionEvent) {
     const binding = this.bindings.get(channelId);
     if (!binding || binding.session !== session) return { suppress: true };
-    const result = binding.tracker.process(event);
+    const result = binding.tracker.process(event, binding.suspended && event.type === 'session.model_change');
     if (!binding.suspended && !event.checkpoint && !event.agentId && (event.type === 'session.model_change'
         || event.type === 'session.auto_tier_switch_failed' || event.type === 'session.idle')) {
       void this.serialized(channelId, async () => {

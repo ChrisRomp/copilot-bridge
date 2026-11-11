@@ -129,10 +129,15 @@ export class FusionEventTracker {
     this.role = undefined;
   }
 
-  process(event: SessionEvent): { notice?: FusionModelNotice; error?: string; suppress: boolean } {
+  process(event: SessionEvent, suppressFallbackNotice = false): { notice?: FusionModelNotice; error?: string; suppress: boolean } {
     if (event.checkpoint) return { suppress: true };
     if (event.type === 'assistant.message' && event.data.fusion?.conversationScope === 'review') return { suppress: true };
     if (event.agentId) {
+      if (this.inFusionTurn && (event.type === 'assistant.message' || event.type === 'assistant.message_delta'
+          || event.type === 'assistant.message_start')) {
+        if (event.type === 'assistant.message' && event.data.content) this.withheldContent = true;
+        return { suppress: true };
+      }
       return { suppress: event.type === 'session.idle' || event.type === 'session.error'
         || event.type === 'assistant.turn_start' || event.type === 'assistant.turn_end' };
     }
@@ -144,7 +149,7 @@ export class FusionEventTracker {
     let notice: FusionModelNotice | undefined;
     if (event.type === 'session.auto_mode_resolved') {
       notice = { model: event.data.chosenModel };
-    } else if (event.type === 'session.model_change' && event.data.cause
+    } else if (event.type === 'session.model_change' && !suppressFallbackNotice && event.data.cause
         && (event.data.previousModel === 'auto' || this.inFusionTurn) && !isFusionModel(event.data.newModel)) {
       notice = { model: event.data.newModel, fallback: true };
     } else if (event.type === 'session.fusion_route_started' || event.type === 'session.fusion_resolved') {

@@ -93,6 +93,15 @@ describe('Fusion events', () => {
     expect(tracker.process({ ...base, id: 'draft-delta', type: 'assistant.message_delta', ephemeral: true, data: { messageId: 'm1', deltaContent: 'Draft' } }).suppress).toBe(true);
   });
 
+  it('withholds child assistant messages during Fusion turns', () => {
+    const tracker = new FusionEventTracker();
+    tracker.process(phase);
+    const childMessage = { ...message, id: 'child-message', agentId: 'reviewer' };
+    expect(tracker.process(childMessage).suppress).toBe(true);
+    const childDelta = { ...base, id: 'child-delta', agentId: 'reviewer', type: 'assistant.message_delta', ephemeral: true, data: { messageId: 'm1', deltaContent: 'Draft' } } satisfies SessionEvent;
+    expect(tracker.process(childDelta).suppress).toBe(true);
+  });
+
   it('preserves ordinary Standard streaming and scopes deduplication to selection', () => {
     const tracker = new FusionEventTracker();
     expect(tracker.process({ ...base, id: 'delta', type: 'assistant.message_delta', ephemeral: true, data: { messageId: 'm1', deltaContent: 'Answer' } }).suppress).toBe(false);
