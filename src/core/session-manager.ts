@@ -1295,7 +1295,8 @@ export class SessionManager {
       const prevModel = currentPrefs.model;
       await setChannelPrefs(channelId, { model, provider: newProvider });
       try {
-        await this.newSession(channelId);
+        // Creation may fall back to auto while fixedSelection holds the Fusion lock.
+        await this.newSession(channelId, true);
       } catch (err) {
         log.warn(`Provider switch failed, reverting prefs:`, err);
         try { await setChannelPrefs(channelId, { model: prevModel, provider: currentProvider }); } catch (e) { log.warn('Failed to revert prefs after provider switch failure:', e); }
@@ -1307,7 +1308,7 @@ export class SessionManager {
       const prevModel = currentPrefs.model;
       await setChannelPrefs(channelId, { model, provider: newProvider });
       try {
-        await this.newSession(channelId);
+        await this.newSession(channelId, true);
       } catch (err) {
         log.warn(`wireApi switch failed, reverting prefs:`, err);
         try { await setChannelPrefs(channelId, { model: prevModel, provider: currentProvider }); } catch (e) { log.warn('Failed to revert prefs after wireApi switch failure:', e); }

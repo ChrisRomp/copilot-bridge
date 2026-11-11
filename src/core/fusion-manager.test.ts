@@ -85,6 +85,42 @@ describe('FusionManager', () => {
     expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('no longer available'));
   });
 
+  it('keeps unavailable inherited tiers inherited and deduplicates fallback notices until recovery', async () => {
+    prefs.fusionTier = null;
+    let configured: 'max' | 'high' = 'max';
+    controller = new FusionManager(bridge, async () => ({ ...prefs, fusionTier: prefs.fusionTier ?? configured }), notify);
+    controller.attach('ch', session);
+
+    await controller.prepare('ch');
+    await controller.prepare('ch', true);
+    expect(prefs.fusionTier).toBeNull();
+    expect(bridge.setAutoTier).toHaveBeenCalledExactlyOnceWith('session-1', null);
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    catalog.tiers[2].status.enabled = true;
+    await controller.prepare('ch');
+    expect(bridge.setAutoTier).toHaveBeenLastCalledWith('session-1', 'route-m');
+    configured = 'high';
+    await controller.prepare('ch');
+    expect(bridge.setAutoTier).toHaveBeenLastCalledWith('session-1', 'route-h');
+    catalog.tiers[1].status.enabled = false;
+    await controller.prepare('ch');
+    expect(prefs.fusionTier).toBeNull();
+    expect(notify).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an inherited preference after provider-default fallback activation fails', async () => {
+    prefs.fusionTier = null;
+    controller = new FusionManager(bridge, async () => ({ ...prefs, fusionTier: prefs.fusionTier ?? 'max' }), notify);
+    controller.attach('ch', session);
+    await controller.prepare('ch');
+    state = { modelId: 'auto', autoTier: 'route-s' };
+    controller.process('ch', session, { ...base, id: 'fallback-failed', type: 'session.auto_tier_switch_failed', ephemeral: true,
+      data: { requestedAutoTier: null, effectiveAutoTier: 'route-s', reason: 'request_failed' } });
+    await vi.waitFor(() => expect(prefs.fusionTransition).toBeNull());
+    expect(prefs.fusionTier).toBeNull();
+  });
+
   it('never fabricates availability or falls back to a fixed model when discovery fails', async () => {
     vi.mocked(bridge.getFusionMetadata).mockResolvedValue(undefined);
     await expect(controller.select('ch', 'high')).rejects.toThrow('availability is unavailable');
@@ -132,6 +168,59 @@ describe('FusionManager', () => {
     expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('Keeping the previous tier'));
   });
 
+  it.each(['activation failure', 'lost outcome'])('restores accepted pending intent instead of the effective tier after %s', async outcome => {
+    catalog.tiers[2].status.enabled = true;
+    await controller.select('ch', 'high');
+    await controller.select('ch', 'max');
+    expect(prefs.fusionTransition?.previous).toBe('high');
+    if (outcome === 'activation failure') {
+      state = { modelId: 'auto', autoTier: 'route-s' };
+      controller.process('ch', session, { ...base, id: 'max-failed', type: 'session.auto_tier_switch_failed', ephemeral: true,
+        data: { requestedAutoTier: 'route-m', effectiveAutoTier: 'route-s', reason: 'request_failed' } });
+      await vi.waitFor(() => expect(prefs.fusionTransition).toBeNull());
+    } else {
+      await controller.prepare('ch', true);
+      state = { modelId: 'auto', autoTier: 'route-s' };
+      controller = makeController();
+      await controller.prepare('ch');
+    }
+    expect(prefs.fusionTier).toBe('high');
+  });
+
+  it.each(['activation failure', 'lost outcome'])('restores inheritance after an explicit tier request ends in %s', async outcome => {
+    prefs.fusionTier = null;
+    const makeInheritedController = () => {
+      const manager = new FusionManager(bridge, async () => ({ ...prefs, fusionTier: prefs.fusionTier ?? 'default' }), notify);
+      manager.attach('ch', session);
+      return manager;
+    };
+    controller = makeInheritedController();
+    await controller.select('ch', 'high');
+    if (outcome === 'activation failure') {
+      state = { modelId: 'auto', autoTier: 'route-s' };
+      controller.process('ch', session, { ...base, id: 'high-failed', type: 'session.auto_tier_switch_failed', ephemeral: true,
+        data: { requestedAutoTier: 'route-h', effectiveAutoTier: 'route-s', reason: 'request_failed' } });
+      await vi.waitFor(() => expect(prefs.fusionTransition).toBeNull());
+    } else {
+      await controller.prepare('ch', true);
+      state = { modelId: 'auto', autoTier: 'route-s' };
+      controller = makeInheritedController();
+      await controller.prepare('ch');
+    }
+    expect(prefs.fusionTier).toBeNull();
+    expect((await controller.view('ch')).intent).toBe('default');
+  });
+
+  it('restores previous intent from transitions saved without override provenance by older builds', async () => {
+    await controller.select('ch', 'high');
+    delete prefs.fusionTransition!.previousOverride;
+    state = { modelId: 'auto', autoTier: 'route-s' };
+    controller.process('ch', session, { ...base, id: 'legacy-failed', type: 'session.auto_tier_switch_failed', ephemeral: true,
+      data: { requestedAutoTier: 'route-h', effectiveAutoTier: 'route-s', reason: 'request_failed' } });
+    await vi.waitFor(() => expect(prefs.fusionTransition).toBeNull());
+    expect(prefs.fusionTier).toBe('standard');
+  });
+
   it('treats default as an explicit reset on an existing named tier', async () => {
     state = { modelId: 'auto', autoTier: 'route-h' };
     await controller.select('ch', 'default');
@@ -167,6 +256,7 @@ describe('FusionManager', () => {
       ...prefs,
       fusionTransition: prefs.fusionTransition ? {
         attempted: prefs.fusionTransition.attempted, previous: prefs.fusionTransition.previous,
+        previousOverride: prefs.fusionTransition.previousOverride,
         requested: prefs.fusionTransition.requested, sessionId: prefs.fusionTransition.sessionId,
         id: prefs.fusionTransition.id,
       } : null,
@@ -204,6 +294,22 @@ describe('FusionManager', () => {
     await controller.prepare('ch', true);
     expect(setChannelPrefs).not.toHaveBeenCalled();
     expect(prefs.model).toBeUndefined();
+  });
+
+  it.each([undefined, 'high'] as const)('persists an explicit Fusion model selection with tier %s even when already inherited', async tier => {
+    prefs = { fusionTier: null };
+    let configuredModel = 'auto';
+    const effectivePrefs = async () => ({ ...prefs, model: prefs.model ?? configuredModel, fusionTier: prefs.fusionTier ?? 'standard' as const });
+    controller = new FusionManager(bridge, effectivePrefs, notify);
+    controller.attach('ch', session);
+    await controller.select('ch', tier);
+    expect(prefs).toMatchObject({ model: 'auto', provider: null });
+    expect(prefs.fusionTier).toBe(tier ?? null);
+    configuredModel = 'fixed-model';
+    controller = new FusionManager(bridge, effectivePrefs, notify);
+    controller.attach('ch', session);
+    await controller.prepare('ch');
+    expect((await effectivePrefs()).model).toBe('auto');
   });
 
   it('lists Copilot tier availability independently of the current BYOK provider', async () => {

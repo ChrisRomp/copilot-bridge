@@ -99,6 +99,15 @@ describe('SqliteStateStore', () => {
       expect((await store.getChannelPrefs('ch-fusion'))?.fusionTier).toBeNull();
     });
 
+    it.each([null, 'high'] as const)('round-trips the prior Fusion tier override %s separately from accepted intent', async previousOverride => {
+      const transition = {
+        id: 'request-1', sessionId: 'session-1', requested: 'max' as const,
+        previous: 'high' as const, previousOverride, attempted: true,
+      };
+      await store.setChannelPrefs('ch-fusion', { fusionTier: 'max', fusionTransition: transition });
+      expect((await store.getChannelPrefs('ch-fusion'))?.fusionTransition).toEqual(transition);
+    });
+
     it('migrates existing preference rows without losing fixed-model choices', async () => {
       await store.setChannelPrefs('existing', { model: 'fixed-model', reasoningEffort: 'high' });
       await store.close();

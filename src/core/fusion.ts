@@ -41,7 +41,14 @@ export function parseFusionTransition(raw: string | null | undefined): FusionTra
       || !('attempted' in value) || typeof value.attempted !== 'boolean') {
     throw new Error('Invalid stored Fusion transition');
   }
-  return { id: value.id, sessionId: value.sessionId, requested: value.requested, previous: value.previous, attempted: value.attempted };
+  const transition: FusionTransition = {
+    id: value.id, sessionId: value.sessionId, requested: value.requested, previous: value.previous, attempted: value.attempted,
+  };
+  if ('previousOverride' in value) {
+    if (value.previousOverride !== null && !isFusionPreference(value.previousOverride)) throw new Error('Invalid stored Fusion transition');
+    transition.previousOverride = value.previousOverride;
+  }
+  return transition;
 }
 
 export function fusionTierLabel(value: string): string {

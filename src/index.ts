@@ -1,8 +1,9 @@
 import { loadConfig, getConfig, isConfiguredChannel, registerDynamicChannel, markChannelAsDM, getChannelConfig, getPlatformBots, getPlatformAccess, getChannelBotName, isBotAdmin, getHardcodedRules, getConfigRules, reloadConfig, ConfigWatcher } from './config.js';
 import { CopilotBridge } from './core/bridge.js';
 import { SessionManager, BRIDGE_CUSTOM_TOOLS, parseEnvFile } from './core/session-manager.js';
-import { formatContextTierLabel, formatRoutedModel, handleCommand, parseCommand } from './core/command-handler.js';
+import { formatContextTierLabel, handleCommand, parseCommand } from './core/command-handler.js';
 import { isFusionPreference, fusionTierLabel } from './core/fusion.js';
+import { sendFusionNotice } from './core/fusion-notice.js';
 import { formatEvent, formatPermissionRequest, formatPermissionNotice, formatUserInputRequest } from './core/stream-formatter.js';
 import { ASSISTED_AUTOPILOT_NOTICE } from './core/assisted-permissions.js';
 import { WorkspaceWatcher, initWorkspace, getWorkspacePath } from './core/workspace-manager.js';
@@ -2211,24 +2212,11 @@ async function handleSessionEvent(
   const verbose = prefs?.verbose ?? channelConfig.verbose;
 
   if (event.type === 'bridge.fusion_notice' || event.type === 'bridge.fusion_model') {
-    if (!sessionManager.isCurrentPermissionAttachment(channelId, event.data.attachmentGeneration)) return;
-    if (!isQuiet(channelId) && !sessionManager.isUnattendedExecution(channelId)) {
+    await sendFusionNotice(channelId, event, sessionManager, adapter, () => {
       const streamKey = activeStreams.get(channelId);
-      const threadRootId = (streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined)
+      return (streamKey ? streaming.getStreamThreadRootId(streamKey) : undefined)
         ?? channelThreadRoots.get(channelId);
-      let content = event.data.content;
-      if (event.type === 'bridge.fusion_model') {
-        let models: Awaited<ReturnType<SessionManager['listModels']>> = [];
-        try { models = await sessionManager.listModels(); }
-        catch (error) { log.warn('Cannot resolve routed model display metadata:', error); }
-        const model = await formatRoutedModel(event.data.model, models);
-        const role = ['judge', 'critic', 'reviewer'].includes(event.data.role) ? ' for review'
-          : ['repair', 'revision'].includes(event.data.role) ? ' for revision' : '';
-        content = event.data.fallback ? `Fusion routing fell back to **${model}**.`
-          : `Fusion is using **${model}**${role}.`;
-      }
-      await adapter.sendMessage(channelId, content, { threadRootId });
-    }
+    });
     return;
   }
 

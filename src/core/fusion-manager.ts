@@ -4,13 +4,20 @@ import type { FusionPreference, FusionTransition } from '../types.js';
 import { getChannelPrefs, setChannelPrefs, type ChannelPrefs } from '../state/store.js';
 import type { CopilotBridge } from './bridge.js';
 import {
-  FusionEventTracker, FusionSelectionError, fusionStateMatches, fusionPreferenceForId,
+  FusionEventTracker, FusionSelectionError, fusionStateMatches,
   resolveFusionTier, isFusionModel, type FusionView, type FusionSelectionResult,
 } from './fusion.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('fusion');
-type Binding = { session: CopilotSession; tracker: FusionEventTracker; state?: FusionView['state']; metadata?: FusionView['metadata']; suspended?: boolean };
+type Binding = {
+  session: CopilotSession;
+  tracker: FusionEventTracker;
+  state?: FusionView['state'];
+  metadata?: FusionView['metadata'];
+  suspended?: boolean;
+  fallbackFrom?: FusionPreference;
+};
 
 export class FusionManager {
   private readonly bindings = new Map<string, Binding>();
@@ -54,7 +61,7 @@ export class FusionManager {
     const expected = change.fusionTransition;
     const actual = saved?.fusionTransition;
     const transitionMatches = expected == null || actual == null ? (expected ?? null) === (actual ?? null)
-      : (['id', 'sessionId', 'requested', 'previous', 'attempted'] as const).every(key => expected[key] === actual[key]);
+      : (['id', 'sessionId', 'requested', 'previous', 'previousOverride', 'attempted'] as const).every(key => expected[key] === actual[key]);
     if ((Object.hasOwn(change, 'fusionTier') && (saved?.fusionTier ?? null) !== (change.fusionTier ?? null))
         || (Object.hasOwn(change, 'fusionTransition') && !transitionMatches)) {
       throw new FusionSelectionError('The state backend did not persist the Fusion preference. Update its ChannelPrefs support.');
@@ -77,7 +84,7 @@ export class FusionManager {
   }
 
   async select(channelId: string, preference?: FusionPreference): Promise<FusionSelectionResult> {
-    return this.serialized(channelId, () => this.apply(channelId, preference, preference !== undefined));
+    return this.serialized(channelId, () => this.apply(channelId, preference, true));
   }
 
   async prepare(channelId: string, markAttempt = false): Promise<void> {
@@ -103,7 +110,11 @@ export class FusionManager {
       if (binding) binding.suspended = true;
       try {
         const result = await operation();
-        this.bindings.get(channelId)?.tracker.resetSelection();
+        const current = this.bindings.get(channelId);
+        if (current) {
+          current.tracker.resetSelection();
+          current.fallbackFrom = undefined;
+        }
         return result;
       } finally {
         if (binding) binding.suspended = false;
@@ -111,16 +122,17 @@ export class FusionManager {
     });
   }
 
-  private async apply(channelId: string, requested: FusionPreference | undefined, explicit: boolean): Promise<FusionSelectionResult> {
+  private async apply(channelId: string, requested: FusionPreference | undefined, commandSelection: boolean): Promise<FusionSelectionResult> {
     const binding = this.bindings.get(channelId);
     if (!binding) throw new FusionSelectionError('No attached session is available for Fusion.');
     const id = binding.session.sessionId;
     const prefs = await this.preferences(channelId);
-    const previousIntent = prefs.fusionTier ?? 'default';
+    let previousIntent = prefs.fusionTier ?? 'default';
     const originalPrefs = await getChannelPrefs(channelId);
     let storedTier = originalPrefs?.fusionTier ?? null;
     let preference = requested ?? previousIntent;
     let fallbackFrom: FusionPreference | undefined;
+    const explicit = requested !== undefined;
     let updateIntent = explicit;
     let originalState: FusionView['state'];
     let mutationStarted = false;
@@ -136,7 +148,7 @@ export class FusionManager {
       } catch (error) {
         if (explicit || preference === 'default' || !binding.metadata) throw error;
         fallbackFrom = preference;
-        updateIntent = true;
+        updateIntent = storedTier != null;
         preference = 'default';
         nativeTier = resolveFusionTier(binding.metadata, preference);
       }
@@ -148,10 +160,13 @@ export class FusionManager {
         // A restarted attempted activation with no surviving outcome is
         // ambiguous. Restore its previous intent rather than retrying it.
         preference = transition.previous;
-        updateIntent = true;
+        const previousOverride = transition.previousOverride !== undefined ? transition.previousOverride : transition.previous;
+        updateIntent = false;
         nativeTier = resolveFusionTier(binding.metadata, preference);
-        await this.persist(channelId, binding, { fusionTier: preference, fusionTransition: null });
-        storedTier = preference;
+        persistenceStarted = true;
+        await this.persist(channelId, binding, { fusionTier: previousOverride, fusionTransition: null });
+        storedTier = previousOverride;
+        previousIntent = preference;
         this.notify(id, channelId, 'The previous Fusion tier change did not have a confirmed outcome. Restoring the previous preference.');
         transition = null;
       }
@@ -161,7 +176,6 @@ export class FusionManager {
       const alreadyPending = (Object.hasOwn(current, 'pendingAutoTier') && current.pendingAutoTier === nativeTier)
         || (Object.hasOwn(current, 'activatingAutoTier') && current.activatingAutoTier === nativeTier);
       const unchanged = sameSelection && fusionStateMatches(current, nativeTier);
-      const previousTier = fusionPreferenceForId(binding.metadata, current.autoTier) ?? previousIntent;
       if (!unchanged && !(sameSelection && alreadyPending)) {
         mutationStarted = true;
         if (sameSelection) await this.bridge.setAutoTier(id, nativeTier);
@@ -174,22 +188,23 @@ export class FusionManager {
       const applied = fusionStateMatches(binding.state, nativeTier);
       const nextTransition: FusionTransition | null = applied ? null
         : transition?.requested === preference && transition.sessionId === id ? transition
-          : { id: randomUUID(), sessionId: id, requested: preference, previous: previousTier, attempted: false };
+          : { id: randomUUID(), sessionId: id, requested: preference, previous: previousIntent, previousOverride: storedTier, attempted: false };
       const change: Partial<ChannelPrefs> = {};
       // Only write what changed: per-send preparation must not churn state or
       // turn an inherited Fusion model/tier into a channel override.
-      const selected = originalPrefs?.model != null ? isFusionModel(originalPrefs.model, originalPrefs.provider)
-        : isFusionModel(prefs.model, prefs.provider);
-      if (!selected) Object.assign(change, { model: 'auto', provider: null });
+      if (commandSelection && (originalPrefs?.model !== 'auto' || originalPrefs?.provider != null)) {
+        Object.assign(change, { model: 'auto', provider: null });
+      }
       if ((transition ?? null) !== nextTransition) change.fusionTransition = nextTransition;
       if ((updateIntent || storedTier != null) && storedTier !== preference) change.fusionTier = preference;
       if (Object.keys(change).length > 0) {
         persistenceStarted = true;
         await this.persist(channelId, binding, change);
       }
-      if (fallbackFrom) {
+      if (fallbackFrom && binding.fallbackFrom !== fallbackFrom) {
         this.notify(id, channelId, `Fusion ${fallbackFrom} is no longer available. ${applied ? 'Using' : 'Requested'} provider-default routing${applied ? '.' : '; activation is pending.'}`);
       }
+      binding.fallbackFrom = fallbackFrom;
       return { status: applied ? unchanged ? 'unchanged' : 'applied' : 'pending', preference, fallbackFrom };
     } catch (error) {
       if ((mutationStarted || persistenceStarted) && this.bindings.get(channelId) === binding && originalState) {
@@ -252,7 +267,7 @@ export class FusionManager {
           this.notify(session.sessionId, channelId, `Fusion ${transition.requested === 'default' ? 'provider-default routing' : transition.requested + ' tier'} is now active.`);
         } else if (event.type === 'session.auto_tier_switch_failed' && event.data.requestedAutoTier === nativeTier
             && !Object.hasOwn(binding.state, 'pendingAutoTier') && !Object.hasOwn(binding.state, 'activatingAutoTier')) {
-          const previousTier = fusionPreferenceForId(binding.metadata, event.data.effectiveAutoTier) ?? transition.previous;
+          const previousTier = transition.previousOverride !== undefined ? transition.previousOverride : transition.previous;
           await this.persist(channelId, binding, { fusionTier: previousTier, fusionTransition: null });
           this.notify(session.sessionId, channelId, `Fusion tier change failed (${event.data.reason}). Keeping the previous tier.`);
         }

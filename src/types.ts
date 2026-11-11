@@ -47,6 +47,8 @@ export interface FusionTransition {
   sessionId: string;
   requested: FusionPreference;
   previous: FusionPreference;
+  // Null restores config inheritance; omitted on transitions saved by older builds.
+  previousOverride?: FusionPreference | null;
   attempted: boolean;
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionEvent } from '@github/copilot-sdk';
-import { FusionEventTracker, FusionSelectionError, fusionModelLabel, fusionPendingLabel, isFusionModel, resolveFusionTier, type FusionMetadata } from './fusion.js';
+import { FusionEventTracker, FusionSelectionError, fusionModelLabel, fusionPendingLabel, isFusionModel, parseFusionTransition, resolveFusionTier, type FusionMetadata } from './fusion.js';
 
 const metadata: FusionMetadata = {
   defaultTier: 'route-h',
@@ -13,6 +13,13 @@ const metadata: FusionMetadata = {
 };
 
 describe('Fusion routing preferences', () => {
+  it('rejects invalid prior overrides rather than silently losing rollback intent', () => {
+    expect(() => parseFusionTransition(JSON.stringify({
+      id: 'transition-1', sessionId: 'session-1', requested: 'high', previous: 'standard',
+      previousOverride: 'not-a-tier', attempted: false,
+    }))).toThrow('Invalid stored Fusion transition');
+  });
+
   it('resolves public tiers from live mappings rather than legacy routing IDs', () => {
     expect(resolveFusionTier(metadata, 'high')).toBe('route-h');
     expect(resolveFusionTier(metadata, 'standard')).toBe('route-s');

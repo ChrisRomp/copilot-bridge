@@ -26,8 +26,15 @@ const basePrefs = {
   permissionMode: 'interactive', reasoningEffort: null, contextTier: 'default' as const,
 };
 
-function settleWithin<T>(promise: Promise<T>, ms = 1000): Promise<T> {
-  return Promise.race([promise, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('operation did not settle')), ms))]);
+async function settleWithin<T>(promise: Promise<T>, ms = 1000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([promise, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('operation did not settle')), ms);
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 describe('SessionManager Fusion model switching', () => {
@@ -72,6 +79,21 @@ describe('SessionManager Fusion model switching', () => {
     await manager.switchModel('ch', 'fixed-model');
 
     expect(setChannelPrefs).toHaveBeenCalledWith('ch', { fusionTransition: null });
+  });
+
+  it('does not deadlock when a provider switch falls back to auto during session creation', async () => {
+    const effective = vi.spyOn(manager, 'getEffectivePrefs').mockResolvedValue({
+      ...basePrefs, model: 'local-model', provider: 'local',
+    });
+    vi.spyOn(manager, 'newSession').mockImplementation(async (channelId, deferFusion = false) => {
+      // A configured creation fallback can replace the requested fixed model with auto.
+      effective.mockResolvedValue({ ...basePrefs });
+      if (!deferFusion) await manager['fusion'].prepare(channelId);
+      return 'copilot-1';
+    });
+
+    await expect(settleWithin(manager.switchModel('ch', 'fixed-model'))).resolves.toBeUndefined();
+    expect(manager.newSession).toHaveBeenCalledWith('ch', true);
   });
 
   it('does not leave a Copilot session attached to a BYOK channel when Fusion selection fails', async () => {
