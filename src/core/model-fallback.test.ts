@@ -8,13 +8,23 @@ describe('Fusion error boundaries', () => {
     new Error('Auto tier is unavailable for this account'),
     new Error('Fusion tier is not supported by model policy'),
   ])('does not mistake a tier-policy failure for a fixed-model fallback request', async error => {
-    expect(isModelError(error)).toBe(false);
+    expect(isModelError(error, true)).toBe(false);
     const attempts: string[] = [];
     await expect(tryWithFallback('auto', ['auto', 'fixed-model'], ['fixed-model'], async model => {
       attempts.push(model);
       throw error;
     })).rejects.toBe(error);
     expect(attempts).toEqual(['auto']);
+  });
+
+  it('keeps fallback for fixed-model capacity errors that mention a tier', async () => {
+    const error = Object.assign(new Error('Service tier unavailable, retry later'), { status: 503 });
+    expect(isModelError(error)).toBe(true);
+    const result = await tryWithFallback('fixed-a', ['fixed-a', 'fixed-b'], ['fixed-b'], async model => {
+      if (model === 'fixed-a') throw error;
+      return model;
+    });
+    expect(result).toMatchObject({ usedModel: 'fixed-b', didFallback: true });
   });
 
   it('still recognizes genuine rate limits for the configured inference fallback', () => {

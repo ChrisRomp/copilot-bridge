@@ -1,5 +1,5 @@
 import { createLogger } from '../logger.js';
-import { isFusionPolicyFailure } from './fusion.js';
+import { FusionSelectionError, isFusionModel, isFusionPolicyFailure } from './fusion.js';
 
 const log = createLogger('model-fallback');
 
@@ -243,10 +243,12 @@ const MODEL_ERROR_CODES = new Set([429, 503]);
 /**
  * Detect whether an error is model-specific (capacity, not found, rate limit)
  * rather than a general infrastructure or auth error.
+ * Tier/policy failures are excluded only for Fusion so generic fixed-model
+ * capacity text that happens to mention a "tier" still gets fallback.
  */
-export function isModelError(error: any): boolean {
+export function isModelError(error: any, fusion = false): boolean {
   if (!error) return false;
-  if (isFusionPolicyFailure(error)) return false;
+  if (error instanceof FusionSelectionError || (fusion && isFusionPolicyFailure(error))) return false;
 
   // Check HTTP status codes
   const status = error.status ?? error.statusCode;
@@ -326,7 +328,7 @@ export async function tryWithFallback<T>(
     const result = await action(primaryModel);
     return { result, usedModel: primaryModel, didFallback: false };
   } catch (err: any) {
-    if (!isModelError(err)) {
+    if (!isModelError(err, isFusionModel(primaryModel))) {
       throw err; // Not a model error — don't try fallbacks
     }
     log.warn(`Model "${primaryModel}" failed: ${err.message ?? err}. Trying fallbacks...`);

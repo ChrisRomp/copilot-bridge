@@ -881,7 +881,12 @@ export class SessionManager {
   /** Create a brand new session for a channel (used by /new command). */
   async newSession(channelId: string, deferFusion = false): Promise<string> {
     this.advancePermissionAttachment(channelId);
-    // Clean up existing session
+    await this.releaseChannelSession(channelId);
+    return this.createNewSession(channelId, deferFusion);
+  }
+
+  /** Detach, destroy and forget the channel's current session without creating a replacement. */
+  private async releaseChannelSession(channelId: string): Promise<void> {
     const existingId = this.channelSessions.get(channelId);
     if (existingId) {
       const unsub = this.sessionUnsubscribes.get(existingId);
@@ -904,7 +909,6 @@ export class SessionManager {
       if (debounceTimer) { clearTimeout(debounceTimer); this.planChangedDebounce.delete(channelId); }
     }
     await clearChannelSession(channelId);
-    return this.createNewSession(channelId, deferFusion);
   }
 
   /** Reload the current session — detach and re-attach to pick up AGENTS.md / config changes. */
@@ -1164,8 +1168,8 @@ export class SessionManager {
    * If re-attach confirms the session is missing, creates a new session and retries once more
    * (unless createOnFail is false, in which case the error propagates).
    */
-  private async withSessionRetry<T>(channelId: string, fn: (sessionId: string) => Promise<T>, createOnFail = true): Promise<T> {
-    const { sessionId } = await this.ensureSession(channelId);
+  private async withSessionRetry<T>(channelId: string, fn: (sessionId: string) => Promise<T>, createOnFail = true, deferFusion = false): Promise<T> {
+    const { sessionId } = await this.ensureSession(channelId, deferFusion);
     try {
       return await fn(sessionId);
     } catch (err: any) {
@@ -1176,7 +1180,7 @@ export class SessionManager {
         const unsub = this.sessionUnsubscribes.get(sessionId);
         if (unsub) { unsub(); this.sessionUnsubscribes.delete(sessionId); }
         await this.safeDestroySession(sessionId);
-        await this.attachSession(channelId, sessionId);
+        await this.attachSession(channelId, sessionId, deferFusion);
       } catch (attachErr: any) {
         log.warn(`Re-attach failed for ${sessionId}:`, attachErr?.message ?? attachErr);
         if (!isSessionNotFoundError(attachErr)) throw attachErr;
@@ -1189,7 +1193,7 @@ export class SessionManager {
         }
         // Last resort: new session
         log.info(`Creating new session for channel ${channelId} after RPC failure...`);
-        const newSessionId = await this.newSession(channelId);
+        const newSessionId = await this.newSession(channelId, deferFusion);
         return await fn(newSessionId);
       }
       // Re-attach succeeded — retry fn; let non-session errors propagate
@@ -1310,9 +1314,6 @@ export class SessionManager {
         throw err;
       }
     } else {
-      // Attach without applying a blocked saved Fusion intent so switching
-      // to a fixed model remains a recovery path.
-      if (isFusionModel(currentPrefs.model, currentProvider)) await this.ensureSession(channelId, true);
       // Same provider — use RPC model switch (with session retry)
       let reasoningEffort = currentPrefs.reasoningEffort;
       if (reasoningEffort) {
@@ -1329,12 +1330,15 @@ export class SessionManager {
           log.debug('listModels for reasoning-effort switch validation failed:', err);
         }
       }
+      // This runs inside FusionManager.fixedSelection, which holds the
+      // channel's Fusion lock. Deferring Fusion on retry/re-attach avoids
+      // re-entering that lock and keeps fixed-model selection a recovery path
+      // from a blocked saved Fusion tier.
       await this.withSessionRetry(channelId, (sid) =>
         this.bridge.switchSessionModel(sid, model, {
           reasoningEffort,
           contextTier: newProvider ? null : currentPrefs.contextTier,
-        })
-      );
+        }), true, true);
       try { await setChannelPrefs(channelId, {
         model,
         provider: newProvider,
@@ -1342,6 +1346,12 @@ export class SessionManager {
       }); }
       catch (e) { log.warn('Model switched but failed to persist preference:', e); }
     }
+
+    // A pending Fusion transition belongs to the Fusion selection being left.
+    // Keeping it would make a later /fusion misreport an unconfirmed change.
+    try {
+      if ((await getChannelPrefs(channelId))?.fusionTransition) await setChannelPrefs(channelId, { fusionTransition: null });
+    } catch (e) { log.warn('Failed to clear Fusion transition after fixed-model switch:', e); }
 
     // Clear stale context window tokens so /context falls back to tokenLimit during transition
     this.contextWindowTokens.delete(channelId);
@@ -1368,12 +1378,20 @@ export class SessionManager {
       resolveFusionTier(metadata, preference);
     }
     if (prefs.provider) {
+      // Like any BYOK → Copilot model switch, this needs a fresh session.
+      // On failure, drop the new Copilot session too so the restored BYOK
+      // preference cannot keep using it.
       await setChannelPrefs(channelId, { model: 'auto', provider: null });
       try {
         await this.newSession(channelId, true);
         return await this.fusion.select(channelId, preference);
       } catch (error) {
-        await setChannelPrefs(channelId, { model: prefs.model, provider: prefs.provider });
+        log.warn('Provider switch to Fusion failed, reverting prefs:', error);
+        this.advancePermissionAttachment(channelId);
+        try { await this.releaseChannelSession(channelId); }
+        catch (e) { log.warn('Failed to release Copilot session after Fusion switch failure:', e); }
+        try { await setChannelPrefs(channelId, { model: prefs.model, provider: prefs.provider }); }
+        catch (e) { log.warn('Failed to revert prefs after Fusion switch failure:', e); }
         throw error;
       }
     }

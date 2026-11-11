@@ -182,6 +182,30 @@ describe('FusionManager', () => {
     expect(prefs).toMatchObject({ model: 'auto', fusionTier: 'high', reasoningEffort: 'high', contextTier: 'long_context' });
   });
 
+  it('restores a fixed model directly when entering Fusion fails', async () => {
+    prefs = { model: 'fixed', fusionTier: 'standard' };
+    state = { modelId: 'fixed' };
+    vi.mocked(bridge.setAutoTier).mockRejectedValue(new Error('Auto tier requires the auto model'));
+    vi.mocked(bridge.switchSessionModel).mockImplementation(async (_id, model) => {
+      if (model === 'auto') throw new Error('transient switch failure');
+      state = { modelId: model };
+    });
+    const destroy = vi.spyOn(bridge, 'destroySession').mockResolvedValue(undefined);
+    await expect(controller.select('ch', 'high')).rejects.toThrow('not applied: transient switch failure');
+    expect(bridge.switchSessionModel).toHaveBeenLastCalledWith('session-1', 'fixed');
+    expect(destroy).not.toHaveBeenCalled();
+    expect(prefs).toMatchObject({ model: 'fixed', fusionTier: 'standard' });
+  });
+
+  it('does not rewrite unchanged state or persist an inherited Fusion model before each send', async () => {
+    prefs = { fusionTier: null };
+    controller = new FusionManager(bridge, async () => ({ ...prefs, model: 'auto', fusionTier: 'standard' }), notify);
+    controller.attach('ch', session);
+    await controller.prepare('ch', true);
+    expect(setChannelPrefs).not.toHaveBeenCalled();
+    expect(prefs.model).toBeUndefined();
+  });
+
   it('lists Copilot tier availability independently of the current BYOK provider', async () => {
     prefs.provider = 'external';
     await controller.view('ch');

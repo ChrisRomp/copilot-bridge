@@ -211,7 +211,7 @@ Fallback values for any setting not specified per-channel:
 
 ## Copilot Fusion
 
-Use `/fusion [standard|high|max|default]`, `/model fusion [tier]`, or `/model auto [tier]`. All select the same Copilot routing mode; bare commands reuse the saved tier. `/auto` remains the alias for `/autopilot`, not model selection. Provider-qualified BYOK model names are unaffected.
+Use `/fusion [standard|high|max|default]`, `/model fusion [tier]`, or `/model auto [tier]`. All select the same Copilot routing mode; bare commands reuse the saved tier. `/auto` remains the alias for `/autopilot`, not model selection. Provider-qualified BYOK model names are unaffected. Fusion routes only among Copilot models. Selecting it from a BYOK model starts a new Copilot session, as with any provider switch, and the BYOK model stays selected if Fusion selection fails.
 
 Set `"model": "auto"` (or `"fusion"`) and optionally `"fusionTier": "high"` in `defaults` or a channel entry. A saved channel choice overrides configuration. An absent/null saved tier inherits configuration; explicit `"default"` uses the provider's default, which is not necessarily Standard.
 

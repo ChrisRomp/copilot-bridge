@@ -69,8 +69,6 @@ export class FusionManager {
       if (!binding) return { metadata, intent: prefs.fusionTier ?? 'default' };
       const state = await this.bridge.getSessionModel(binding.session.sessionId);
       this.assertCurrent(channelId, binding);
-      binding.metadata = metadata;
-      binding.state = state;
       return { metadata, state, intent: prefs.fusionTier ?? 'default', actualModel: binding.tracker.actualModel, role: binding.tracker.role };
     } catch (error) {
       log.warn(`Fusion status unavailable for ${channelId}:`, error);
@@ -120,6 +118,7 @@ export class FusionManager {
     const prefs = await this.preferences(channelId);
     const previousIntent = prefs.fusionTier ?? 'default';
     const originalPrefs = await getChannelPrefs(channelId);
+    let storedTier = originalPrefs?.fusionTier ?? null;
     let preference = requested ?? previousIntent;
     let fallbackFrom: FusionPreference | undefined;
     let updateIntent = explicit;
@@ -152,6 +151,7 @@ export class FusionManager {
         updateIntent = true;
         nativeTier = resolveFusionTier(binding.metadata, preference);
         await this.persist(channelId, binding, { fusionTier: preference, fusionTransition: null });
+        storedTier = preference;
         this.notify(id, channelId, 'The previous Fusion tier change did not have a confirmed outcome. Restoring the previous preference.');
         transition = null;
       }
@@ -175,11 +175,18 @@ export class FusionManager {
       const nextTransition: FusionTransition | null = applied ? null
         : transition?.requested === preference && transition.sessionId === id ? transition
           : { id: randomUUID(), sessionId: id, requested: preference, previous: previousTier, attempted: false };
-      persistenceStarted = true;
-      await this.persist(channelId, binding, {
-        model: 'auto', provider: null, fusionTransition: nextTransition,
-        ...((updateIntent || originalPrefs?.fusionTier != null) ? { fusionTier: preference } : {}),
-      });
+      const change: Partial<ChannelPrefs> = {};
+      // Only write what changed: per-send preparation must not churn state or
+      // turn an inherited Fusion model/tier into a channel override.
+      const selected = originalPrefs?.model != null ? isFusionModel(originalPrefs.model, originalPrefs.provider)
+        : isFusionModel(prefs.model, prefs.provider);
+      if (!selected) Object.assign(change, { model: 'auto', provider: null });
+      if ((transition ?? null) !== nextTransition) change.fusionTransition = nextTransition;
+      if ((updateIntent || storedTier != null) && storedTier !== preference) change.fusionTier = preference;
+      if (Object.keys(change).length > 0) {
+        persistenceStarted = true;
+        await this.persist(channelId, binding, change);
+      }
       if (fallbackFrom) {
         this.notify(id, channelId, `Fusion ${fallbackFrom} is no longer available. ${applied ? 'Using' : 'Requested'} provider-default routing${applied ? '.' : '; activation is pending.'}`);
       }
@@ -188,11 +195,14 @@ export class FusionManager {
       if ((mutationStarted || persistenceStarted) && this.bindings.get(channelId) === binding && originalState) {
         try {
           if (mutationStarted) {
-            const restoreTier = Object.hasOwn(originalState, 'pendingAutoTier')
-              ? originalState.pendingAutoTier ?? null : originalState.autoTier ?? null;
-            if (originalState.modelId === 'auto') await this.bridge.switchSessionModel(id, 'auto', { autoTier: restoreTier });
-            else {
-              await this.bridge.setAutoTier(id, restoreTier);
+            if (originalState.modelId === 'auto') {
+              const restoreTier = Object.hasOwn(originalState, 'pendingAutoTier')
+                ? originalState.pendingAutoTier ?? null : originalState.autoTier ?? null;
+              await this.bridge.switchSessionModel(id, 'auto', { autoTier: restoreTier });
+            } else {
+              // Restore the fixed model directly. Re-entering Fusion always
+              // passes an explicit tier, so restaging one here is unnecessary
+              // and could fail if the forward switch never left the fixed model.
               await this.bridge.switchSessionModel(id, originalState.modelId ?? prefs.model ?? 'auto');
             }
           }
