@@ -4,6 +4,8 @@ import { CopilotBridge } from './bridge.js';
 import { SessionManager } from './session-manager.js';
 import { setChannelPrefs } from '../state/store.js';
 import { FusionSelectionError } from './fusion.js';
+import { getConfig } from '../config.js';
+import { tryWithFallback } from './model-fallback.js';
 
 vi.mock('./bridge.js', () => ({
   CopilotBridge: class {
@@ -68,6 +70,7 @@ describe('SessionManager message provenance', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    vi.mocked(setChannelPrefs).mockResolvedValue(undefined);
     bridge = new CopilotBridge();
     manager = new SessionManager(bridge);
     original = fakeSession('original');
@@ -163,6 +166,101 @@ describe('SessionManager message provenance', () => {
       prompt: 'Check build', attachments, source: 'automation-sched-task-123',
     });
     expect(newSession).not.toHaveBeenCalled();
+  });
+
+  it('reattaches a missing Fusion backend before sending, preserving source and history', async () => {
+    const reconnected = fakeSession('original');
+    vi.spyOn(manager['fusion'], 'prepare')
+      .mockRejectedValueOnce(new Error('Session not found for sessionId: original'))
+      .mockResolvedValue(undefined);
+    vi.mocked(bridge.getSession)
+      .mockReturnValueOnce(original.session)
+      .mockReturnValueOnce(reconnected.session);
+    const newSession = vi.spyOn(manager, 'newSession');
+
+    await expect(manager.sendMessage('channel', 'Check build', attachments, undefined, scheduledOptions))
+      .resolves.toBe('message-original');
+    expect(original.send).not.toHaveBeenCalled();
+    expect(manager['attachSession']).toHaveBeenCalledExactlyOnceWith('channel', 'original');
+    expect(reconnected.send).toHaveBeenCalledWith({
+      prompt: 'Check build', attachments, source: 'automation-sched-task-123',
+    });
+    expect(newSession).not.toHaveBeenCalled();
+    expect(setChannelPrefs).not.toHaveBeenCalled();
+  });
+
+  it.each(['prepare', 'send'] as const)('stops send-time fallback after a Fusion %s failure', async failurePoint => {
+    const previousConfig = getConfig();
+    vi.mocked(getConfig).mockReturnValue({
+      ...previousConfig, defaults: { ...previousConfig.defaults, fallbackModels: ['auto', 'fixed-next'] },
+    });
+    try {
+      let model = 'fixed-primary';
+      const effectivePrefs = await manager.getEffectivePrefs('channel');
+      vi.mocked(manager.getEffectivePrefs).mockImplementation(async () => ({ ...effectivePrefs, model }));
+      vi.mocked(setChannelPrefs).mockImplementation(async (_channel, change) => {
+        if (change.model != null) model = change.model;
+      });
+      const fallback = fakeSession('fallback');
+      original.send.mockRejectedValue(new Error('Model is at capacity'));
+      fallback.send.mockImplementation(async () => {
+        if (model === 'auto') throw new Error('Auto tier unavailable by policy');
+        return 'unexpected-fixed-fallback';
+      });
+      vi.mocked(bridge.getSession).mockImplementation(id => id === 'original' ? original.session : fallback.session);
+      vi.spyOn(manager, 'newSession').mockResolvedValue('fallback');
+      vi.spyOn(manager['fusion'], 'prepare').mockImplementation(async () => {
+        if (model === 'auto' && failurePoint === 'prepare') throw new FusionSelectionError('Fusion discovery failed');
+      });
+
+      await expect(manager.sendMessage('channel', 'Question')).rejects.toThrow(/Fusion discovery|Auto tier/);
+      expect(manager.newSession).toHaveBeenCalledTimes(1);
+      expect(setChannelPrefs).not.toHaveBeenCalledWith('channel', { model: 'fixed-next' });
+    } finally {
+      vi.mocked(getConfig).mockReturnValue(previousConfig);
+    }
+  });
+
+  it('does not swallow a Fusion policy failure inside a nested creation fallback', async () => {
+    original.send.mockRejectedValue(new Error('Model is at capacity'));
+    const newSession = vi.spyOn(manager, 'newSession').mockImplementation(async () => {
+      await tryWithFallback('fixed-create', ['fixed-create', 'auto'], ['auto'], async model => {
+        if (model === 'fixed-create') throw new Error('Model is overloaded');
+        throw new Error('Auto tier unavailable by policy');
+      });
+      return 'unexpected';
+    });
+    await expect(manager.sendMessage('channel', 'Question')).rejects.toThrow(FusionSelectionError);
+    expect(newSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps capacity fallback after Auto creation itself falls back to a fixed model', async () => {
+    const previousConfig = getConfig();
+    vi.mocked(getConfig).mockReturnValue({
+      ...previousConfig, defaults: { ...previousConfig.defaults, fallbackModels: ['auto', 'fixed-next'] },
+    });
+    try {
+      let model = 'fixed-primary';
+      const effectivePrefs = await manager.getEffectivePrefs('channel');
+      vi.mocked(manager.getEffectivePrefs).mockImplementation(async () => ({ ...effectivePrefs, model }));
+      vi.mocked(setChannelPrefs).mockImplementation(async (_channel, change) => {
+        if (change.model != null) model = change.model;
+      });
+      const fallback = fakeSession('fallback');
+      original.send.mockRejectedValue(new Error('Model is at capacity'));
+      fallback.send.mockRejectedValueOnce(Object.assign(new Error('Service tier unavailable'), { status: 503 }));
+      vi.mocked(bridge.getSession).mockImplementation(id => id === 'original' ? original.session : fallback.session);
+      vi.spyOn(manager, 'newSession').mockImplementation(async () => {
+        if (model === 'auto') model = 'fixed-nested';
+        return 'fallback';
+      });
+
+      await expect(manager.sendMessage('channel', 'Question')).resolves.toBe('message-fallback');
+      expect(manager.newSession).toHaveBeenCalledTimes(2);
+      expect(setChannelPrefs).toHaveBeenCalledWith('channel', { model: 'fixed-next' });
+    } finally {
+      vi.mocked(getConfig).mockReturnValue(previousConfig);
+    }
   });
 
   it('preserves source when failed reconnect requires a fresh session', async () => {

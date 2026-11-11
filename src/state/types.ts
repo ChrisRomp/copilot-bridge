@@ -12,7 +12,8 @@ import type { FusionPreference, FusionTransition } from '../types.js';
 // ---------------------------------------------------------------------------
 
 export interface ChannelPrefs {
-  model?: string;
+  /** Null clears the model override; omission leaves it unchanged on update. */
+  model?: string | null;
   provider?: string | null;
   agent?: string | null;
   verbose?: boolean;

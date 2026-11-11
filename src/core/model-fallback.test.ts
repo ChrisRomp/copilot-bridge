@@ -27,6 +27,20 @@ describe('Fusion error boundaries', () => {
     expect(result).toMatchObject({ usedModel: 'fixed-b', didFallback: true });
   });
 
+  it.each([
+    new FusionSelectionError('Fusion discovery failed'),
+    new Error('Auto tier unavailable by model policy'),
+  ])('stops a creation fallback chain when Auto encounters %s', async failure => {
+    const attempts: string[] = [];
+    await expect(tryWithFallback('fixed-a', ['fixed-a', 'auto', 'fixed-b'], ['auto', 'fixed-b'], async model => {
+      attempts.push(model);
+      if (model === 'fixed-a') throw new Error('Model is at capacity');
+      if (model === 'auto') throw failure;
+      return model;
+    })).rejects.toThrow(FusionSelectionError);
+    expect(attempts).toEqual(['fixed-a', 'auto']);
+  });
+
   it('still recognizes genuine rate limits for the configured inference fallback', () => {
     expect(isModelError(new Error('Rate limit exceeded'))).toBe(true);
   });

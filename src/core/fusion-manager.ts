@@ -8,6 +8,7 @@ import {
   resolveFusionTier, isFusionModel, type FusionView, type FusionSelectionResult,
 } from './fusion.js';
 import { createLogger } from '../logger.js';
+import { isSessionNotFoundError } from './session-errors.js';
 
 const log = createLogger('fusion');
 type Binding = {
@@ -62,7 +63,9 @@ export class FusionManager {
     const actual = saved?.fusionTransition;
     const transitionMatches = expected == null || actual == null ? (expected ?? null) === (actual ?? null)
       : (['id', 'sessionId', 'requested', 'previous', 'previousOverride', 'attempted'] as const).every(key => expected[key] === actual[key]);
-    if ((Object.hasOwn(change, 'fusionTier') && (saved?.fusionTier ?? null) !== (change.fusionTier ?? null))
+    if ((Object.hasOwn(change, 'model') && (saved?.model ?? null) !== (change.model ?? null))
+        || (Object.hasOwn(change, 'provider') && (saved?.provider ?? null) !== (change.provider ?? null))
+        || (Object.hasOwn(change, 'fusionTier') && (saved?.fusionTier ?? null) !== (change.fusionTier ?? null))
         || (Object.hasOwn(change, 'fusionTransition') && !transitionMatches)) {
       throw new FusionSelectionError('The state backend did not persist the Fusion preference. Update its ChannelPrefs support.');
     }
@@ -142,16 +145,18 @@ export class FusionManager {
       binding.state = await this.bridge.getSessionModel(id);
       originalState = binding.state;
       this.assertCurrent(channelId, binding);
-      let nativeTier: string | null;
-      try {
-        nativeTier = resolveFusionTier(binding.metadata, preference);
-      } catch (error) {
-        if (explicit || preference === 'default' || !binding.metadata) throw error;
-        fallbackFrom = preference;
-        updateIntent = storedTier != null;
-        preference = 'default';
-        nativeTier = resolveFusionTier(binding.metadata, preference);
-      }
+      const resolveAvailableTier = (allowFallback: boolean): string | null => {
+        try {
+          return resolveFusionTier(binding.metadata, preference);
+        } catch (error) {
+          if (!allowFallback || preference === 'default' || !binding.metadata) throw error;
+          fallbackFrom = preference;
+          updateIntent = storedTier != null;
+          preference = 'default';
+          return resolveFusionTier(binding.metadata, preference);
+        }
+      };
+      let nativeTier = resolveAvailableTier(!explicit);
 
       let transition = (await getChannelPrefs(channelId))?.fusionTransition;
       if (!explicit && transition?.requested === preference && transition.sessionId === id && transition.attempted
@@ -160,12 +165,14 @@ export class FusionManager {
         // A restarted attempted activation with no surviving outcome is
         // ambiguous. Restore its previous intent rather than retrying it.
         preference = transition.previous;
-        const previousOverride = transition.previousOverride !== undefined ? transition.previousOverride : transition.previous;
+        storedTier = transition.previousOverride !== undefined ? transition.previousOverride : transition.previous;
         updateIntent = false;
-        nativeTier = resolveFusionTier(binding.metadata, preference);
+        nativeTier = resolveAvailableTier(true);
+        const restoredOverride = updateIntent ? preference : storedTier;
         persistenceStarted = true;
-        await this.persist(channelId, binding, { fusionTier: previousOverride, fusionTransition: null });
-        storedTier = previousOverride;
+        await this.persist(channelId, binding, { fusionTier: restoredOverride, fusionTransition: null });
+        storedTier = restoredOverride;
+        updateIntent = false;
         previousIntent = preference;
         this.notify(id, channelId, 'The previous Fusion tier change did not have a confirmed outcome. Restoring the previous preference.');
         transition = null;
@@ -187,7 +194,8 @@ export class FusionManager {
       }
       const applied = fusionStateMatches(binding.state, nativeTier);
       const nextTransition: FusionTransition | null = applied ? null
-        : transition?.requested === preference && transition.sessionId === id ? transition
+        : transition?.requested === preference
+          ? transition.sessionId === id ? transition : { ...transition, sessionId: id, attempted: false }
           : { id: randomUUID(), sessionId: id, requested: preference, previous: previousIntent, previousOverride: storedTier, attempted: false };
       const change: Partial<ChannelPrefs> = {};
       // Only write what changed: per-send preparation must not churn state or
@@ -207,12 +215,15 @@ export class FusionManager {
       binding.fallbackFrom = fallbackFrom;
       return { status: applied ? unchanged ? 'unchanged' : 'applied' : 'pending', preference, fallbackFrom };
     } catch (error) {
+      if (!mutationStarted && !persistenceStarted && isSessionNotFoundError(error)) throw error;
       if ((mutationStarted || persistenceStarted) && this.bindings.get(channelId) === binding && originalState) {
         try {
           if (mutationStarted) {
             if (originalState.modelId === 'auto') {
               const restoreTier = Object.hasOwn(originalState, 'pendingAutoTier')
-                ? originalState.pendingAutoTier ?? null : originalState.autoTier ?? null;
+                ? originalState.pendingAutoTier ?? null
+                : Object.hasOwn(originalState, 'activatingAutoTier')
+                  ? originalState.activatingAutoTier ?? null : originalState.autoTier ?? null;
               await this.bridge.switchSessionModel(id, 'auto', { autoTier: restoreTier });
             } else {
               // Restore the fixed model directly. Re-entering Fusion always
@@ -222,9 +233,9 @@ export class FusionManager {
             }
           }
           this.assertCurrent(channelId, binding);
-          if (persistenceStarted) await setChannelPrefs(channelId, {
-            model: originalPrefs?.model ?? prefs.model,
-            provider: originalPrefs?.provider ?? prefs.provider,
+          if (persistenceStarted) await this.persist(channelId, binding, {
+            model: originalPrefs?.model ?? null,
+            provider: originalPrefs?.provider ?? null,
             fusionTier: originalPrefs?.fusionTier ?? null,
             fusionTransition: originalPrefs?.fusionTransition ?? null,
           });

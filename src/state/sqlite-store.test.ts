@@ -138,6 +138,16 @@ describe('SqliteStateStore', () => {
       expect(prefs?.verbose).toBe(true);
     });
 
+    it('clears only the model override on null while omitted updates preserve it', async () => {
+      await store.setChannelPrefs('ch-model-clear', { model: 'auto', fusionTier: 'high' });
+      await store.setChannelPrefs('ch-model-clear', { verbose: true });
+      expect((await store.getChannelPrefs('ch-model-clear'))?.model).toBe('auto');
+      await store.setChannelPrefs('ch-model-clear', { model: null });
+      expect(await store.getChannelPrefs('ch-model-clear')).toMatchObject({
+        model: undefined, fusionTier: 'high', verbose: true,
+      });
+    });
+
     it('boolean fields round-trip correctly', async () => {
       await store.setChannelPrefs('ch1', { verbose: false, threadedReplies: true });
       const prefs = await store.getChannelPrefs('ch1');

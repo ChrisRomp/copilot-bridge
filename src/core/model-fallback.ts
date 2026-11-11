@@ -351,6 +351,10 @@ export async function tryWithFallback<T>(
         log.info(`Fallback to "${fallbackModel}" succeeded`);
         return { result, usedModel: fallbackModel, didFallback: true };
       } catch (fallbackErr: any) {
+        if (fallbackErr instanceof FusionSelectionError) throw fallbackErr;
+        if (isFusionModel(fallbackModel) && isFusionPolicyFailure(fallbackErr)) {
+          throw new FusionSelectionError(`Fusion routing could not proceed: ${fallbackErr?.message ?? fallbackErr}`, { cause: fallbackErr });
+        }
         log.warn(`Fallback model "${fallbackModel}" also failed: ${fallbackErr.message ?? fallbackErr}`);
         lastError = fallbackErr;
       }

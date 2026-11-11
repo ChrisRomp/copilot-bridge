@@ -34,6 +34,8 @@ import { formatPermissionPolicyWarnings } from './stream-formatter.js';
 import { SHELL_WRAPPERS } from './permission-patterns.js';
 import { FusionManager } from './fusion-manager.js';
 import { FusionSelectionError, isFusionModel, isFusionPolicyFailure, resolveFusionTier, type FusionView, type FusionSelectionResult } from './fusion.js';
+import { isSessionNotFoundError, PermissionSynchronizationError } from './session-errors.js';
+export { isSessionNotFoundError } from './session-errors.js';
 import { isBridgePermissionMode, type BridgePermissionMode } from '../types.js';
 import type { SystemMessageCustomizeConfig } from '@github/copilot-sdk';
 import type {
@@ -126,20 +128,6 @@ async function withWorkspaceEnv<T>(workingDirectory: string, fn: () => Promise<T
     }
     release!();
   }
-}
-
-class PermissionSynchronizationError extends Error {
-  constructor(sessionId: string, cause: unknown) {
-    super(`Could not synchronize permissions for session ${sessionId}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
-    this.name = 'PermissionSynchronizationError';
-  }
-}
-
-/** Detect "Session not found" errors from the SDK backend. */
-export function isSessionNotFoundError(err: any): boolean {
-  if (err instanceof PermissionSynchronizationError || err instanceof FusionSelectionError) return false;
-  const msg = String(err?.message ?? err).toLowerCase();
-  return msg.includes('session not found') || msg.includes('session_not_found');
 }
 
 /**
@@ -1034,15 +1022,16 @@ export class SessionManager {
     if (!session) throw new Error(`Session ${sessionId} not found after ensure`);
 
     await this.refreshPermissions(channelId);
-    await this.fusion.prepare(channelId, true);
     const sendOpts = { prompt: text, attachments, ...options };
 
     try {
+      await this.fusion.prepare(channelId, true);
       const messageId = await session.send(sendOpts);
       return messageId;
     } catch (err: any) {
       const msg = String(err?.message ?? err);
       log.error(`Send failed for session ${sessionId}:`, msg);
+      if (err instanceof FusionSelectionError) throw err;
       const current = await this.getEffectivePrefs(channelId);
       if (isFusionModel(current.model, current.provider) && isFusionPolicyFailure(err)) {
         throw new FusionSelectionError(`Fusion routing could not proceed: ${msg}`, { cause: err });
@@ -1086,6 +1075,11 @@ export class SessionManager {
             });
             return messageId;
           } catch (fallbackErr: any) {
+            if (fallbackErr instanceof FusionSelectionError) throw fallbackErr;
+            const failedSelection = await this.getEffectivePrefs(channelId);
+            if (isFusionModel(failedSelection.model, failedSelection.provider) && isFusionPolicyFailure(fallbackErr)) {
+              throw new FusionSelectionError(`Fusion routing could not proceed: ${fallbackErr?.message ?? fallbackErr}`, { cause: fallbackErr });
+            }
             log.warn(`Fallback model "${fallbackModel}" also failed on send: ${fallbackErr?.message ?? fallbackErr}`);
             lastError = fallbackErr;
           }
