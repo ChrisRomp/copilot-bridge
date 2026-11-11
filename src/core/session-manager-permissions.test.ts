@@ -388,7 +388,7 @@ describe('SessionManager assisted permissions', () => {
           name: 'PermissionSynchronizationError',
           cause: expect.objectContaining({ message: 'Session not found during configure' }),
         });
-        expect(attach).toHaveBeenCalledWith('channel-1', 'session-1');
+        expect(attach.mock.calls[0].slice(0, 2)).toEqual(['channel-1', 'session-1']);
         expect(bridge.destroySession).toHaveBeenCalledWith('session-1');
         expect(clearChannelSession).not.toHaveBeenCalled();
         expect(create).not.toHaveBeenCalled();
@@ -422,7 +422,7 @@ describe('SessionManager assisted permissions', () => {
         await expect(manager.reloadSession('channel-1')).resolves.toBe('replacement');
       }
       expect(clearChannelSession).toHaveBeenCalledWith('channel-1');
-      expect(manager['createNewSession']).toHaveBeenCalledWith('channel-1');
+      expect(vi.mocked(manager['createNewSession']).mock.calls[0][0]).toBe('channel-1');
     });
 
     it('never persists temporary yolo, including when restoring assisted fails and the process restarts', async () => {

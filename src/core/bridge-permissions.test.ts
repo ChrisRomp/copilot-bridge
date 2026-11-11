@@ -66,6 +66,17 @@ describe('CopilotBridge permission mode initialization', () => {
     expect(session.disconnect).not.toHaveBeenCalled();
   });
 
+  it.each(['create', 'resume'] as const)('%s forwards an opaque Auto tier without hardcoding Fusion mappings', async operation => {
+    const { bridge, client, session, onPermissionRequest } = setup();
+    if (operation === 'create') {
+      await bridge.createSession({ model: 'auto', autoTier: 'provider-route', onPermissionRequest });
+      expect(client.createSession).toHaveBeenCalledWith(expect.objectContaining({ capi: { autoTier: 'provider-route' } }));
+    } else {
+      await bridge.resumeSession(session.sessionId, { autoTier: 'provider-route', onPermissionRequest });
+      expect(client.resumeSession).toHaveBeenCalledWith(session.sessionId, expect.objectContaining({ capi: { autoTier: 'provider-route' } }));
+    }
+  });
+
   it('resume without options still explicitly selects manual', async () => {
     const { bridge, client, session } = setup();
     await bridge.resumeSession(session.sessionId);
@@ -113,6 +124,15 @@ describe('CopilotBridge permission mode initialization', () => {
     expect(await bridge.resumeSession(session.sessionId)).toBe(session);
     expect(permissions.setMode).toHaveBeenCalledWith({ mode: 'manual' });
     expect(client.resumeSession).not.toHaveBeenCalled();
+  });
+
+  it('stages an explicit Auto preference when resuming an already-active session', async () => {
+    const { bridge, session, onPermissionRequest } = setup();
+    const setAutoTier = vi.fn().mockResolvedValue({ status: 'pending' });
+    Object.assign(session, { setAutoTier });
+    await bridge.createSession({ onPermissionRequest });
+    await bridge.resumeSession(session.sessionId, { onPermissionRequest, autoTier: 'dynamic-high' });
+    expect(setAutoTier).toHaveBeenCalledWith('dynamic-high');
   });
 
   it('does not silently reuse an active session when changing its mode fails', async () => {

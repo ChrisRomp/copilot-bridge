@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SqliteStateStore } from './sqlite-store.js';
+import Database from 'better-sqlite3';
 
 describe('SqliteStateStore', () => {
   let tmpDir: string;
@@ -88,6 +89,28 @@ describe('SqliteStateStore', () => {
   // ---- Preferences CRUD ---------------------------------------------------
 
   describe('preferences', () => {
+    it('round-trips durable Fusion intent and an attempted transition, including clear/default semantics', async () => {
+      const transition = { id: 'request-1', sessionId: 'session-1', requested: 'high' as const, previous: 'standard' as const, attempted: true };
+      await store.setChannelPrefs('ch-fusion', { fusionTier: 'high', fusionTransition: transition, reasoningEffort: 'high' });
+      expect(await store.getChannelPrefs('ch-fusion')).toMatchObject({ fusionTier: 'high', fusionTransition: transition, reasoningEffort: 'high' });
+      await store.setChannelPrefs('ch-fusion', { fusionTier: 'default', fusionTransition: null });
+      expect(await store.getChannelPrefs('ch-fusion')).toMatchObject({ fusionTier: 'default', fusionTransition: null, reasoningEffort: 'high' });
+      await store.setChannelPrefs('ch-fusion', { fusionTier: null });
+      expect((await store.getChannelPrefs('ch-fusion'))?.fusionTier).toBeNull();
+    });
+
+    it('migrates existing preference rows without losing fixed-model choices', async () => {
+      await store.setChannelPrefs('existing', { model: 'fixed-model', reasoningEffort: 'high' });
+      await store.close();
+      const db = new Database(path.join(tmpDir, 'test.db'));
+      db.exec('ALTER TABLE channel_prefs DROP COLUMN fusion_tier; ALTER TABLE channel_prefs DROP COLUMN fusion_transition;');
+      db.close();
+      await store.initialize();
+      expect(await store.getChannelPrefs('existing')).toMatchObject({ model: 'fixed-model', reasoningEffort: 'high', fusionTier: null, fusionTransition: null });
+      await store.setChannelPrefs('existing', { fusionTier: 'max' });
+      expect((await store.getChannelPrefs('existing'))?.fusionTier).toBe('max');
+    });
+
     it('get returns null when no prefs set', async () => {
       expect(await store.getChannelPrefs('ch1')).toBeNull();
     });

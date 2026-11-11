@@ -19,11 +19,13 @@ import {
   type ProviderConfig,
   type ContextTier,
   type PermissionMode,
+  type AutoTier,
 } from '@github/copilot-sdk';
 import { fileURLToPath } from 'node:url';
 import type { SessionHooks } from './hooks-loader.js';
 import type { BridgeProviderConfig } from '../types.js';
 import { createLogger } from '../logger.js';
+import type { FusionMetadata, FusionRuntimeState } from './fusion.js';
 
 const log = createLogger('bridge');
 
@@ -36,6 +38,7 @@ export type SDKPermissionConfig = Parameters<CopilotSession['rpc']['permissions'
 type RuntimeSetModelOptions = {
   reasoningEffort?: SDKReasoningEffort | 'none';
   contextTier?: SDKContextTier;
+  autoTier?: AutoTier | null;
 };
 
 // SDK types not re-exported from package root
@@ -94,6 +97,7 @@ export class CopilotBridge {
     reasoningEffort?: SDKReasoningEffort;
     contextTier?: SDKContextTier;
     permissionMode?: SDKPermissionMode;
+    autoTier?: AutoTier;
     agent?: string;
     mcpServers?: Record<string, MCPServerConfig>;
     skillDirectories?: string[];
@@ -118,6 +122,7 @@ export class CopilotBridge {
       reasoningEffort: opts.reasoningEffort,
       contextTier: opts.contextTier,
       permissionMode: opts.permissionMode ?? 'manual',
+      capi: opts.autoTier === undefined ? undefined : { autoTier: opts.autoTier },
       agent: opts.agent,
       mcpServers: opts.mcpServers,
       skillDirectories: opts.skillDirectories,
@@ -153,6 +158,7 @@ export class CopilotBridge {
       reasoningEffort?: SDKReasoningEffort;
       contextTier?: SDKContextTier;
       permissionMode?: SDKPermissionMode;
+      autoTier?: AutoTier;
       agent?: string;
       mcpServers?: Record<string, MCPServerConfig>;
       skillDirectories?: string[];
@@ -169,6 +175,7 @@ export class CopilotBridge {
       // On refusal, keep the already-active session for the caller's rollback;
       // unlike a new attachment, it may still be serving the previous mode.
       await this.setPermissionMode(sessionId, opts?.permissionMode ?? 'manual');
+      if (opts?.autoTier !== undefined) await existing.setAutoTier(opts.autoTier);
       return existing;
     }
 
@@ -187,6 +194,7 @@ export class CopilotBridge {
       reasoningEffort: opts?.reasoningEffort,
       contextTier: opts?.contextTier,
       permissionMode: opts?.permissionMode ?? 'manual',
+      capi: opts?.autoTier === undefined ? undefined : { autoTier: opts.autoTier },
       agent: opts?.agent,
       mcpServers: opts?.mcpServers,
       skillDirectories: opts?.skillDirectories,
@@ -258,6 +266,22 @@ export class CopilotBridge {
     }
 
     return [...copilotModels, ...byokModels];
+  }
+
+  async getFusionMetadata(id?: string, refresh = false): Promise<FusionMetadata | undefined> {
+    await this.start();
+    if (id) {
+      const session = this.sessions.get(id);
+      if (!session) throw new Error(`Session ${id} not active`);
+      return (await session.rpc.model.list({ skipCache: refresh })).auto;
+    }
+    return (await this.client.rpc.models.list({})).auto;
+  }
+
+  async setAutoTier(id: string, tier: AutoTier | null): Promise<Awaited<ReturnType<CopilotSession['setAutoTier']>>> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`Session ${id} not active`);
+    return session.setAutoTier(tier);
   }
 
   async getAuthStatus(): Promise<GetAuthStatusResponse> {
@@ -355,17 +379,18 @@ export class CopilotBridge {
     await session.rpc.plan.delete();
   }
 
-  async getSessionModel(id: string): Promise<{ modelId?: string }> {
+  async getSessionModel(id: string): Promise<FusionRuntimeState> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Session ${id} not active`);
     return session.rpc.model.getCurrent();
   }
 
-  async switchSessionModel(id: string, modelId: string, options?: { reasoningEffort?: string | null; contextTier?: string | null }): Promise<void> {
+  async switchSessionModel(id: string, modelId: string, options?: { reasoningEffort?: string | null; contextTier?: string | null; autoTier?: AutoTier | null }): Promise<void> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`Session ${id} not active`);
     const opts: RuntimeSetModelOptions = {};
     if (options) {
+      if (options.autoTier !== undefined) opts.autoTier = options.autoTier;
       if (options.reasoningEffort === null) opts.reasoningEffort = 'none';
       else if (options.reasoningEffort) opts.reasoningEffort = options.reasoningEffort as SDKReasoningEffort;
       if (options.contextTier) opts.contextTier = options.contextTier as SDKContextTier;

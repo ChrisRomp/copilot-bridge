@@ -4,6 +4,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { createLogger } from '../logger.js';
+import { isFusionPreference, parseFusionTransition } from '../core/fusion.js';
 import type {
   StateStore,
   ChannelPrefs,
@@ -200,6 +201,8 @@ export class SqliteStateStore implements StateStore {
         permission_mode TEXT,
         reasoning_effort TEXT,
         context_tier TEXT,
+        fusion_tier TEXT,
+        fusion_transition TEXT,
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
@@ -314,6 +317,8 @@ export class SqliteStateStore implements StateStore {
     };
     tryMigration(`ALTER TABLE channel_prefs ADD COLUMN reasoning_effort TEXT`, 'channel_prefs.reasoning_effort');
     tryMigration(`ALTER TABLE channel_prefs ADD COLUMN context_tier TEXT`, 'channel_prefs.context_tier');
+    tryMigration(`ALTER TABLE channel_prefs ADD COLUMN fusion_tier TEXT`, 'channel_prefs.fusion_tier');
+    tryMigration(`ALTER TABLE channel_prefs ADD COLUMN fusion_transition TEXT`, 'channel_prefs.fusion_transition');
     tryMigration(`ALTER TABLE scheduled_task_history ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'`, 'scheduled_task_history.timezone');
     tryMigration(`ALTER TABLE channel_prefs ADD COLUMN session_mode TEXT`, 'channel_prefs.session_mode');
     tryMigration(`ALTER TABLE channel_prefs ADD COLUMN disabled_skills TEXT`, 'channel_prefs.disabled_skills');
@@ -426,6 +431,9 @@ export class SqliteStateStore implements StateStore {
       const elapsed = performance.now() - start;
       if (elapsed > SLOW_QUERY_MS) log.warn(`getChannelPrefs took ${elapsed.toFixed(0)}ms`);
       if (!row) return null;
+      if (row.fusion_tier != null && !isFusionPreference(row.fusion_tier)) {
+        throw new Error('Invalid stored Fusion tier');
+      }
       return {
         model: row.model ?? undefined,
         provider: row.provider ?? null,
@@ -435,6 +443,8 @@ export class SqliteStateStore implements StateStore {
         permissionMode: row.permission_mode ?? undefined,
         reasoningEffort: row.reasoning_effort ?? null,
         contextTier: row.context_tier ?? null,
+        fusionTier: row.fusion_tier ?? null,
+        fusionTransition: parseFusionTransition(row.fusion_transition),
         sessionMode: row.session_mode ?? undefined,
         disabledSkills: row.disabled_skills ? safeParseStringArray(row.disabled_skills) : undefined,
       };
@@ -466,6 +476,15 @@ export class SqliteStateStore implements StateStore {
         if (prefs.permissionMode !== undefined) { updates.push('permission_mode = ?'); values.push(prefs.permissionMode); }
         if (prefs.reasoningEffort !== undefined) { updates.push('reasoning_effort = ?'); values.push(prefs.reasoningEffort); }
         if (prefs.contextTier !== undefined) { updates.push('context_tier = ?'); values.push(prefs.contextTier); }
+        if (prefs.fusionTier !== undefined) {
+          if (prefs.fusionTier !== null && !isFusionPreference(prefs.fusionTier)) throw new Error('Invalid Fusion tier');
+          updates.push('fusion_tier = ?'); values.push(prefs.fusionTier);
+        }
+        if (prefs.fusionTransition !== undefined) {
+          const serialized = prefs.fusionTransition === null ? null : JSON.stringify(prefs.fusionTransition);
+          parseFusionTransition(serialized);
+          updates.push('fusion_transition = ?'); values.push(serialized);
+        }
         if (prefs.sessionMode !== undefined) { updates.push('session_mode = ?'); values.push(prefs.sessionMode); }
         if (prefs.disabledSkills !== undefined) { updates.push('disabled_skills = ?'); values.push(JSON.stringify(prefs.disabledSkills)); }
 

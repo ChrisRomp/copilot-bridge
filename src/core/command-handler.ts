@@ -2,6 +2,7 @@ import { setChannelPrefs, getChannelPrefs, getGlobalSetting, setGlobalSetting, g
 import { discoverAgentDefinitions, discoverAgentNames } from './inter-agent.js';
 import { isBotAdminAny, getConfig, getChannelBotConfig, getChannelBotName } from '../config.js';
 import type { BridgePermissionMode, BridgeProviderConfig } from '../types.js';
+import { fusionModelLabel, fusionPendingLabel, fusionTierLabel, isFusionModel, isFusionPreference, isFusionTier, type FusionView } from './fusion.js';
 
 const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 const TRUTHY = new Set(['on', 'true', 'yes', '1', 'enable', 'enabled']);
@@ -22,6 +23,16 @@ function parseBool(input: string, fallback: boolean): boolean {
 /** Check if a model should be hidden in streamer mode. */
 function isHiddenModel(model: ModelInfo): boolean {
   return /\((preview|internal\b)[^)]*\)/i.test(model.name);
+}
+
+function safeModelText(text: string): string {
+  return text.replace(/[\r\n]/g, ' ').replace(/@/g, '@\u200b').replace(/([\\`*_<>|])/g, '\\$1').slice(0, 240);
+}
+
+export async function formatRoutedModel(modelId: string, models: ModelInfo[]): Promise<string> {
+  const model = models.find(candidate => candidate.id === modelId);
+  if (await isStreamerMode() && (!model || isHiddenModel(model))) return 'Hidden Model';
+  return safeModelText(model?.name ?? modelId);
 }
 
 /** Get the redacted display name for a hidden model. */
@@ -84,7 +95,7 @@ export interface CommandResult {
   handled: boolean;
   response?: string;
   action?: 'new_session' | 'reload_session' | 'reload_config' | 'reload_mcp' | 'reload_skills' | 'resume_session' | 'list_sessions' | 'switch_model' | 'switch_agent' | 'toggle_verbose' |
-           'approve' | 'deny' | 'toggle_autopilot' | 'set_permission_mode' | 'remember' | 'remember_deny' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'set_context_tier' | 'stop_session' | 'schedule' | 'skills' | 'skill_toggle' | 'mcp' | 'plan' | 'implement' | 'provider_test';
+           'approve' | 'deny' | 'toggle_autopilot' | 'set_permission_mode' | 'remember' | 'remember_deny' | 'remember_list' | 'remember_clear' | 'set_reasoning' | 'set_context_tier' | 'select_fusion' | 'stop_session' | 'schedule' | 'skills' | 'skill_toggle' | 'mcp' | 'plan' | 'implement' | 'provider_test';
   payload?: any;
 }
 
@@ -210,7 +221,7 @@ function fuzzyMatch(input: string, models: ModelInfo[], scope?: string): { model
 }
 
 /** Build the formatted model listing, optionally grouped by provider. */
-async function formatModelListing(models: ModelInfo[], providerNames: string[], currentModel: string | null, currentProvider: string | null, filterProvider?: string): Promise<string> {
+async function formatModelListing(models: ModelInfo[], providerNames: string[], currentModel: string | null, currentProvider: string | null, filterProvider?: string, fusion?: FusionView): Promise<string> {
   const streamer = await isStreamerMode();
   let hiddenIndex = 0;
 
@@ -302,6 +313,24 @@ async function formatModelListing(models: ModelInfo[], providerNames: string[], 
 
   const title = filterProvider ? `**Models: ${filterProvider}**` : '**Available Models**';
   const lines: string[] = [title, ''];
+  if (!filterProvider) {
+    lines.push('**Copilot Fusion (Auto)**');
+    if (isFusionModel(currentModel, currentProvider)) {
+      lines.push(`Current: ${fusionModelLabel(fusion)}`);
+      const pending = fusion && fusionPendingLabel(fusion);
+      if (pending) lines.push(`Pending tier: ${pending}`);
+    }
+    if (fusion?.metadata) {
+      for (const tier of fusion.metadata.tiers) {
+        if (tier.status.pickerVisible === false || !isFusionTier(tier.fusionTier)) continue;
+        const status = tier.status.enabled ? 'available' : `unavailable: ${safeModelText(tier.status.message ?? tier.status.reason ?? 'not permitted')}`;
+        lines.push(`- \`/fusion ${tier.fusionTier}\` — ${fusionTierLabel(tier.fusionTier)} (${status}${tier.id === fusion.metadata.defaultTier ? '; provider default' : ''})`);
+      }
+    } else {
+      lines.push('Tier availability could not be determined. Selection requires live validation.');
+    }
+    lines.push('Use `/fusion`, `/model fusion`, or `/model auto`; add a tier or `default` to reset routing.', '');
+  }
 
   if (providerNames.length > 0 && !filterProvider) {
     // Group by provider: Copilot first, then each BYOK provider
@@ -549,6 +578,9 @@ export async function resolveEffectiveConfig(
   fields.push({ setting: 'contextTier', ...resolve('contextTier',
     channelObj && 'contextTier' in channelObj ? (channelObj as any).contextTier : undefined, null, defaults.contextTier,
     prefs?.contextTier, null) });
+  fields.push({ setting: 'fusionTier', ...resolve('fusionTier',
+    channelObj && 'fusionTier' in channelObj ? channelObj.fusionTier : undefined, null, defaults.fusionTier,
+    prefs?.fusionTier, null) });
 
   // Session mode
   fields.push({ setting: 'sessionMode', ...resolve('sessionMode',
@@ -626,20 +658,31 @@ export interface McpServerInfo {
   pending?: boolean;
 }
 
-export async function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null; contextTier?: string | null }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[], contextUsage?: { currentTokens: number; tokenLimit: number; contextWindowTokens?: number } | null, providers?: Record<string, BridgeProviderConfig>): Promise<CommandResult> {
+export async function handleCommand(channelId: string, text: string, sessionInfo?: { sessionId: string; model: string; agent: string | null }, effectivePrefs?: { verbose: boolean; permissionMode: string; reasoningEffort?: string | null; contextTier?: string | null; model?: string }, channelMeta?: { workingDirectory?: string; bot?: string }, models?: ModelInfo[], mcpInfo?: McpServerInfo[], contextUsage?: { currentTokens: number; tokenLimit: number; contextWindowTokens?: number } | null, providers?: Record<string, BridgeProviderConfig>, fusion?: FusionView): Promise<CommandResult> {
   const parsed = parseCommand(text);
   if (!parsed) return { handled: false };
+  const fusionArgs = parsed.command === 'fusion' ? parsed.args
+    : ['model', 'models'].includes(parsed.command) && /^(auto|fusion)(?:\s|$)/i.test(parsed.args)
+      ? parsed.args.replace(/^(auto|fusion)\s*/i, '') : undefined;
+  if (fusionArgs !== undefined) {
+    const preference = fusionArgs.trim().toLowerCase();
+    if (preference && !isFusionPreference(preference)) {
+      return { handled: true, response: 'Usage: `/fusion [standard|high|max|default]` (also `/model fusion` or `/model auto`).' };
+    }
+    return { handled: true, action: 'select_fusion', payload: preference || undefined };
+  }
 
   // Resolve current model's info from models list (only for commands that need it)
   // When a BYOK provider is active, prefer the provider-prefixed entry to avoid
   // inheriting metadata (e.g., supportedReasoningEfforts) from a same-named Copilot model
-  const needsModelInfo = ['reasoning', 'status', 'model', 'models'].includes(parsed.command);
+  const needsModelInfo = ['reasoning', 'context', 'context-tier', 'contexttier', 'status', 'model', 'models'].includes(parsed.command);
   const currentProvider = needsModelInfo ? ((await getChannelPrefs(channelId))?.provider ?? null) : null;
   const currentModelInfo = needsModelInfo && models && sessionInfo
     ? (currentProvider
         ? models.find(m => m.id === `${currentProvider}:${sessionInfo.model}`) ?? null
         : models.find(m => m.id === sessionInfo.model) ?? null)
     : null;
+  const currentFusion = isFusionModel(sessionInfo?.model ?? effectivePrefs?.model, currentProvider);
 
   switch (parsed.command) {
     case 'new':
@@ -680,7 +723,7 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
         if (!models || models.length === 0) {
           return { handled: true, response: '⚠️ Model list not available.' };
         }
-        return { handled: true, response: await formatModelListing(models, providerNames, sessionInfo?.model ?? null, currentProvider) };
+        return { handled: true, response: await formatModelListing(models, providerNames, sessionInfo?.model ?? null, currentProvider, undefined, fusion) };
       }
 
       // Check if arg is a provider name → show just that provider's models
@@ -845,6 +888,7 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
     }
 
     case 'reasoning': {
+      if (currentFusion) return { handled: true, response: 'Fusion manages reasoning effort. Use `/fusion standard`, `/fusion high`, or `/fusion max` to change its routing tier; your fixed-model effort preference is preserved.' };
       const level = parsed.args.toLowerCase();
       if (!level) {
         const current = effectivePrefs?.reasoningEffort ?? 'default';
@@ -868,6 +912,7 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
 
     case 'context-tier':
     case 'contexttier': {
+      if (currentFusion) return { handled: true, response: 'Fusion manages context for its selected models. Select a fixed model to change `/context-tier`; your existing preference is preserved.' };
       const prefs = await getChannelPrefs(channelId);
       if (prefs?.provider) {
         return { handled: true, response: '⚠️ Context tiers apply only to GitHub Copilot models, not BYOK provider models.' };
@@ -893,7 +938,7 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
       }
       const prefs = await getChannelPrefs(channelId);
       const streamerStatus = await isStreamerMode();
-      const modelDisplay = (streamerStatus && currentModelInfo && isHiddenModel(currentModelInfo))
+      const modelDisplay = currentFusion ? fusionModelLabel(fusion) : (streamerStatus && currentModelInfo && isHiddenModel(currentModelInfo))
         ? 'Hidden Model'
         : sessionInfo.model;
       const modeLabels: Record<string, string> = {
@@ -914,18 +959,26 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
         `• Bot: ${channelMeta?.bot ? `@${channelMeta.bot}` : 'default'}`,
         `• Verbose: ${(effectivePrefs?.verbose ?? prefs?.verbose) ? '🔊 On' : '🔇 Off'}`,
       ];
+      if (currentFusion && fusion) {
+        const pending = fusionPendingLabel(fusion);
+        if (pending) lines.push(`• Pending tier: **${pending}**`);
+        if (fusion.actualModel) lines.push(`• Using: **${await formatRoutedModel(fusion.actualModel, models ?? [])}**${fusion.role ? ` (${safeModelText(fusion.role)})` : ''}`);
+        if (fusion.unavailable) lines.push('• Live Fusion state unavailable; no effective tier is assumed.');
+      }
       // Only show reasoning effort for models that support it
       if (currentModelInfo?.supportedReasoningEfforts && currentModelInfo.supportedReasoningEfforts.length > 0) {
         const current = effectivePrefs?.reasoningEffort ?? currentModelInfo.defaultReasoningEffort ?? 'default';
         lines.push(`• Reasoning effort: 🧠 **${current}** (supports: ${currentModelInfo.supportedReasoningEfforts.join(', ')})`);
       }
-      if (prefs?.provider) {
+      if (currentFusion) {
+        lines.push('• Context: managed by Fusion');
+      } else if (prefs?.provider) {
         lines.push('• Context tier: not applicable (BYOK provider)');
       } else {
         const contextTier = effectivePrefs?.contextTier ?? prefs?.contextTier ?? getDefaultContextTier();
         lines.push(`• Context tier: 📏 **${formatContextTierLabel(contextTier)}**`);
       }
-      if (contextUsage) {
+      if (contextUsage && !currentFusion) {
         lines.push(`• Context: ${formatContextUsage(contextUsage)}`);
       }
       return { handled: true, response: lines.join('\n') };
@@ -937,6 +990,7 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
     }
 
     case 'context': {
+      if (currentFusion) return { handled: true, response: 'Fusion manages context across its selected models. An aggregate context percentage is not available.' };
       if (!contextUsage) {
         return { handled: true, response: '📊 Context usage not available yet. Send a message first.' };
       }
@@ -1080,6 +1134,7 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
         '`/new` — Start a new session',
         '`/stop` — Stop the current task',
         '`/model [name]` — List or switch models',
+        '`/fusion [standard|high|max|default]` — Select Fusion (aliases: `/model fusion`, `/model auto`)',
         '`/status` — Show session info',
         '`/config` — Show effective channel configuration',
         '`/context` — Show context window usage',
@@ -1111,6 +1166,7 @@ export async function handleCommand(channelId: string, text: string, sessionInfo
           '`/reload skills` — Reload skills (no session restart)',
           '`/resume [id]` — Resume current session (or a past one by ID)',
           '`/model [name]` — List models or switch model (fuzzy match)',
+          '`/fusion [standard|high|max|default]` — Select Fusion; no tier reuses the saved choice, `default` resets provider routing',
           '`/agent <name>` — Switch custom agent (empty to deselect)',
           '`/agents` — List available agent definitions',
           '`/reasoning <level>` — Set reasoning effort (low/medium/high/xhigh)',

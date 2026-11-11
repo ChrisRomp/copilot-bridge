@@ -1,5 +1,26 @@
 import { describe, it, expect } from 'vitest';
 import { parseModelId, getFallbackChain, isModelError, tryWithFallback, buildFallbackChain } from './model-fallback.js';
+import { FusionSelectionError } from './fusion.js';
+
+describe('Fusion error boundaries', () => {
+  it.each([
+    new FusionSelectionError('Fusion model is unavailable'),
+    new Error('Auto tier is unavailable for this account'),
+    new Error('Fusion tier is not supported by model policy'),
+  ])('does not mistake a tier-policy failure for a fixed-model fallback request', async error => {
+    expect(isModelError(error)).toBe(false);
+    const attempts: string[] = [];
+    await expect(tryWithFallback('auto', ['auto', 'fixed-model'], ['fixed-model'], async model => {
+      attempts.push(model);
+      throw error;
+    })).rejects.toBe(error);
+    expect(attempts).toEqual(['auto']);
+  });
+
+  it('still recognizes genuine rate limits for the configured inference fallback', () => {
+    expect(isModelError(new Error('Rate limit exceeded'))).toBe(true);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // parseModelId

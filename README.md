@@ -29,6 +29,7 @@ More screenshots [here](docs/screenshots.md).
 - **Streaming responses** — Edit-in-place message updates with throttling
 - **MCP & skills** — Auto-loads MCP servers and skill directories from Copilot config
 - **Fuzzy model matching** — `/model opus` resolves to `claude-opus-4.6` (mobile-friendly)
+- **Copilot Fusion** — `/fusion high` selects a policy-permitted routing tier; live notices show the models doing the work and review
 - **Bring Your Own Key (BYOK)** — Connect your own providers (Ollama, Azure, Anthropic) alongside Copilot models
 - **Assisted permissions** — Choose manual approval, AI safety review, or yolo independently of the autonomous `/autopilot` loop
 - **Model fallback** — Automatic fallback to alternative models on capacity/availability errors
@@ -72,6 +73,7 @@ See the [Setup Guide — Running as a Service](docs/setup.md#running-as-a-servic
 | `/reload config` | | Hot-reload config.json (safe changes apply without restart) |
 | `/resume [id]` | | List past sessions, or resume one by ID |
 | `/model [name]` | `/models` | List models or switch model (fuzzy match) |
+| `/fusion [standard\|high\|max\|default]` | `/model fusion`, `/model auto` | Select Fusion; no tier reuses the saved choice |
 | `/agent <name>` | | Switch custom agent (empty to deselect) |
 | `/reasoning <level>` | | Set reasoning effort (`low`/`medium`/`high`/`xhigh`) |
 | `/context-tier <tier>` | | Set context tier (`default`/`long`; `max` also accepted) |

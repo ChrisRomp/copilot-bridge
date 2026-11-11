@@ -1,4 +1,5 @@
 import { createLogger } from '../logger.js';
+import { isFusionPolicyFailure } from './fusion.js';
 
 const log = createLogger('model-fallback');
 
@@ -245,6 +246,7 @@ const MODEL_ERROR_CODES = new Set([429, 503]);
  */
 export function isModelError(error: any): boolean {
   if (!error) return false;
+  if (isFusionPolicyFailure(error)) return false;
 
   // Check HTTP status codes
   const status = error.status ?? error.statusCode;

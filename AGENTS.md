@@ -143,6 +143,17 @@ External model providers are configured under `providers` in `config.json`. Each
 - BYOK models are excluded from auto-fallback chains unless explicitly in `configFallbacks`
 - Provider config changes are hot-reloadable via `/reload config`
 
+### Copilot Fusion
+
+- Public `fusion` and `auto` selections normalize to SDK `auto`; `/fusion [tier]` also selects the model. `/auto` remains the autopilot command.
+- `fusion.ts` resolves standard/high/max through live `auto.tiers[].fusionTier` metadata and uses the advertised opaque ID. Respect enabled/hidden status; do not hardcode legacy routing IDs or assume Standard is the default.
+- `FusionManager` separates durable accepted intent (`fusionTier`/`fusionTransition`) from runtime effective/pending/activating state. Post-attach default reset uses `setAutoTier(null)`; omission on resume does not reset a prior tier.
+- Failed new activation restores previous intent. Revoked saved tiers fall back to provider default with a notice. Tier-policy failures must not enter fixed-model fallback or unlink session history.
+- Root Auto/Fusion events drive actual-model notices, not stored model preferences. Preserve streamer redaction and suppress notices during unattended scheduled work. Notifications never replace assistant stream content or change busy state.
+- Runtime 1.0.109 emits uncommitted phase drafts followed by committed messages carrying `fusion.commitId`. Only committed non-review Fusion content enters the answer stream. Unknown/unattributed Fusion deltas are withheld; ordinary Auto streaming is preserved.
+- Fusion owns reasoning/context; entering it must not clear fixed-model preferences. Keep its adapter on the stable SDK until a separate reviewed dependency upgrade.
+- `fusion.integration.test.ts` is an opt-in real-host suite. See configuration docs for `COPILOT_BRIDGE_FUSION_LIVE` and the separate inference opt-in; regular CI uses deterministic fixtures and cannot prove live provider policy.
+
 ### TypeScript
 
 - ESM modules (`"type": "module"` in package.json, `NodeNext` module resolution)

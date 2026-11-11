@@ -3,6 +3,7 @@ import type { CopilotSession, MessageOptions, SessionEvent } from '@github/copil
 import { CopilotBridge } from './bridge.js';
 import { SessionManager } from './session-manager.js';
 import { setChannelPrefs } from '../state/store.js';
+import { FusionSelectionError } from './fusion.js';
 
 vi.mock('./bridge.js', () => ({
   CopilotBridge: class {
@@ -96,6 +97,20 @@ describe('SessionManager message provenance', () => {
     expect(original.send).toHaveBeenCalledExactlyOnceWith({
       prompt: 'Check build', attachments, source: 'automation-sched-task-123',
     });
+
+  });
+
+  it('does not send or create a fallback conversation after a pre-send Fusion policy failure', async () => {
+    vi.spyOn(manager, 'getEffectivePrefs').mockResolvedValue({
+      model: 'auto', provider: null, agent: null, verbose: false,
+      threadedReplies: false, permissionMode: 'assisted', triggerMode: 'all', contextTier: 'default',
+    });
+    vi.spyOn(manager['fusion'], 'prepare').mockRejectedValue(new FusionSelectionError('Fusion tier is disabled by policy'));
+    const newSession = vi.spyOn(manager, 'newSession');
+    await expect(manager.sendMessage('channel', 'Question')).rejects.toThrow('disabled by policy');
+    expect(original.send).not.toHaveBeenCalled();
+    expect(newSession).not.toHaveBeenCalled();
+    expect(manager['attachSession']).not.toHaveBeenCalled();
   });
 
   it('leaves human-message source unset, including after a scheduled turn', async () => {

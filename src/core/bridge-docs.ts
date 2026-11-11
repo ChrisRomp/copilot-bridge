@@ -119,12 +119,17 @@ Commands are intercepted by the bridge before reaching the Copilot session. The 
 | Command | Description |
 |---------|-------------|
 | \`/model [name]\` | Show available models or switch model |
+| \`/fusion [tier]\` | Select Fusion with standard/high/max/default; also \`/model fusion [tier]\` or \`/model auto [tier]\` |
 | \`/model <provider>:<model>\` | Switch to a BYOK provider model |
 | \`/provider\` | List configured BYOK providers |
 | \`/provider test <name>\` | Test provider connectivity |
 | \`/agent <name>\` | Switch to a named agent persona |
 | \`/agents\` | List available agent definitions |
 | \`/reasoning [level]\` | Set reasoning effort (low/medium/high/xhigh) |
+
+Fusion and Auto are names for the same Copilot routing selection. Bare selection reuses the saved tier. \`/model\` shows account/session tier availability, including policy-blocked choices. \`/status\` shows Fusion plus the effective tier, pending changes, and the actual executing model separately. Accepted tier changes can remain pending until a successful turn.
+
+If a saved tier becomes unavailable, the bridge announces provider-default fallback. Explicit unavailable choices are rejected. \`/fusion default\` resets provider routing. Actual model/role switches appear in chat even outside verbose, except quiet scheduled work; streamer mode redacts private/unknown model names. Internal High/Max drafts/review output are not the answer until the SDK marks the committed output. Fusion manages reasoning/context and preserves fixed-model preferences. \`/auto\` still means \`/autopilot\`.
 
 ## Permissions & Mode
 | Command | Description |
@@ -194,6 +199,7 @@ ${editNote}
 | Field | Default | Description |
 |-------|---------|-------------|
 | \`model\` | \`"claude-sonnet-4.6"\` | Default model |
+| \`fusionTier\` | Provider default | standard/high/max/default for Copilot auto/fusion; live policy determines availability |
 | \`verbose\` | \`false\` | Show tool call details |
 | \`permissionMode\` | \`"interactive"\` | \`interactive\` (manual), \`assisted\`, or legacy \`autopilot\` (yolo) |
 | \`fallbackModels\` | \`[]\` | Model fallback chain |

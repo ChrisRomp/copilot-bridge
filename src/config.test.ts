@@ -251,6 +251,23 @@ describe('reloadConfig', () => {
     expect(loadConfig(configFile).defaults.permissionMode).toBe('interactive');
   });
 
+  it.each(['standard', 'high', 'max', 'default'])('accepts default and per-channel Fusion tier %s', fusionTier => {
+    const raw = makeConfig({ defaults: { model: 'fusion', fusionTier } });
+    raw.channels[0].fusionTier = fusionTier;
+    fs.writeFileSync(configFile, JSON.stringify(raw));
+    const loaded = loadConfig(configFile);
+    expect(loaded.defaults.fusionTier).toBe(fusionTier);
+    expect(loaded.channels[0].fusionTier).toBe(fusionTier);
+  });
+
+  it.each(['fast', 'hydrafusion', 'HIGH', null, 1])('rejects invalid Fusion preference %j without changing the prior config', fusionTier => {
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ defaults: { fusionTier: 'high' } })));
+    loadConfig(configFile);
+    fs.writeFileSync(configFile, JSON.stringify(makeConfig({ defaults: { fusionTier } })));
+    expect(reloadConfig().success).toBe(false);
+    expect(getConfig().defaults.fusionTier).toBe('high');
+  });
+
   it.each(['interactive', 'assisted', 'autopilot'])('accepts defaults.permissionMode %s', permissionMode => {
     fs.writeFileSync(configFile, JSON.stringify(makeConfig({ defaults: { permissionMode } })));
     expect(loadConfig(configFile).defaults.permissionMode).toBe(permissionMode);

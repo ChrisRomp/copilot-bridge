@@ -1,0 +1,212 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CopilotSession, type SessionEvent } from '@github/copilot-sdk';
+import { CopilotBridge } from './bridge.js';
+import { FusionManager } from './fusion-manager.js';
+import type { FusionMetadata, FusionRuntimeState } from './fusion.js';
+import { getChannelPrefs, setChannelPrefs, type ChannelPrefs } from '../state/store.js';
+
+vi.mock('../state/store.js', () => ({ getChannelPrefs: vi.fn(), setChannelPrefs: vi.fn() }));
+
+describe('FusionManager', () => {
+  let bridge: CopilotBridge;
+  let session: CopilotSession;
+  let controller: FusionManager;
+  let prefs: ChannelPrefs;
+  let state: FusionRuntimeState;
+  let catalog: FusionMetadata;
+  const notify = vi.fn();
+  const base = { timestamp: '2026-01-01T00:00:00Z', parentId: null };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prefs = { model: 'auto', provider: null, fusionTier: 'standard' };
+    state = { modelId: 'auto', autoTier: 'route-s' };
+    catalog = { defaultTier: 'route-s', tiers: [
+      { id: 'route-s', fusionTier: 'standard', displayName: 'Standard', description: '', type: 'auto', status: { enabled: true } },
+      { id: 'route-h', fusionTier: 'high', displayName: 'High', description: '', type: 'fusion', status: { enabled: true } },
+      { id: 'route-m', fusionTier: 'max', displayName: 'Max', description: '', type: 'fusion', status: { enabled: false, message: 'Policy forbids Max' } },
+    ] };
+    vi.mocked(getChannelPrefs).mockImplementation(async () => structuredClone(prefs));
+    vi.mocked(setChannelPrefs).mockImplementation(async (_channel, change) => { prefs = { ...prefs, ...structuredClone(change) }; });
+    bridge = new CopilotBridge();
+    session = Object.create(CopilotSession.prototype, { sessionId: { value: 'session-1' } });
+    vi.spyOn(bridge, 'getSession').mockReturnValue(session);
+    vi.spyOn(bridge, 'getFusionMetadata').mockImplementation(async () => structuredClone(catalog));
+    vi.spyOn(bridge, 'getSessionModel').mockImplementation(async () => structuredClone(state));
+    vi.spyOn(bridge, 'setAutoTier').mockImplementation(async (_id, tier) => {
+      state = { ...state, pendingAutoTier: tier };
+      return { status: 'pending', pendingAutoTier: tier };
+    });
+    vi.spyOn(bridge, 'switchSessionModel').mockImplementation(async (_id, model, options) => {
+      state = { modelId: model, pendingAutoTier: options?.autoTier ?? null };
+    });
+    controller = makeController();
+  });
+
+  function makeController() {
+    const manager = new FusionManager(bridge, async () => structuredClone(prefs), notify);
+    manager.attach('ch', session);
+    return manager;
+  }
+
+  it('persists accepted intent as pending without claiming activation', async () => {
+    expect(await controller.select('ch', 'high')).toMatchObject({ status: 'pending', preference: 'high' });
+    expect(prefs.fusionTier).toBe('high');
+    expect(prefs.fusionTransition).toMatchObject({ requested: 'high', previous: 'standard', attempted: false });
+    expect((await controller.view('ch')).state?.autoTier).toBe('route-s');
+  });
+
+  it('does not turn inherited tier configuration into a permanent channel override', async () => {
+    prefs.fusionTier = null;
+    let configured: 'high' | 'standard' = 'high';
+    controller = new FusionManager(bridge, async () => ({ ...prefs, fusionTier: prefs.fusionTier ?? configured }), notify);
+    controller.attach('ch', session);
+    await controller.prepare('ch');
+    expect(prefs.fusionTier).toBeNull();
+    expect(state.pendingAutoTier).toBe('route-h');
+    configured = 'standard';
+    await controller.prepare('ch');
+    expect(prefs.fusionTier).toBeNull();
+    expect(bridge.setAutoTier).toHaveBeenLastCalledWith('session-1', 'route-s');
+  });
+
+  it('rejects explicit unavailable tiers without changing selection or durable intent', async () => {
+    await expect(controller.select('ch', 'max')).rejects.toThrow('Policy forbids Max');
+    expect(setChannelPrefs).not.toHaveBeenCalled();
+    expect(bridge.setAutoTier).not.toHaveBeenCalled();
+    expect(prefs.fusionTier).toBe('standard');
+  });
+
+  it('announces provider-default fallback when a saved tier becomes disallowed', async () => {
+    prefs.fusionTier = 'max';
+    await controller.prepare('ch');
+    expect(bridge.setAutoTier).toHaveBeenCalledWith('session-1', null);
+    expect(prefs.fusionTier).toBe('default');
+    expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('no longer available'));
+  });
+
+  it('never fabricates availability or falls back to a fixed model when discovery fails', async () => {
+    vi.mocked(bridge.getFusionMetadata).mockResolvedValue(undefined);
+    await expect(controller.select('ch', 'high')).rejects.toThrow('availability is unavailable');
+    expect(bridge.switchSessionModel).not.toHaveBeenCalled();
+    expect(setChannelPrefs).not.toHaveBeenCalled();
+  });
+
+  it('restages accepted but unattempted intent after a cold resume loses native pending state', async () => {
+    await controller.select('ch', 'high');
+    state = { modelId: 'auto', autoTier: 'route-s' };
+    controller = makeController();
+    await controller.prepare('ch');
+    expect(bridge.setAutoTier).toHaveBeenLastCalledWith('session-1', 'route-h');
+    expect(prefs.fusionTier).toBe('high');
+  });
+
+  it('does not endlessly retry an attempted transition with a lost final outcome', async () => {
+    await controller.select('ch', 'high');
+    await controller.prepare('ch', true);
+    expect(prefs.fusionTransition?.attempted).toBe(true);
+    state = { modelId: 'auto', autoTier: 'route-s' };
+    controller = makeController();
+    await controller.prepare('ch');
+    expect(prefs.fusionTier).toBe('standard');
+    expect(prefs.fusionTransition).toBeNull();
+    expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('did not have a confirmed outcome'));
+  });
+
+  it('clears the pending transition only after actual SDK commit', async () => {
+    await controller.select('ch', 'high');
+    state = { modelId: 'auto', autoTier: 'route-h', fusionTier: 'high' };
+    controller.process('ch', session, { ...base, id: 'commit', type: 'session.model_change', data: { newModel: 'auto', autoTier: 'route-h' } });
+    await vi.waitFor(() => expect(prefs.fusionTransition).toBeNull());
+    expect(prefs.fusionTier).toBe('high');
+    expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('now active'));
+  });
+
+  it('rolls back a newly requested tier after transient activation failure', async () => {
+    await controller.select('ch', 'high');
+    state = { modelId: 'auto', autoTier: 'route-s' };
+    controller.process('ch', session, { ...base, id: 'failed', type: 'session.auto_tier_switch_failed', ephemeral: true,
+      data: { requestedAutoTier: 'route-h', effectiveAutoTier: 'route-s', reason: 'request_failed' } });
+    await vi.waitFor(() => expect(prefs.fusionTier).toBe('standard'));
+    expect(prefs.fusionTransition).toBeNull();
+    expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('Keeping the previous tier'));
+  });
+
+  it('treats default as an explicit reset on an existing named tier', async () => {
+    state = { modelId: 'auto', autoTier: 'route-h' };
+    await controller.select('ch', 'default');
+    expect(bridge.setAutoTier).toHaveBeenCalledWith('session-1', null);
+    expect(prefs.fusionTier).toBe('default');
+  });
+
+  it('does not let a stale same-tier failure undo a newer pending request', async () => {
+    await controller.select('ch', 'high');
+    controller.process('ch', session, { ...base, id: 'old-failure', type: 'session.auto_tier_switch_failed', ephemeral: true,
+      data: { requestedAutoTier: 'route-h', effectiveAutoTier: 'route-s', reason: 'setup_failed' } });
+    await controller.prepare('ch');
+    expect(prefs.fusionTier).toBe('high');
+    expect(prefs.fusionTransition?.requested).toBe('high');
+    expect(notify).not.toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('Keeping the previous'));
+  });
+
+  it('restores runtime and durable state if persisting a selected tier fails', async () => {
+    vi.mocked(setChannelPrefs).mockRejectedValueOnce(new Error('database offline'));
+    await expect(controller.select('ch', 'high')).rejects.toThrow('database offline');
+    expect(prefs.fusionTier).toBe('standard');
+    expect(bridge.switchSessionModel).toHaveBeenLastCalledWith('session-1', 'auto', { autoTier: 'route-s' });
+  });
+
+  it('rejects a state backend that silently drops the new preference fields', async () => {
+    vi.mocked(setChannelPrefs).mockResolvedValue(undefined);
+    await expect(controller.select('ch', 'high')).rejects.toThrow('state backend did not persist');
+    expect(prefs.fusionTier).toBe('standard');
+  });
+
+  it('accepts a custom backend that returns transition fields in a different order', async () => {
+    vi.mocked(getChannelPrefs).mockImplementation(async () => ({
+      ...prefs,
+      fusionTransition: prefs.fusionTransition ? {
+        attempted: prefs.fusionTransition.attempted, previous: prefs.fusionTransition.previous,
+        requested: prefs.fusionTransition.requested, sessionId: prefs.fusionTransition.sessionId,
+        id: prefs.fusionTransition.id,
+      } : null,
+    }));
+    await expect(controller.select('ch', 'high')).resolves.toMatchObject({ status: 'pending', preference: 'high' });
+  });
+
+  it('preserves fixed-model effort/context preferences when switching into Fusion', async () => {
+    prefs = { model: 'fixed', fusionTier: 'standard', reasoningEffort: 'high', contextTier: 'long_context' };
+    state = { modelId: 'fixed', reasoningEffort: 'high', contextTier: 'long_context' };
+    await controller.select('ch', 'high');
+    expect(bridge.switchSessionModel).toHaveBeenCalledWith('session-1', 'auto', { autoTier: 'route-h' });
+    expect(prefs).toMatchObject({ model: 'auto', fusionTier: 'high', reasoningEffort: 'high', contextTier: 'long_context' });
+  });
+
+  it('lists Copilot tier availability independently of the current BYOK provider', async () => {
+    prefs.provider = 'external';
+    await controller.view('ch');
+    expect(bridge.getFusionMetadata).toHaveBeenCalledWith(undefined, true);
+  });
+
+  it('ignores child/replayed model changes for root preference reconciliation', async () => {
+    await controller.select('ch', 'high');
+    const event = { ...base, id: 'child', type: 'session.model_change', data: { newModel: 'auto', autoTier: 'route-h' } } satisfies SessionEvent;
+    controller.process('ch', session, { ...event, agentId: 'child' });
+    controller.process('ch', session, { ...event, id: 'replay', checkpoint: true });
+    await Promise.resolve();
+    expect(prefs.fusionTransition).not.toBeNull();
+  });
+
+  it('never applies stale async work to a replacement attachment', async () => {
+    let resolveCatalog!: (value: FusionMetadata) => void;
+    vi.mocked(bridge.getFusionMetadata).mockImplementationOnce(() => new Promise(resolve => { resolveCatalog = resolve; }));
+    const change = controller.select('ch', 'high');
+    const rejected = expect(change).rejects.toThrow('session changed');
+    await vi.waitFor(() => expect(bridge.getFusionMetadata).toHaveBeenCalled());
+    controller.detach('session-1');
+    resolveCatalog(catalog);
+    await rejected;
+    expect(setChannelPrefs).not.toHaveBeenCalled();
+    expect(bridge.setAutoTier).not.toHaveBeenCalled();
+  });
+});

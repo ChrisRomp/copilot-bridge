@@ -175,6 +175,7 @@ Channel entries map a specific Mattermost channel to a bot, working directory, a
 | `name` | No | Human-readable label (for logs) |
 | `workingDirectory` | Yes | Local path for the Copilot session |
 | `model` | No | AI model override |
+| `fusionTier` | No | `standard`, `high`, `max`, or `default`; used with Copilot `auto`/`fusion`, subject to live model policy |
 | `fallbackModels` | No | Ordered list of fallback models if the primary is unavailable |
 | `agent` | No | Custom agent name |
 | `triggerMode` | No | `"mention"` (default) or `"all"` |
@@ -207,6 +208,36 @@ Fallback values for any setting not specified per-channel:
   }
 }
 ```
+
+## Copilot Fusion
+
+Use `/fusion [standard|high|max|default]`, `/model fusion [tier]`, or `/model auto [tier]`. All select the same Copilot routing mode; bare commands reuse the saved tier. `/auto` remains the alias for `/autopilot`, not model selection. Provider-qualified BYOK model names are unaffected.
+
+Set `"model": "auto"` (or `"fusion"`) and optionally `"fusionTier": "high"` in `defaults` or a channel entry. A saved channel choice overrides configuration. An absent/null saved tier inherits configuration; explicit `"default"` uses the provider's default, which is not necessarily Standard.
+
+`/model` lists advertised tiers and their availability, including policy-blocked tiers and their reasons. Picker-hidden/integrator tiers are not advertised. The bridge discovers mappings from runtime metadata rather than hardcoding routing IDs or assuming every account permits all tiers. Explicit unavailable selections fail without changing the model. If a previously saved tier becomes unavailable, the bridge requests provider-default routing and notifies the user; if discovery or the default is unavailable, it reports an error instead of inventing a substitute.
+
+Tier changes may be **pending** until a successful turn. `/status` shows, for example, **Model: Copilot Fusion (Standard)** with **Pending tier: High**, separately from the concrete model executing work. `/config` shows saved intent and its source. Accepted intent survives `/new` and restart. A failed new activation restores the prior tier preference and reports the failure; it is not retried automatically. If a restart loses the outcome of an already-attempted change, the bridge restores the previous preference conservatively and notifies the user.
+
+Model-use notices appear even with verbose off: for example, Fusion using one model for work and another for review. They do not replace the answer stream. Quiet scheduled tasks log them instead; streamer mode redacts hidden and unknown model identities. High/Max internal drafts and review messages are withheld until the SDK marks an authoritative committed answer. Standard retains normal streaming.
+
+`/reasoning` remains model effort, not Fusion tier. Fusion manages effort and context; select a fixed model to change those controls. Existing fixed-model effort/context preferences are preserved. Aggregate Fusion context percentages are not shown because they are not a reliable single-model measurement.
+
+Configured `fallbackModels` still apply to eligible inference failures, but not tier-policy/discovery failures. Fusion support does not enable the separate native fixed-model-to-Auto recovery feature or alter assisted-permission policy.
+
+### SDK compatibility and live checks
+
+The bridge stays on stable SDK 1.0.31 and CLI 1.0.109, using the existing Auto-tier APIs behind public Fusion names. `src/core/fusion.ts` and the typed bridge wrapper isolate routing mappings so a future native Fusion API upgrade does not require changing commands or preferences.
+
+Normal `npm test` uses deterministic mocks/fixtures and skips the native integration suite. To check the actual pinned CLI host with isolated configuration and a real extension:
+
+```bash
+COPILOT_BRIDGE_FUSION_LIVE=1 npx vitest run src/core/fusion.integration.test.ts
+```
+
+Add `COPILOT_BRIDGE_FUSION_INFERENCE=1` to exercise real Standard/High/Max turns and committed output/model notices. These checks require the operator's existing Copilot authentication, consume inference quota when enabled, and only exercise tiers the account currently permits. They do not change production channel models, CLI settings, or permissions. The suite cleans up its own temporary workspaces, database, and processes. Ordinary CI does not prove live account policy or provider behavior.
+
+Custom state backends must round-trip the optional `fusionTier` and `fusionTransition` fields in `ChannelPrefs`; the bridge verifies persistence rather than silently dropping accepted intent.
 
 ## Permissions
 
