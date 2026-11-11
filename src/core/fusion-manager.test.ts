@@ -56,6 +56,57 @@ describe('FusionManager', () => {
     expect((await controller.view('ch')).state?.autoTier).toBe('route-s');
   });
 
+  it('replaces a newer pending reset even when the requested tier is already activating', async () => {
+    state = { modelId: 'auto', autoTier: 'route-s', activatingAutoTier: 'route-h', pendingAutoTier: null };
+    await controller.select('ch', 'high');
+    expect(bridge.setAutoTier).toHaveBeenCalledWith('session-1', 'route-h');
+    expect(state.pendingAutoTier).toBe('route-h');
+  });
+
+  it.each(['active', 'failed'])('preserves originating suppression when %s reconciliation runs after a quiet turn ends', async outcome => {
+    let suppressed = true;
+    controller = new FusionManager(bridge, async () => structuredClone(prefs), notify,
+      () => ({ attachmentGeneration: 7, suppressOutput: suppressed }));
+    controller.attach('ch', session);
+    await controller.select('ch', 'high');
+    state = { modelId: 'auto', autoTier: outcome === 'active' ? 'route-h' : 'route-s' };
+    const event: SessionEvent = outcome === 'active'
+      ? { ...base, id: 'quiet-idle', type: 'session.idle', ephemeral: true, data: {} }
+      : { ...base, id: 'quiet-failed', type: 'session.auto_tier_switch_failed', ephemeral: true,
+        data: { requestedAutoTier: 'route-h', effectiveAutoTier: 'route-s', reason: 'request_failed' } };
+    controller.process('ch', session, event);
+    suppressed = false;
+    await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+    expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining(outcome === 'active' ? 'now active' : 'Keeping the previous tier'),
+      { attachmentGeneration: 7, suppressOutput: true });
+  });
+
+  it('rejects stale persistence readback before announcing fallback', async () => {
+    prefs.fusionTier = 'max';
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let written = false;
+    let readingBack = false;
+    vi.mocked(setChannelPrefs).mockImplementation(async (_channel, change) => {
+      prefs = { ...prefs, ...change };
+      written = true;
+    });
+    vi.mocked(getChannelPrefs).mockImplementation(async () => {
+      if (written) {
+        readingBack = true;
+        await gate;
+      }
+      return structuredClone(prefs);
+    });
+    const pending = controller.prepare('ch');
+    const rejected = expect(pending).rejects.toThrow('session changed');
+    await vi.waitFor(() => expect(readingBack).toBe(true));
+    controller.detach('session-1');
+    release();
+    await rejected;
+    expect(notify).not.toHaveBeenCalled();
+  });
+
   it('does not turn inherited tier configuration into a permanent channel override', async () => {
     prefs.fusionTier = null;
     let configured: 'high' | 'standard' = 'high';
@@ -82,7 +133,7 @@ describe('FusionManager', () => {
     await controller.prepare('ch');
     expect(bridge.setAutoTier).toHaveBeenCalledWith('session-1', null);
     expect(prefs.fusionTier).toBe('default');
-    expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('no longer available'));
+    expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('no longer available'), expect.any(Object));
   });
 
   it('keeps unavailable inherited tiers inherited and deduplicates fallback notices until recovery', async () => {
@@ -146,7 +197,7 @@ describe('FusionManager', () => {
     await controller.prepare('ch');
     expect(prefs.fusionTier).toBe('standard');
     expect(prefs.fusionTransition).toBeNull();
-    expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('did not have a confirmed outcome'));
+    expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('did not have a confirmed outcome'), expect.any(Object));
   });
 
   it.each(['standard', null] as const)('preserves previous override %s when a pending request moves to a new session', async previousOverride => {
@@ -229,7 +280,7 @@ describe('FusionManager', () => {
     controller.process('ch', session, { ...base, id: 'commit', type: 'session.model_change', data: { newModel: 'auto', autoTier: 'route-h' } });
     await vi.waitFor(() => expect(prefs.fusionTransition).toBeNull());
     expect(prefs.fusionTier).toBe('high');
-    expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('now active'));
+    expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('now active'), expect.any(Object));
   });
 
   it('rolls back a newly requested tier after transient activation failure', async () => {
@@ -239,7 +290,7 @@ describe('FusionManager', () => {
       data: { requestedAutoTier: 'route-h', effectiveAutoTier: 'route-s', reason: 'request_failed' } });
     await vi.waitFor(() => expect(prefs.fusionTier).toBe('standard'));
     expect(prefs.fusionTransition).toBeNull();
-    expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('Keeping the previous tier'));
+    expect(notify).toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('Keeping the previous tier'), expect.any(Object));
   });
 
   it.each(['activation failure', 'lost outcome'])('restores accepted pending intent instead of the effective tier after %s', async outcome => {
@@ -309,7 +360,7 @@ describe('FusionManager', () => {
     await controller.prepare('ch');
     expect(prefs.fusionTier).toBe('high');
     expect(prefs.fusionTransition?.requested).toBe('high');
-    expect(notify).not.toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('Keeping the previous'));
+    expect(notify).not.toHaveBeenCalledWith('session-1', 'ch', expect.stringContaining('Keeping the previous'), expect.any(Object));
   });
 
   it('restores runtime and durable state if persisting a selected tier fails', async () => {

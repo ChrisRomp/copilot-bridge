@@ -17,7 +17,7 @@ describe('Fusion notice delivery', () => {
   const threadRoot = vi.fn().mockReturnValue('thread-1');
   const event = {
     type: 'bridge.fusion_model' as const,
-    data: { model: 'model-a', role: 'judge', attachmentGeneration: 1 },
+    data: { model: 'model-a', role: 'judge', attachmentGeneration: 1, suppressOutput: false },
   };
 
   beforeEach(() => {
@@ -63,5 +63,11 @@ describe('Fusion notice delivery', () => {
     manager.listModels.mockResolvedValue([]);
     await sendFusionNotice('ch', event, manager, adapter, threadRoot);
     expect(adapter.sendMessage).toHaveBeenCalledWith('ch', 'Fusion is using **Hidden Model** for review.', { threadRootId: 'thread-1' });
+  });
+
+  it('keeps queued notices silent after their originating unattended turn ends', async () => {
+    await sendFusionNotice('ch', { ...event, data: { ...event.data, suppressOutput: true } }, manager, adapter, threadRoot);
+    expect(adapter.sendMessage).not.toHaveBeenCalled();
+    expect(manager.listModels).not.toHaveBeenCalled();
   });
 });

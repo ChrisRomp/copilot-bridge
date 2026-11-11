@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionManager } from './session-manager.js';
-import type { CopilotBridge } from './bridge.js';
+import { CopilotBridge } from './bridge.js';
+import { CopilotSession } from '@github/copilot-sdk';
 import { FusionSelectionError } from './fusion.js';
 import { clearChannelSession, getChannelPrefs, setChannelPrefs } from '../state/store.js';
 
@@ -18,6 +19,12 @@ vi.mock('../state/store.js', async importOriginal => ({
   getChannelPrefs: vi.fn().mockResolvedValue(null),
   setChannelPrefs: vi.fn().mockResolvedValue(undefined),
   clearChannelSession: vi.fn().mockResolvedValue(undefined),
+  getChannelSession: vi.fn().mockResolvedValue('session-1'),
+}));
+vi.mock('node:fs', async importOriginal => ({
+  ...await importOriginal<typeof import('node:fs')>(),
+  existsSync: vi.fn().mockReturnValue(false),
+  readFileSync: vi.fn(() => { throw Object.assign(new Error('missing test file'), { code: 'ENOENT' }); }),
 }));
 
 const basePrefs = {
@@ -38,7 +45,7 @@ async function settleWithin<T>(promise: Promise<T>, ms = 1000): Promise<T> {
 }
 
 describe('SessionManager Fusion model switching', () => {
-  let bridge: { switchSessionModel: ReturnType<typeof vi.fn>; listModels: ReturnType<typeof vi.fn>; destroySession: ReturnType<typeof vi.fn>; getSession: ReturnType<typeof vi.fn> };
+  let bridge: { switchSessionModel: ReturnType<typeof vi.fn>; listModels: ReturnType<typeof vi.fn>; destroySession: ReturnType<typeof vi.fn>; getSession: ReturnType<typeof vi.fn>; getFusionMetadata: ReturnType<typeof vi.fn> };
   let manager: SessionManager;
 
   beforeEach(() => {
@@ -49,6 +56,9 @@ describe('SessionManager Fusion model switching', () => {
       listModels: vi.fn().mockResolvedValue([]),
       destroySession: vi.fn().mockResolvedValue(undefined),
       getSession: vi.fn().mockReturnValue(undefined),
+      getFusionMetadata: vi.fn().mockResolvedValue({ defaultTier: 'route-h', tiers: [
+        { id: 'route-h', fusionTier: 'high', type: 'fusion', status: { enabled: true } },
+      ] }),
     };
     manager = new SessionManager(bridge as unknown as CopilotBridge);
     vi.spyOn(manager, 'ensureSession').mockResolvedValue({ sessionId: 'session-1', isNew: false });
@@ -112,5 +122,83 @@ describe('SessionManager Fusion model switching', () => {
     expect((manager as any).channelSessions.has('ch')).toBe(false);
     expect(clearChannelSession).toHaveBeenLastCalledWith('ch');
     expect(setChannelPrefs).toHaveBeenLastCalledWith('ch', { model: 'local-model', provider: 'local' });
+  });
+
+  it.each(['prevalidation', 'selection'] as const)('reattaches a stale Fusion command session during %s', async stage => {
+    vi.spyOn(manager, 'getEffectivePrefs').mockResolvedValue({ ...basePrefs });
+    manager['channelSessions'].set('ch', 'session-1');
+    bridge.getSession.mockReturnValue({ sessionId: 'session-1' });
+    manager['attachSession'] = vi.fn<typeof manager['attachSession']>().mockResolvedValue(undefined);
+    const select = vi.spyOn(manager['fusion'], 'select').mockResolvedValue({ status: 'applied', preference: 'high' });
+    const missing = new Error('Session not found for sessionId: session-1');
+    if (stage === 'prevalidation') bridge.getFusionMetadata.mockRejectedValueOnce(missing);
+    else select.mockRejectedValueOnce(missing);
+
+    await expect(manager.selectFusion('ch', 'high')).resolves.toMatchObject({ preference: 'high' });
+    expect(manager['attachSession']).toHaveBeenCalledWith('ch', 'session-1', true);
+    expect(bridge.destroySession).toHaveBeenCalledWith('session-1');
+  });
+
+  it('does not retry a Fusion command with a policy or uncertain rollback failure', async () => {
+    vi.spyOn(manager, 'getEffectivePrefs').mockResolvedValue({ ...basePrefs });
+    manager['attachSession'] = vi.fn<typeof manager['attachSession']>().mockResolvedValue(undefined);
+    const failure = new FusionSelectionError('Rollback failed: Session not found');
+    const select = vi.spyOn(manager['fusion'], 'select').mockRejectedValue(failure);
+    await expect(manager.selectFusion('ch', 'high')).rejects.toBe(failure);
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(manager['attachSession']).not.toHaveBeenCalled();
+    expect(bridge.destroySession).not.toHaveBeenCalled();
+  });
+});
+
+describe('Fusion post-resume probe recovery', () => {
+  let manager: SessionManager;
+  let bridge: CopilotBridge;
+  let session: CopilotSession;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    bridge = new CopilotBridge();
+    manager = new SessionManager(bridge);
+    session = Object.create(CopilotSession.prototype, { sessionId: { value: 'session-1' } });
+    vi.spyOn(bridge, 'getSession').mockReturnValue(undefined);
+    vi.spyOn(bridge, 'resumeSession').mockResolvedValue(session);
+    vi.spyOn(bridge, 'destroySession').mockResolvedValue(undefined);
+    vi.spyOn(bridge, 'listModels').mockResolvedValue([]);
+    vi.spyOn(manager, 'getEffectivePrefs').mockResolvedValue({ ...basePrefs });
+    manager['resolveWorkingDirectory'] = vi.fn().mockResolvedValue('/virtual/fusion-resume-test');
+    manager['buildCustomTools'] = vi.fn().mockResolvedValue([]);
+    manager['resolveMcpServers'] = vi.fn().mockReturnValue({});
+    manager['resolveHooks'] = vi.fn().mockResolvedValue(undefined);
+    manager['buildSystemMessage'] = vi.fn().mockReturnValue({ mode: 'customize' });
+    manager['initializeRuntimePermissions'] = vi.fn().mockResolvedValue(undefined);
+    manager['attachSessionEvents'] = vi.fn();
+    manager['createNewSession'] = vi.fn().mockResolvedValue('replacement');
+  });
+
+  it.each(['ensure', 'reload'] as const)('%s does not replace history when repeated probes fail after successful resumes', async operation => {
+    vi.spyOn(manager['fusion'], 'prepare').mockRejectedValue(new Error('Session not found during model probe'));
+    const attempt = operation === 'ensure' ? manager.ensureSession('ch') : manager.reloadSession('ch');
+    await expect(attempt).rejects.toThrow('probe');
+    expect(bridge.resumeSession).toHaveBeenCalledTimes(2);
+    expect(clearChannelSession).not.toHaveBeenCalled();
+    expect(manager['createNewSession']).not.toHaveBeenCalled();
+  });
+
+  it('recovers a transient post-resume missing-session probe by resuming the same history again', async () => {
+    vi.spyOn(manager['fusion'], 'prepare')
+      .mockRejectedValueOnce(new Error('Session not found during model probe'))
+      .mockResolvedValue(undefined);
+    await expect(manager.ensureSession('ch')).resolves.toEqual({ sessionId: 'session-1', isNew: false });
+    expect(bridge.resumeSession).toHaveBeenCalledTimes(2);
+    expect(clearChannelSession).not.toHaveBeenCalled();
+  });
+
+  it('allows replacement only when the retried resume itself confirms missing history', async () => {
+    vi.spyOn(manager['fusion'], 'prepare').mockRejectedValue(new Error('Session not found during model probe'));
+    vi.mocked(bridge.resumeSession).mockResolvedValueOnce(session).mockRejectedValueOnce(new Error('Session not found'));
+    await expect(manager.ensureSession('ch')).resolves.toEqual({ sessionId: 'replacement', isNew: true });
+    expect(clearChannelSession).toHaveBeenCalledWith('ch');
+    expect(bridge.resumeSession).toHaveBeenCalledTimes(2);
   });
 });

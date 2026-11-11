@@ -219,11 +219,11 @@ Set `"model": "auto"` (or `"fusion"`) and optionally `"fusionTier": "high"` in `
 
 Tier changes may be **pending** until a successful turn. `/status` shows, for example, **Model: Copilot Fusion (Standard)** with **Pending tier: High**, separately from the concrete model executing work. `/config` shows saved intent and its source. Accepted intent and its rollback history survive `/new` and restart. A failed new activation restores the prior tier preference and reports the failure; it is not retried automatically. If a restart loses the outcome of an already-attempted change, the bridge restores the previous preference conservatively and notifies the user. If that previous tier has been revoked, recovery uses available provider-default routing while preserving inherited preferences.
 
-Model-use notices appear even with verbose off: for example, Fusion using one model for work and another for review. They do not replace the answer stream. Quiet scheduled tasks log them instead; streamer mode redacts hidden and unknown model identities. High/Max internal drafts and review messages are withheld until the SDK marks an authoritative committed answer. Standard retains normal streaming.
+Model-use notices appear even with verbose off: for example, Fusion using one model for work and another for review. They do not replace the answer stream. Quiet scheduled tasks log them instead, including delayed notices delivered after the task ends; streamer mode redacts hidden and unknown model identities. High/Max internal drafts and review messages are withheld until the SDK marks an authoritative committed answer. Standard retains normal streaming.
 
 `/reasoning` remains model effort, not Fusion tier. Fusion manages effort and context; select a fixed model to change those controls. Existing fixed-model effort/context preferences are preserved. Aggregate Fusion context percentages are not shown because they are not a reliable single-model measurement.
 
-Configured `fallbackModels` still apply to eligible inference failures, but not tier-policy/discovery failures, even when Fusion is reached partway through a fallback chain. A stale backend detected during pre-send Fusion discovery retries by reattaching the same session rather than switching models. Fusion support does not enable the separate native fixed-model-to-Auto recovery feature or alter assisted-permission policy.
+Configured `fallbackModels` still apply to eligible inference failures, but not tier-policy/discovery failures, even when Fusion is reached partway through a fallback chain. A failed send-time Fusion fallback releases the failed attachment and restores the original selection, including configuration inheritance. BYOK models named `auto` or `fusion` retain their provider behavior. Stale backends detected during Fusion commands or preparation retry by reattaching the same session; probe failures after a successful resume do not justify replacing conversation history. Fusion support does not enable the separate native fixed-model-to-Auto recovery feature or alter assisted-permission policy.
 
 ### SDK compatibility and live checks
 
@@ -238,6 +238,8 @@ COPILOT_BRIDGE_FUSION_LIVE=1 npx vitest run src/core/fusion.integration.test.ts
 Add `COPILOT_BRIDGE_FUSION_INFERENCE=1` to exercise real Standard/High/Max turns and committed output/model notices. These checks require the operator's existing Copilot authentication, consume inference quota when enabled, and only exercise tiers the account currently permits. They do not change production channel models, CLI settings, or permissions. The suite cleans up its own temporary workspaces, database, and processes. Ordinary CI does not prove live account policy or provider behavior.
 
 Custom state backends must round-trip the optional `fusionTier` and `fusionTransition` fields in `ChannelPrefs`, including `fusionTransition.previousOverride` (null restores inheritance). `setChannelPrefs` must treat `model: null` as clearing the model override, while omission leaves it unchanged. The bridge verifies persistence rather than silently dropping accepted intent. Older transitions without `previousOverride` retain their recorded previous preference.
+
+The SQLite backend logs and ignores malformed stored Fusion fields without blocking other preference reads, so `/model <fixed>` and `/fusion default` remain usable for recovery. Invalid writes are still rejected.
 
 ## Permissions
 

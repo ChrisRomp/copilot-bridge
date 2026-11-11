@@ -15,7 +15,7 @@ export class FusionSelectionError extends Error {
 export function isFusionPolicyFailure(error: unknown): boolean {
   if (error instanceof FusionSelectionError) return true;
   const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
-  return /(?:auto|fusion)[-_ ]tier|tier.{0,80}(?:disabled|unavailable|unsupported|not available|not supported)|(?:auto|fusion).{0,80}(?:disabled by|policy rejected|not permitted)/i.test(message);
+  return /\b(?:auto|fusion)[-_ ]tier\b|\btier\b.{0,80}\b(?:disabled|unavailable|unsupported|not available|not supported)\b|\b(?:auto|fusion)\b.{0,80}\b(?:disabled by|policy rejected|not permitted)\b/i.test(message);
 }
 
 export function isFusionModel(model: string | null | undefined, provider?: string | null): boolean {
@@ -117,6 +117,11 @@ export interface FusionModelNotice {
   model: string;
   role?: string;
   fallback?: boolean;
+}
+
+export interface FusionNoticeContext {
+  attachmentGeneration: number;
+  suppressOutput: boolean;
 }
 
 /** Tracks actual root execution and hides uncommitted/review output. */

@@ -322,13 +322,14 @@ export async function tryWithFallback<T>(
   configFallbacks: string[] | undefined,
   action: (model: string) => Promise<T>,
   byokPrefixes?: string[],
+  provider?: string | null,
 ): Promise<{ result: T; usedModel: string; didFallback: boolean }> {
   // Try primary model first
   try {
     const result = await action(primaryModel);
     return { result, usedModel: primaryModel, didFallback: false };
   } catch (err: any) {
-    if (!isModelError(err, isFusionModel(primaryModel))) {
+    if (!isModelError(err, isFusionModel(primaryModel, provider))) {
       throw err; // Not a model error — don't try fallbacks
     }
     log.warn(`Model "${primaryModel}" failed: ${err.message ?? err}. Trying fallbacks...`);
@@ -352,7 +353,7 @@ export async function tryWithFallback<T>(
         return { result, usedModel: fallbackModel, didFallback: true };
       } catch (fallbackErr: any) {
         if (fallbackErr instanceof FusionSelectionError) throw fallbackErr;
-        if (isFusionModel(fallbackModel) && isFusionPolicyFailure(fallbackErr)) {
+        if (isFusionModel(fallbackModel, provider) && isFusionPolicyFailure(fallbackErr)) {
           throw new FusionSelectionError(`Fusion routing could not proceed: ${fallbackErr?.message ?? fallbackErr}`, { cause: fallbackErr });
         }
         log.warn(`Fallback model "${fallbackModel}" also failed: ${fallbackErr.message ?? fallbackErr}`);

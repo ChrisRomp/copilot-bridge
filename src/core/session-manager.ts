@@ -33,7 +33,7 @@ import { buildRuntimePermissionPolicy } from './permission-policy.js';
 import { formatPermissionPolicyWarnings } from './stream-formatter.js';
 import { SHELL_WRAPPERS } from './permission-patterns.js';
 import { FusionManager } from './fusion-manager.js';
-import { FusionSelectionError, isFusionModel, isFusionPolicyFailure, resolveFusionTier, type FusionView, type FusionSelectionResult } from './fusion.js';
+import { FusionSelectionError, isFusionModel, isFusionPolicyFailure, resolveFusionTier, type FusionView, type FusionSelectionResult, type FusionNoticeContext } from './fusion.js';
 import { isSessionNotFoundError, PermissionSynchronizationError } from './session-errors.js';
 export { isSessionNotFoundError } from './session-errors.js';
 import { isBridgePermissionMode, type BridgePermissionMode } from '../types.js';
@@ -585,15 +585,22 @@ export class SessionManager {
 
   constructor(bridge: CopilotBridge) {
     this.bridge = bridge;
-    this.fusion = new FusionManager(bridge, channelId => this.getEffectivePrefs(channelId), (sessionId, channelId, content) => {
+    this.fusion = new FusionManager(bridge, channelId => this.getEffectivePrefs(channelId), (sessionId, channelId, content, context) => {
       log.info(`Fusion: ${content}`);
       this.eventHandler?.(sessionId, channelId, {
         type: 'bridge.fusion_notice',
-        data: { content, attachmentGeneration: this.permissionAttachmentGenerations.get(channelId) ?? 0 },
+        data: { content, ...context },
       });
-    });
+    }, channelId => this.getFusionNoticeContext(channelId));
     this.mcpServers = loadMcpServers();
     ensureWorkspacesDir();
+  }
+
+  private getFusionNoticeContext(channelId: string): FusionNoticeContext {
+    return {
+      attachmentGeneration: this.permissionAttachmentGenerations.get(channelId) ?? 0,
+      suppressOutput: isQuiet(channelId) || this.isUnattendedExecution(channelId),
+    };
   }
 
   /** Best-effort session destroy with logging. */
@@ -1042,6 +1049,7 @@ export class SessionManager {
       if (isModelError(err)) {
         log.info(`Model error detected — switching to fallback model for channel ${channelId}...`);
         const prefs = await this.getEffectivePrefs(channelId);
+        const originalPrefs = await getChannelPrefs(channelId);
         const configChannel = await getChannelConfig(channelId);
         const configFallbacks = configChannel.fallbackModels ?? getConfig().defaults.fallbackModels;
 
@@ -1075,10 +1083,34 @@ export class SessionManager {
             });
             return messageId;
           } catch (fallbackErr: any) {
-            if (fallbackErr instanceof FusionSelectionError) throw fallbackErr;
             const failedSelection = await this.getEffectivePrefs(channelId);
-            if (isFusionModel(failedSelection.model, failedSelection.provider) && isFusionPolicyFailure(fallbackErr)) {
-              throw new FusionSelectionError(`Fusion routing could not proceed: ${fallbackErr?.message ?? fallbackErr}`, { cause: fallbackErr });
+            const fusionError = fallbackErr instanceof FusionSelectionError ? fallbackErr
+              : isFusionModel(failedSelection.model, failedSelection.provider) && isFusionPolicyFailure(fallbackErr)
+                ? new FusionSelectionError(`Fusion routing could not proceed: ${fallbackErr?.message ?? fallbackErr}`, { cause: fallbackErr })
+                : undefined;
+            if (fusionError) {
+              this.advancePermissionAttachment(channelId);
+              const recoveryErrors: unknown[] = [];
+              try { await this.releaseChannelSession(channelId); }
+              catch (error) {
+                log.error('Could not release the failed fallback session:', error);
+                recoveryErrors.push(error);
+              }
+              try {
+                await setChannelPrefs(channelId, {
+                  model: originalPrefs?.model ?? null, provider: originalPrefs?.provider ?? null,
+                  fusionTier: originalPrefs?.fusionTier ?? null, fusionTransition: originalPrefs?.fusionTransition ?? null,
+                });
+              } catch (error) {
+                log.error('Could not restore preferences after Fusion fallback failed:', error);
+                recoveryErrors.push(error);
+              }
+              if (recoveryErrors.length) {
+                throw new FusionSelectionError('Fusion fallback failed and its previous selection could not be fully restored.', {
+                  cause: new AggregateError([fusionError, ...recoveryErrors]),
+                });
+              }
+              throw fusionError;
             }
             log.warn(`Fallback model "${fallbackModel}" also failed on send: ${fallbackErr?.message ?? fallbackErr}`);
             lastError = fallbackErr;
@@ -1367,19 +1399,23 @@ export class SessionManager {
 
   async selectFusion(channelId: string, preference?: FusionPreference): Promise<FusionSelectionResult> {
     const prefs = await this.getEffectivePrefs(channelId);
-    if (preference !== undefined) {
-      const currentId = this.channelSessions.get(channelId);
-      const metadata = await this.bridge.getFusionMetadata(!prefs.provider && currentId && this.bridge.getSession(currentId) ? currentId : undefined, true);
-      resolveFusionTier(metadata, preference);
-    }
+    const select = () => this.withSessionRetry(channelId, async sessionId => {
+      if (preference !== undefined) {
+        resolveFusionTier(await this.bridge.getFusionMetadata(sessionId, true), preference);
+      }
+      return this.fusion.select(channelId, preference);
+    }, true, true);
     if (prefs.provider) {
+      if (preference !== undefined) {
+        resolveFusionTier(await this.bridge.getFusionMetadata(undefined, true), preference);
+      }
       // Like any BYOK → Copilot model switch, this needs a fresh session.
       // On failure, drop the new Copilot session too so the restored BYOK
       // preference cannot keep using it.
       await setChannelPrefs(channelId, { model: 'auto', provider: null });
       try {
         await this.newSession(channelId, true);
-        return await this.fusion.select(channelId, preference);
+        return await select();
       } catch (error) {
         log.warn('Provider switch to Fusion failed, reverting prefs:', error);
         this.advancePermissionAttachment(channelId);
@@ -1390,8 +1426,7 @@ export class SessionManager {
         throw error;
       }
     }
-    await this.ensureSession(channelId, true);
-    return this.fusion.select(channelId, preference);
+    return select();
   }
 
   /** Check if two models on the same provider have different wireApi settings. */
@@ -2380,6 +2415,7 @@ export class SessionManager {
         configFallbacks,
         createWithModel,
         byokPrefixes,
+        sdkProvider ? providerName : undefined,
       );
       session = result.result;
       usedModel = result.usedModel;
@@ -2420,7 +2456,7 @@ export class SessionManager {
           );
         };
         const result = await tryWithFallback(
-          prefs.model, availableModels, configFallbacks, createWithModelNoAgent, byokPrefixes,
+          prefs.model, availableModels, configFallbacks, createWithModelNoAgent, byokPrefixes, sdkProvider ? providerName : undefined,
         );
         session = result.result;
         usedModel = result.usedModel;
@@ -2553,7 +2589,7 @@ export class SessionManager {
     this.channelSessions.set(channelId, sessionId);
     this.sessionChannels.set(sessionId, channelId);
     this.attachSessionEvents(session, channelId);
-    if (!deferFusion) await this.fusion.prepare(channelId);
+    if (!deferFusion) await this.prepareResumedFusion(channelId, sessionId);
 
     // Cache context window tokens for /context display (best-effort, non-blocking)
     const resumeModel = prefs.model;
@@ -2564,6 +2600,26 @@ export class SessionManager {
         await this.cacheContextWindowTokens(channelId, resumeModel, models);
       }
     }).catch((err) => { log.debug("listModels (context cache) failed:", err); });
+  }
+
+  private async prepareResumedFusion(channelId: string, sessionId: string): Promise<void> {
+    try {
+      await this.fusion.prepare(channelId);
+    } catch (error) {
+      if (!isSessionNotFoundError(error)) throw error;
+      log.warn(`Fusion probe failed after resuming ${sessionId}; reattaching the same history:`, error);
+      this.sessionUnsubscribes.get(sessionId)?.();
+      this.sessionUnsubscribes.delete(sessionId);
+      await this.safeDestroySession(sessionId);
+      // Only a missing-history result from resume itself may authorize replacement.
+      await this.attachSession(channelId, sessionId, true);
+      try {
+        await this.fusion.prepare(channelId);
+      } catch (probeError) {
+        if (!isSessionNotFoundError(probeError)) throw probeError;
+        throw new FusionSelectionError(`Fusion probe failed after a successful session resume: ${probeError instanceof Error ? probeError.message : String(probeError)}`, { cause: probeError });
+      }
+    }
   }
 
   /**
@@ -3480,21 +3536,23 @@ export class SessionManager {
 
   private attachSessionEvents(session: CopilotSession, channelId: string): void {
     this.fusion.attach(channelId, session);
+    const attachmentGeneration = this.permissionAttachmentGenerations.get(channelId) ?? 0;
     const permissions = new AssistedPermissionTracker();
     const unsub = session.on((event: any) => {
+      const noticeContext = { ...this.getFusionNoticeContext(channelId), attachmentGeneration };
       const routing = this.fusion.process(channelId, session, event);
       if (routing.error) {
         log.error(routing.error);
         this.eventHandler?.(session.sessionId, channelId, {
           type: 'bridge.fusion_notice',
-          data: { content: routing.error, attachmentGeneration: this.permissionAttachmentGenerations.get(channelId) ?? 0 },
+          data: { content: routing.error, ...noticeContext },
         });
       }
       if (routing.notice) {
         log.info(`Fusion is using ${routing.notice.model}${routing.notice.role ? ` for ${routing.notice.role}` : ''}`);
         this.eventHandler?.(session.sessionId, channelId, {
           type: 'bridge.fusion_model',
-          data: { ...routing.notice, attachmentGeneration: this.permissionAttachmentGenerations.get(channelId) ?? 0 },
+          data: { ...routing.notice, ...noticeContext },
         });
       }
       if (routing.suppress) return;

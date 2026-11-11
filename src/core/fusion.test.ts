@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionEvent } from '@github/copilot-sdk';
-import { FusionEventTracker, FusionSelectionError, fusionModelLabel, fusionPendingLabel, isFusionModel, parseFusionTransition, resolveFusionTier, type FusionMetadata } from './fusion.js';
+import { FusionEventTracker, FusionSelectionError, fusionModelLabel, fusionPendingLabel, isFusionModel, isFusionPolicyFailure, parseFusionTransition, resolveFusionTier, type FusionMetadata } from './fusion.js';
 
 const metadata: FusionMetadata = {
   defaultTier: 'route-h',
@@ -13,6 +13,10 @@ const metadata: FusionMetadata = {
 };
 
 describe('Fusion routing preferences', () => {
+  it.each(['Frontier model is temporarily unavailable', 'autopilot mode is not permitted'])('does not classify unrelated keywords as Fusion policy: %s', message => {
+    expect(isFusionPolicyFailure(new Error(message))).toBe(false);
+  });
+
   it('rejects invalid prior overrides rather than silently losing rollback intent', () => {
     expect(() => parseFusionTransition(JSON.stringify({
       id: 'transition-1', sessionId: 'session-1', requested: 'high', previous: 'standard',

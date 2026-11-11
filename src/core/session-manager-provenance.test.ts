@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CopilotSession, MessageOptions, SessionEvent } from '@github/copilot-sdk';
 import { CopilotBridge } from './bridge.js';
 import { SessionManager } from './session-manager.js';
-import { setChannelPrefs } from '../state/store.js';
+import { setChannelPrefs, getChannelPrefs, clearChannelSession } from '../state/store.js';
 import { FusionSelectionError } from './fusion.js';
 import { getConfig } from '../config.js';
 import { tryWithFallback } from './model-fallback.js';
+import { enterQuietMode } from './quiet-mode.js';
 
 vi.mock('./bridge.js', () => ({
   CopilotBridge: class {
@@ -27,6 +28,8 @@ vi.mock('../config.js', () => ({
 }));
 vi.mock('../state/store.js', () => ({
   setChannelPrefs: vi.fn<typeof setChannelPrefs>().mockResolvedValue(undefined),
+  getChannelPrefs: vi.fn<typeof getChannelPrefs>().mockResolvedValue(null),
+  clearChannelSession: vi.fn<typeof clearChannelSession>().mockResolvedValue(undefined),
 }));
 vi.mock('node:fs', async importOriginal => ({
   ...await importOriginal<typeof import('node:fs')>(),
@@ -71,6 +74,7 @@ describe('SessionManager message provenance', () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     vi.mocked(setChannelPrefs).mockResolvedValue(undefined);
+    vi.mocked(getChannelPrefs).mockResolvedValue(null);
     bridge = new CopilotBridge();
     manager = new SessionManager(bridge);
     original = fakeSession('original');
@@ -123,6 +127,24 @@ describe('SessionManager message provenance', () => {
     expect(humanOptions).toEqual({ prompt: 'Human follow-up', attachments });
     expect(humanOptions).not.toHaveProperty('source');
     expect(manager['lastMessageUserIds'].get('channel')).toBe('human-user');
+  });
+
+  it.each(['quiet', 'unattended'])('stamps routed-model events with their originating %s context', async mode => {
+    const events = vi.fn();
+    manager.onSessionEvent(events);
+    manager['attachSessionEvents'](original.session, 'channel');
+    const exitQuiet = mode === 'quiet' ? enterQuietMode('channel') : () => {};
+    if (mode === 'unattended') manager['unattendedExecutions'].set('channel', { failedAbort: false });
+    try {
+      original.emit({ ...eventMetadata, type: 'session.auto_mode_resolved', data: { chosenModel: 'model-a' } });
+    } finally {
+      exitQuiet();
+      manager['unattendedExecutions'].delete('channel');
+    }
+    expect(events).toHaveBeenCalledWith('original', 'channel', {
+      type: 'bridge.fusion_model',
+      data: expect.objectContaining({ model: 'model-a', suppressOutput: true, attachmentGeneration: 0 }),
+    });
   });
 
   it('preserves source and attachments through every model-fallback send attempt', async () => {
@@ -189,17 +211,21 @@ describe('SessionManager message provenance', () => {
     expect(setChannelPrefs).not.toHaveBeenCalled();
   });
 
-  it.each(['prepare', 'send'] as const)('stops send-time fallback after a Fusion %s failure', async failurePoint => {
+  it.each([
+    { failurePoint: 'prepare', savedModel: null },
+    { failurePoint: 'send', savedModel: 'fixed-primary' },
+  ] as const)('restores the original override after Fusion $failurePoint fallback fails', async ({ failurePoint, savedModel }) => {
     const previousConfig = getConfig();
     vi.mocked(getConfig).mockReturnValue({
       ...previousConfig, defaults: { ...previousConfig.defaults, fallbackModels: ['auto', 'fixed-next'] },
     });
     try {
       let model = 'fixed-primary';
+      vi.mocked(getChannelPrefs).mockResolvedValue(savedModel ? { model: savedModel } : null);
       const effectivePrefs = await manager.getEffectivePrefs('channel');
       vi.mocked(manager.getEffectivePrefs).mockImplementation(async () => ({ ...effectivePrefs, model }));
       vi.mocked(setChannelPrefs).mockImplementation(async (_channel, change) => {
-        if (change.model != null) model = change.model;
+        if (change.model !== undefined) model = change.model ?? 'fixed-primary';
       });
       const fallback = fakeSession('fallback');
       original.send.mockRejectedValue(new Error('Model is at capacity'));
@@ -208,7 +234,11 @@ describe('SessionManager message provenance', () => {
         return 'unexpected-fixed-fallback';
       });
       vi.mocked(bridge.getSession).mockImplementation(id => id === 'original' ? original.session : fallback.session);
-      vi.spyOn(manager, 'newSession').mockResolvedValue('fallback');
+      vi.spyOn(manager, 'newSession').mockImplementation(async () => {
+        manager['channelSessions'].set('channel', 'fallback');
+        manager['sessionChannels'].set('fallback', 'channel');
+        return 'fallback';
+      });
       vi.spyOn(manager['fusion'], 'prepare').mockImplementation(async () => {
         if (model === 'auto' && failurePoint === 'prepare') throw new FusionSelectionError('Fusion discovery failed');
       });
@@ -216,6 +246,13 @@ describe('SessionManager message provenance', () => {
       await expect(manager.sendMessage('channel', 'Question')).rejects.toThrow(/Fusion discovery|Auto tier/);
       expect(manager.newSession).toHaveBeenCalledTimes(1);
       expect(setChannelPrefs).not.toHaveBeenCalledWith('channel', { model: 'fixed-next' });
+      expect(setChannelPrefs).toHaveBeenLastCalledWith('channel', {
+        model: savedModel, provider: null, fusionTier: null, fusionTransition: null,
+      });
+      expect(bridge.destroySession).toHaveBeenCalledWith('fallback');
+      expect(clearChannelSession).toHaveBeenCalledWith('channel');
+      expect(manager['channelSessions'].has('channel')).toBe(false);
+      expect(model).toBe('fixed-primary');
     } finally {
       vi.mocked(getConfig).mockReturnValue(previousConfig);
     }

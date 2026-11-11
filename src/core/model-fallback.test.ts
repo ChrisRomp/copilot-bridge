@@ -41,6 +41,24 @@ describe('Fusion error boundaries', () => {
     expect(attempts).toEqual(['fixed-a', 'auto']);
   });
 
+  it.each(['auto', 'fusion'])('treats BYOK %s as a provider model throughout fallback', async modelName => {
+    const capacity = Object.assign(new Error('Service tier unavailable'), { status: 503 });
+    const primaryAttempts: string[] = [];
+    await expect(tryWithFallback(modelName, [modelName, 'backup'], ['backup'], async model => {
+      primaryAttempts.push(model);
+      if (model === modelName) throw capacity;
+      return model;
+    }, ['local'], 'local')).resolves.toMatchObject({ usedModel: 'backup' });
+    expect(primaryAttempts).toEqual([modelName, 'backup']);
+    const fallbackAttempts: string[] = [];
+    await expect(tryWithFallback('primary', ['primary', modelName, 'backup'], [modelName, 'backup'], async model => {
+      fallbackAttempts.push(model);
+      if (model !== 'backup') throw capacity;
+      return model;
+    }, ['local'], 'local')).resolves.toMatchObject({ usedModel: 'backup' });
+    expect(fallbackAttempts).toEqual(['primary', modelName, 'backup']);
+  });
+
   it('still recognizes genuine rate limits for the configured inference fallback', () => {
     expect(isModelError(new Error('Rate limit exceeded'))).toBe(true);
   });

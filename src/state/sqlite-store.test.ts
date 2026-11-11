@@ -148,6 +148,31 @@ describe('SqliteStateStore', () => {
       });
     });
 
+    it.each(['retired-tier', 'high'])('isolates corrupt Fusion fields independently with stored tier %s', async tier => {
+      await store.setChannelPrefs('corrupt-fusion', { model: 'auto', permissionMode: 'interactive', verbose: true });
+      const db = new Database(path.join(tmpDir, 'test.db'));
+      try {
+        db.prepare('UPDATE channel_prefs SET fusion_tier = ?, fusion_transition = ? WHERE channel_id = ?')
+          .run(tier, '{invalid-json', 'corrupt-fusion');
+        await expect(store.getChannelPrefs('corrupt-fusion')).resolves.toMatchObject({
+          model: 'auto', permissionMode: 'interactive', verbose: true, fusionTier: tier === 'high' ? 'high' : null, fusionTransition: null,
+        });
+        await store.setChannelPrefs('corrupt-fusion', { model: 'fixed', fusionTier: 'default', fusionTransition: null });
+        expect(await store.getChannelPrefs('corrupt-fusion')).toMatchObject({ model: 'fixed', fusionTier: 'default' });
+      } finally {
+        db.close();
+      }
+    });
+
+    it('keeps Fusion write validation strict despite tolerating malformed stored fields', async () => {
+      await store.setChannelPrefs('strict-fusion', { fusionTier: 'high' });
+      // @ts-expect-error Simulate an untyped backend consumer.
+      await expect(store.setChannelPrefs('strict-fusion', { fusionTier: 'retired-tier' })).rejects.toThrow('Invalid Fusion tier');
+      // @ts-expect-error Simulate an incomplete transition from an untyped consumer.
+      await expect(store.setChannelPrefs('strict-fusion', { fusionTransition: { requested: 'high' } })).rejects.toThrow('Invalid stored Fusion transition');
+      expect((await store.getChannelPrefs('strict-fusion'))?.fusionTier).toBe('high');
+    });
+
     it('boolean fields round-trip correctly', async () => {
       await store.setChannelPrefs('ch1', { verbose: false, threadedReplies: true });
       const prefs = await store.getChannelPrefs('ch1');

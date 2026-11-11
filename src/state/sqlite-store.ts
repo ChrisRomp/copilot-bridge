@@ -431,8 +431,16 @@ export class SqliteStateStore implements StateStore {
       const elapsed = performance.now() - start;
       if (elapsed > SLOW_QUERY_MS) log.warn(`getChannelPrefs took ${elapsed.toFixed(0)}ms`);
       if (!row) return null;
-      if (row.fusion_tier != null && !isFusionPreference(row.fusion_tier)) {
-        throw new Error('Invalid stored Fusion tier');
+      let fusionTier: ChannelPrefs['fusionTier'] = null;
+      if (row.fusion_tier != null) {
+        if (isFusionPreference(row.fusion_tier)) fusionTier = row.fusion_tier;
+        else log.warn(`Ignoring invalid stored Fusion tier for channel ${channelId}; recovery commands remain available.`);
+      }
+      let fusionTransition: ChannelPrefs['fusionTransition'] = null;
+      try {
+        fusionTransition = parseFusionTransition(row.fusion_transition);
+      } catch (error) {
+        log.warn(`Ignoring invalid stored Fusion transition for channel ${channelId}; recovery commands remain available:`, error);
       }
       return {
         model: row.model ?? undefined,
@@ -443,8 +451,8 @@ export class SqliteStateStore implements StateStore {
         permissionMode: row.permission_mode ?? undefined,
         reasoningEffort: row.reasoning_effort ?? null,
         contextTier: row.context_tier ?? null,
-        fusionTier: row.fusion_tier ?? null,
-        fusionTransition: parseFusionTransition(row.fusion_transition),
+        fusionTier,
+        fusionTransition,
         sessionMode: row.session_mode ?? undefined,
         disabledSkills: row.disabled_skills ? safeParseStringArray(row.disabled_skills) : undefined,
       };
