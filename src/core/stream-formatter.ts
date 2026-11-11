@@ -94,7 +94,7 @@ export function formatEvent(event: any): FormattedEvent | null {
       const name = event.data?.agentDisplayName ?? event.data?.agentName ?? 'sub-agent';
       const err = event.data?.error ?? 'unknown error';
       return {
-        type: 'error',
+        type: 'status',
         content: `❌ **${name}** failed: ${err}`,
         verbose: false,
       };

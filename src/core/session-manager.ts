@@ -585,8 +585,9 @@ export class SessionManager {
   // create/cold resume. Native remembered approvals and managed policy are separate.
   private runtimePermissionStates = new Map<string, { signature: string; projected: boolean; warnings: string[] }>();
   private permissionUpdates = new Map<string, Promise<unknown>>();
+  private permissionPolicyRevisions = new Map<string, number>();
   private permissionAttachmentGenerations = new Map<string, number>();
-  private unattendedExecutions = new Map<string, symbol>();
+  private unattendedExecutions = new Map<string, { failedAbort: boolean }>();
   // Handler for send_file tool (set by index.ts, calls adapter.sendFile)
   private sendFileHandler: ((channelId: string, filePath: string, message?: string) => Promise<string>) | null = null;
   private getAdapterForChannel: ((channelId: string) => ChannelAdapter | null | Promise<ChannelAdapter | null>) | null = null;
@@ -621,12 +622,12 @@ export class SessionManager {
    * Wrap loaded hooks so that preToolUse "ask" decisions trigger the bridge's
    * interactive permission prompt instead of being ignored by the CLI.
    */
-  private wrapHooksWithAsk(hooks: SessionHooks | undefined, channelId: string, guardAssisted = false): SessionHooks | undefined {
-    if (!hooks?.onPreToolUse && !guardAssisted) return hooks;
+  private wrapHooksWithAsk(hooks: SessionHooks | undefined, channelId: string, guardShellTools = false): SessionHooks | undefined {
+    if (!hooks?.onPreToolUse && !guardShellTools) return hooks;
     const originalPreToolUse = hooks?.onPreToolUse;
 
     const wrappedPreToolUse = async (input: any, invocation: { sessionId: string }) => {
-      const shellTool = guardAssisted && ['bash', 'powershell', 'shell'].includes(input.toolName);
+      const shellTool = guardShellTools && ['bash', 'powershell', 'shell'].includes(input.toolName);
       const denyShell = (reason: string) => {
         log.warn(`Shell request denied by pre-tool hook on ${channelId}: ${reason}`);
         this.eventHandler?.(invocation.sessionId, channelId, {
@@ -634,15 +635,6 @@ export class SessionManager {
         });
         return { permissionDecision: 'deny' as const, permissionDecisionReason: reason };
       };
-      let guardShell = false;
-      if (shellTool) {
-        try {
-          guardShell = (await this.getEffectivePrefs(channelId)).permissionMode === 'assisted';
-        } catch (error) {
-          log.error('Could not load permission mode for the shell safety hook:', error);
-          return denyShell('Permission mode is unavailable; bridge safety checks could not run.');
-        }
-      }
       const checkShell = (args: unknown) => {
         if (typeof args === 'string') {
           try { args = JSON.parse(args); }
@@ -656,12 +648,12 @@ export class SessionManager {
         if (!command) return denyShell('Missing shell command; bridge safety checks could not run.');
         if (isHardDeny('shell', command)) return denyShell('Blocked by a bridge hardcoded safety rule.');
       };
-      if (guardShell) {
+      if (shellTool) {
         const blocked = checkShell(input.toolArgs);
         if (blocked) return blocked;
       }
       const result = await originalPreToolUse?.(input, invocation);
-      if (guardShell && result?.modifiedArgs !== undefined) {
+      if (shellTool && result?.modifiedArgs !== undefined) {
         const blocked = checkShell(result.modifiedArgs);
         if (blocked) return { ...result, ...blocked };
       }
@@ -1453,18 +1445,21 @@ export class SessionManager {
   }
 
   private async withPermissionUpdate<T>(channelId: string, action: () => Promise<T>): Promise<T> {
+    this.permissionPolicyRevisions.set(channelId, (this.permissionPolicyRevisions.get(channelId) ?? 0) + 1);
     const previous = this.permissionUpdates.get(channelId) ?? Promise.resolve();
     const update = previous.then(action, action);
     this.permissionUpdates.set(channelId, update);
     try {
       return await update;
     } finally {
+      this.permissionPolicyRevisions.set(channelId, (this.permissionPolicyRevisions.get(channelId) ?? 0) + 1);
       if (this.permissionUpdates.get(channelId) === update) this.permissionUpdates.delete(channelId);
     }
   }
 
   private advancePermissionAttachment(channelId: string): void {
     this.permissionAttachmentGenerations.set(channelId, (this.permissionAttachmentGenerations.get(channelId) ?? 0) + 1);
+    if (this.unattendedExecutions.get(channelId)?.failedAbort) this.unattendedExecutions.delete(channelId);
   }
 
   isCurrentPermissionAttachment(channelId: string, generation: number): boolean {
@@ -1535,6 +1530,7 @@ export class SessionManager {
       if (state.projected) {
         // Restore only the bridge-owned configured rule slot. Never reset
         // session/location approvals or replace an unknown path/URL manager.
+        state.signature = '';
         const restored = await this.bridge.configurePermissions(sessionId, {
           rules: { approved: [], denied: [] },
           hostPolicyPermissionHandler: false,
@@ -1598,10 +1594,11 @@ export class SessionManager {
     if (options?.temporary && mode !== 'autopilot') throw new Error('Only yolo can be enabled temporarily.');
     const activeId = this.channelSessions.get(channelId);
     if (!options?.temporary && mode !== 'assisted' && (!activeId || !this.bridge.getSession(activeId))) {
-      await setChannelPrefs(channelId, { permissionMode: mode });
-      this.permissionRecoveryRequired.delete(channelId);
-      this.yoloPreviousState.delete(channelId);
-      return;
+      return this.withPermissionUpdate(channelId, async () => {
+        await setChannelPrefs(channelId, { permissionMode: mode });
+        this.permissionRecoveryRequired.delete(channelId);
+        this.yoloPreviousState.delete(channelId);
+      });
     }
     await this.ensureSession(channelId);
     await this.withPermissionUpdate(channelId, async () => {
@@ -1848,6 +1845,7 @@ export class SessionManager {
       pending.resolve(allow ? { kind: 'approve-once' } : { kind: 'reject' });
     }
 
+    if (this.pendingPermissions.get(channelId) !== queue) return persistenceError ? 'failed' : 'applied';
     if (queue.length === 0) {
       this.pendingPermissions.delete(channelId);
     } else {
@@ -1969,11 +1967,16 @@ export class SessionManager {
   }
 
   /** Execution context, independent of quiet mode's output timeout. */
-  beginUnattendedExecution(channelId: string): () => void {
-    const execution = Symbol();
+  beginUnattendedExecution(channelId: string): { finish: () => void; retainUntilReplacement: () => void } {
+    const execution = { failedAbort: false };
     this.unattendedExecutions.set(channelId, execution);
-    return () => {
-      if (this.unattendedExecutions.get(channelId) === execution) this.unattendedExecutions.delete(channelId);
+    return {
+      finish: () => {
+        if (this.unattendedExecutions.get(channelId) === execution) this.unattendedExecutions.delete(channelId);
+      },
+      retainUntilReplacement: () => {
+        if (this.unattendedExecutions.get(channelId) === execution) execution.failedAbort = true;
+      },
     };
   }
 
@@ -3432,8 +3435,28 @@ export class SessionManager {
     request: PermissionRequest,
     invocation: Parameters<PermissionHandler>[1],
   ): Promise<Awaited<ReturnType<PermissionHandler>>> {
+    const attachment = this.permissionAttachmentGenerations.get(channelId) ?? 0;
+    const update = this.permissionUpdates.get(channelId);
+    if (update) {
+      try { await update; }
+      catch (error) {
+        log.warn('Permission request denied after a failed policy update:', error);
+        return { kind: 'reject', feedback: 'Permission policy update failed; retry after resolving the error.' };
+      }
+    }
+    const revision = this.permissionPolicyRevisions.get(channelId) ?? 0;
+    const revalidate = (): Awaited<ReturnType<PermissionHandler>> | ReturnType<typeof this.handlePermissionRequest> | undefined => {
+      if (!this.isCurrentPermissionAttachment(channelId, attachment)) {
+        return { kind: 'reject', feedback: 'The session attachment changed while checking permissions.' };
+      }
+      if (revision !== (this.permissionPolicyRevisions.get(channelId) ?? 0) || this.permissionUpdates.has(channelId)) {
+        return this.handlePermissionRequest(channelId, request, invocation);
+      }
+    };
     const prefs = await this.getEffectivePrefs(channelId);
     const hostDecision = (allow: boolean) => {
+      const updated = revalidate();
+      if (updated) return updated;
       const result = allow ? { kind: 'approve-once' as const } : { kind: 'reject' as const };
       return prefs.permissionMode === 'assisted'
         ? createAttributedPermissionResult(result, {
@@ -3528,6 +3551,8 @@ export class SessionManager {
     let assistedReason: string | undefined;
     if (prefs.permissionMode === 'assisted') {
       const unattended = await this.isPermissionUnattended(channelId);
+      const updated = revalidate();
+      if (updated) return updated;
       const decision = evaluateAssistedDecision(request, invocation, unattended);
       if (decision.kind !== 'prompt') {
         return createAttributedPermissionResult(
@@ -3544,6 +3569,8 @@ export class SessionManager {
     }
 
     // No rule matched and no assisted decision settled the request.
+    const updated = revalidate();
+    if (updated) return updated;
     return new Promise((resolve) => {
       const entry: PendingPermission = {
         sessionId: invocation.sessionId,

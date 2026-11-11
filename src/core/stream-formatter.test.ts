@@ -33,6 +33,12 @@ describe('formatPermissionPolicyWarnings', () => {
 });
 
 describe('formatEvent', () => {
+  it('surfaces a subagent failure without marking the parent turn as failed', () => {
+    const result = formatEvent({ type: 'subagent.failed', data: { agentName: 'worker', error: 'Request failed' } });
+    expect(result).toMatchObject({ type: 'status', verbose: false });
+    expect(result?.content).toContain('Request failed');
+  });
+
   describe('thinking/reasoning suppression', () => {
     it('returns null for assistant.reasoning events', () => {
       const event = {

@@ -179,6 +179,57 @@ describe('SessionManager assisted permissions', () => {
       });
     });
 
+    it('reinstalls assisted policy if clearing rules succeeded but its RPC response was lost', async () => {
+      const protectedPolicy = {
+        config: { rules: { approved: [], denied: [{ kind: 'shell', argument: 'touch' }] }, hostPolicyPermissionHandler: true },
+        warnings: [],
+      };
+      vi.mocked(buildRuntimePermissionPolicy).mockReturnValue(protectedPolicy);
+      let nativePolicy = {};
+      let loseClearResponse = true;
+      vi.mocked(bridge.configurePermissions).mockImplementation(async (_id, config) => {
+        nativePolicy = config;
+        if (config.hostPolicyPermissionHandler === false && loseClearResponse) {
+          loseClearResponse = false;
+          throw new Error('RPC response lost after clearing rules');
+        }
+        return { success: true };
+      });
+      await manager.setPermissionMode('channel-1', 'assisted');
+      await expect(manager.setPermissionMode('channel-1', 'interactive')).rejects.toThrow('RPC response lost');
+      expect(mode).toBe('assisted');
+      expect(nativeMode).toBe('assisted');
+      expect(nativePolicy).toEqual(protectedPolicy.config);
+      expect(bridge.configurePermissions).toHaveBeenCalledTimes(3);
+    });
+
+    it('re-evaluates an in-flight assisted approval after manual mode is applied', async () => {
+      mode = 'assisted';
+      let finishRules!: (result: null) => void;
+      vi.mocked(checkPermission).mockImplementationOnce(() => new Promise(resolve => { finishRules = resolve; }));
+      const request = manager['handlePermissionRequest']('channel-1', shellRequest, approveInvocation);
+      await vi.waitFor(() => expect(checkPermission).toHaveBeenCalled());
+
+      await manager.setPermissionMode('channel-1', 'interactive');
+      finishRules(null);
+      await vi.waitFor(() => expect(manager.hasPendingPermission('channel-1')).toBe(true));
+      expect(await manager.resolvePermission('channel-1', false)).toBe('applied');
+      expect(await request).toEqual({ kind: 'reject' });
+    });
+
+    it('does not use a stale yolo preference returned after switching to manual', async () => {
+      mode = 'autopilot';
+      let finishPrefs!: (value: Awaited<ReturnType<SessionManager['getEffectivePrefs']>>) => void;
+      vi.mocked(manager.getEffectivePrefs).mockImplementationOnce(() => new Promise(resolve => { finishPrefs = resolve; }));
+      const request = manager['handlePermissionRequest']('channel-1', shellRequest, approveInvocation);
+
+      await manager.setPermissionMode('channel-1', 'interactive');
+      finishPrefs({ ...prefs, permissionMode: 'autopilot' });
+      await vi.waitFor(() => expect(manager.hasPendingPermission('channel-1')).toBe(true));
+      await manager.resolvePermission('channel-1', false);
+      expect(await request).toEqual({ kind: 'reject' });
+    });
+
     it('reapplies policy to a newly created or cold-resumed session', async () => {
       manager['runtimePermissionStates'].clear();
       await manager['initializeRuntimePermissions']('channel-1', 'session-1', 'assisted');
@@ -200,6 +251,25 @@ describe('SessionManager assisted permissions', () => {
       expect(bridge.abortSession).toHaveBeenCalledWith('session-1');
       expect(bridge.destroySession).toHaveBeenCalledWith('session-1');
       expect(manager['runtimePermissionStates'].has('session-1')).toBe(false);
+    });
+
+    it('does not re-emit queued requests that were denied by a failed permission refresh', async () => {
+      mode = 'assisted';
+      vi.mocked(bridge.configurePermissions).mockRejectedValue(new Error('runtime unavailable'));
+      const events = vi.fn();
+      manager.onSessionEvent(events);
+      const first = vi.fn();
+      const next = vi.fn();
+      manager['pendingPermissions'].set('channel-1', [first, next].map(resolve => ({
+        channelId: 'channel-1', sessionId: 'session-1', toolName: 'shell',
+        toolInput: {}, commands: [], resolve, createdAt: Date.now(),
+      })));
+
+      expect(await manager.resolvePermission('channel-1', true, true)).toBe('failed');
+      expect(first).toHaveBeenCalledWith(expect.objectContaining({ kind: 'reject' }), 'host_policy');
+      expect(next).toHaveBeenCalledExactlyOnceWith({ kind: 'user-not-available' });
+      expect(manager.hasPendingPermission('channel-1')).toBe(false);
+      expect(events.mock.calls.some(([, , event]) => event.type === 'bridge.permission_request')).toBe(false);
     });
 
     it('uses the store-defined rule order, including global rules, for this channel', async () => {
@@ -533,7 +603,8 @@ describe('SessionManager assisted permissions', () => {
     expect(manager.hasPendingPermission('channel-1')).toBe(false);
   });
 
-  it('enforces hard denies before invoking workspace hooks for built-in shell tools', async () => {
+  it.each(['interactive', 'assisted', 'autopilot'])('enforces hard denies even while the persisted mode is %s', async mode => {
+    vi.mocked(manager.getEffectivePrefs).mockResolvedValue({ ...prefs, permissionMode: mode });
     const hook = vi.fn().mockResolvedValue({ permissionDecision: 'allow' });
     const wrapped = manager['wrapHooksWithAsk']({ onPreToolUse: hook }, 'channel-1', true)!;
     for (const toolArgs of [{ command: 'launchctl unload fake-service' }, '{"command":"launchctl unload fake-service"}']) {
@@ -574,7 +645,7 @@ describe('SessionManager assisted permissions', () => {
 
   it('keeps scheduled permissions and hook asks unattended after quiet output expires', async () => {
     vi.useFakeTimers();
-    const finish = manager.beginUnattendedExecution('channel-1');
+    const unattended = manager.beginUnattendedExecution('channel-1');
     const clearQuiet = enterQuietMode('channel-1');
     try {
       await vi.advanceTimersByTimeAsync(60_001);
@@ -587,12 +658,35 @@ describe('SessionManager assisted permissions', () => {
       expect(await wrapped.onPreToolUse!({ toolName: 'bash', toolArgs: {} }, { sessionId: 'session-1' }))
         .toMatchObject({ permissionDecision: 'deny' });
       expect(manager.hasPendingPermission('channel-1')).toBe(false);
-      finish();
+      unattended.finish();
       expect(await manager['isPermissionUnattended']('channel-1')).toBe(false);
     } finally {
-      finish();
+      unattended.finish();
       clearQuiet();
       vi.useRealTimers();
     }
+  });
+
+  it('clears retained unattended state on session replacement but not initial scheduled attachment', async () => {
+    const unattended = manager.beginUnattendedExecution('channel-1');
+    manager['advancePermissionAttachment']('channel-1');
+    expect(await manager['isPermissionUnattended']('channel-1')).toBe(true);
+
+    unattended.retainUntilReplacement();
+    expect(await manager['isPermissionUnattended']('channel-1')).toBe(true);
+    manager['advancePermissionAttachment']('channel-1');
+    expect(await manager['isPermissionUnattended']('channel-1')).toBe(false);
+    expect(await manager.getSessionMode('channel-1')).toBe('interactive');
+  });
+
+  it('does not let a stale scheduled context retain or finish a newer execution', () => {
+    const old = manager.beginUnattendedExecution('channel-1');
+    const current = manager.beginUnattendedExecution('channel-1');
+    old.retainUntilReplacement();
+    old.finish();
+    manager['advancePermissionAttachment']('channel-1');
+    expect(manager.isUnattendedExecution('channel-1')).toBe(true);
+    current.finish();
+    expect(manager.isUnattendedExecution('channel-1')).toBe(false);
   });
 });

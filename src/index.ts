@@ -686,21 +686,21 @@ async function main(): Promise<void> {
           });
           eventLocks.set(channelId, evTask.catch((err) => { log.debug("Event lock task failed:", err); }));
           await evTask;
-          markBusy(channelId);
         }
+        markBusy(channelId);
 
         // Enter quiet mode — suppresses all streaming until NO_REPLY determination
         const clearQuiet = enterQuietMode(channelId);
-        const finishUnattended = sessionManager.beginUnattendedExecution(channelId);
+        const unattended = sessionManager.beginUnattendedExecution(channelId);
         let executionStopped = false;
         try {
           await sessionManager.sendMessage(channelId, prompt, undefined, undefined, { source: `automation-sched-${taskId}` });
           // Hold the lock until the response is fully streamed
-          await waitForChannelIdle(channelId);
-          if (isBusy(channelId)) {
+          const completion = await waitForChannelIdle(channelId);
+          if (completion !== 'idle') {
             await sessionManager.abortSession(channelId);
             executionStopped = true;
-            throw new Error('Scheduled task did not become idle before the execution timeout.');
+            throw new Error(`Scheduled task ${completion === 'timeout' ? 'timed out' : 'was interrupted'} before confirmed completion.`);
           }
           executionStopped = true;
         } catch (err: any) {
@@ -710,6 +710,7 @@ async function main(): Promise<void> {
               await sessionManager.abortSession(channelId);
               executionStopped = true;
             } catch (abortError) {
+              unattended.retainUntilReplacement();
               log.error('Could not confirm scheduled execution stopped; retaining unattended permissions:', abortError);
             }
           }
@@ -723,7 +724,7 @@ async function main(): Promise<void> {
           throw err;
         } finally {
           clearQuiet();
-          if (executionStopped) finishUnattended();
+          if (executionStopped) unattended.finish();
         }
       });
       channelLocks.set(channelId, task.catch((err) => { log.debug("Channel lock task failed:", err); }));
